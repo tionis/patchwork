@@ -1,0 +1,3 @@
+[submodule "apps/delver"]
+	path = apps/delver
+	url = https://github.com/remfs/remfs-delver-js

@@ -1,0 +1,66 @@
+:root {
+        --main-max-width: 640px;
+}
+
+.navbar {
+  font-size: 1.6em;
+  font-weight: bold;
+  margin-bottom: 20px;
+  border: 3px solid #000;
+  padding: 10px;
+  display: flex;
+  flex-wrap: wrap;
+}
+.navbar__col {
+  margin-right: 5px;
+  margin-left: 5px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.navbar__image {
+  height: 100%;
+  width: 42px;
+}
+.navbar__link {
+  color: #000;
+}
+
+.content {
+  max-width: var(--main-max-width);
+  margin: 0 auto;
+  font-family: Arial;
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+pre {
+  font-size: 14px;
+  overflow-x: auto;
+}
+
+.emphasized {
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.blog-list {
+  font-size: 28px;
+}
+
+.video-container {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+  margin-bottom: 20px;
+}
+
+.remfs-container {
+  height: 300px;
+  overflow-y: scroll;
+  border: 2px solid #777;
+}
+
+video {
+  width: 100%;
+}
