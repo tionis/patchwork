@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/hiddeco/sshsig"
-	"github.com/tionis/patchwork/huproxy"
 	"golang.org/x/crypto/ssh"
 	"io"
 	"log/slog"
@@ -82,10 +81,6 @@ func (s *server) wellKnownHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error("Error writing 404 to http.ResponseWriter", err, "writeString", writeString)
 	}
-}
-
-func (s *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
-	huproxy.HandleProxy(w, r)
 }
 
 func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
@@ -414,6 +409,7 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 	}
 
 	// TODO handle target correctly
+	// or replace target with pubsub->all fifo->one
 	// target=all should copy the body to all listeners
 	// TODO pubsub seems to be loosing data (it never arrives) -- maybe fixed? -> test it!
 	// pubsub -> delivers data only to one listener, but all stop listening after the first message
