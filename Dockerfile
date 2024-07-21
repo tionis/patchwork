@@ -22,4 +22,4 @@ EXPOSE 8080
 USER nonroot:nonroot
 
 ENV LOG_LEVEL=info
-ENTRYPOINT ["/patchwork"]
+ENTRYPOINT ["/patchwork", "start"]

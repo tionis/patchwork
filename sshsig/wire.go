@@ -43,7 +43,7 @@ func (s signedData) Marshal() []byte {
 // xref: https://github.com/openssh/openssh-portable/blob/V_9_2_P1/PROTOCOL.sshsig#L32
 type blob struct {
 	// MagicPreamble is included in the struct to ensure we can unmarshal the
-	// blob correctly.
+	// blob correctly
 	MagicPreamble [6]byte
 	Version       uint32
 	PublicKey     string

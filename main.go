@@ -5,6 +5,8 @@ import (
 	_ "embed"
 	"errors"
 	"github.com/gorilla/mux"
+	"github.com/tionis/patchwork/sshsig"
+	"github.com/urfave/cli/v2"
 	"log"
 	"log/slog"
 	"net/http"
@@ -19,6 +21,70 @@ import (
 // TODO refactor to make it simpler
 
 func main() {
+	app := &cli.App{
+		Name:  "patchwork",
+		Usage: "patchwork communication server",
+		Commands: []*cli.Command{
+			{
+				Name:    "start",
+				Aliases: []string{"s"},
+				Usage:   "start the patchwork server",
+				Action: func(c *cli.Context) error {
+					startServer()
+					return nil
+				},
+			},
+			{
+				Name:    "parseSSHSig",
+				Aliases: []string{"p"},
+				Usage:   "parse an SSH signature",
+				Action: func(c *cli.Context) error {
+					var sigBytes []byte
+					if c.NArg() == 0 || c.Args().First() == "-" {
+						// read from stdin
+						sigBytes = make([]byte, 0)
+						buf := make([]byte, 1024)
+						for {
+							n, err := os.Stdin.Read(buf)
+							if err != nil {
+								break
+							}
+							sigBytes = append(sigBytes, buf[:n]...)
+						}
+					} else {
+						// read from file
+						sigBytes = make([]byte, 0)
+						file, err := os.Open(c.Args().First())
+						if err != nil {
+							log.Fatalf("Error opening file: %v", err)
+						}
+						defer file.Close()
+						buf := make([]byte, 1024)
+						for {
+							n, err := file.Read(buf)
+							if err != nil {
+								break
+							}
+							sigBytes = append(sigBytes, buf[:n]...)
+						}
+					}
+					sig, err := sshsig.ParseSignature(sigBytes)
+					if err != nil {
+						log.Fatalf("Error parsing SSH signature: %v", err)
+					}
+					log.Printf("Parsed SSH signature: %v", sig)
+					return nil
+				},
+			},
+		},
+	}
+
+	if err := app.Run(os.Args); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func startServer() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

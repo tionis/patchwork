@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/gorilla/mux"
-	"github.com/hiddeco/sshsig"
+	"github.com/tionis/patchwork/sshsig"
 	"golang.org/x/crypto/ssh"
 	"io"
 	"log/slog"
@@ -20,7 +20,7 @@ import (
 
 var (
 	githubUserCacheTTL = 5 * time.Minute
-	gistCacheTTL       = 5 * time.Minute
+	//gistCacheTTL       = 5 * time.Minute
 )
 
 type stream struct {
