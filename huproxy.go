@@ -18,13 +18,13 @@ var (
 	huProxyUpgrader     websocket.Upgrader
 )
 
-func (server *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
+func (s *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
 	authToken := r.Header.Get("Authorization")
 	if authToken == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	} else {
-		allowed, reason, err := server.authenticateToken(&owner{
+		allowed, reason, err := s.authenticateToken(&owner{
 			name: "tionis",
 			typ:  1,
 		}, authToken, "huproxy", true)
@@ -56,7 +56,7 @@ func (server *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}(conn)
 
-	s, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), huProxyDialTimeout)
+	targetConn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), huProxyDialTimeout)
 	if err != nil {
 		log.Warningf("Failed to connect to %q:%q: %v", host, port, err)
 		return
@@ -66,7 +66,7 @@ func (server *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Warningf("Failed to close connection to %q:%q: %v", host, port, err)
 		}
-	}(s)
+	}(targetConn)
 
 	// websocket -> server
 	go func() {
@@ -86,7 +86,7 @@ func (server *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
 				log.Errorf("received non-binary websocket message")
 				return
 			}
-			if _, err := io.Copy(s, r); err != nil {
+			if _, err := io.Copy(targetConn, r); err != nil {
 				log.Warningf("Reading from websocket: %v", err)
 				cancel()
 			}
@@ -95,7 +95,7 @@ func (server *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// server -> websocket
 	// TODO: NextWriter() seems to be broken.
-	if err := lib.File2WS(ctx, cancel, s, conn); err == io.EOF {
+	if err := lib.File2WS(ctx, cancel, targetConn, conn); err == io.EOF {
 		if err := conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 			time.Now().Add(huProxyWriteTimeout)); err == websocket.ErrCloseSent {
