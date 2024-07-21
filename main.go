@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -24,7 +25,7 @@ func main() {
 	// TODO add line numbers to logger
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	logLevel := slog.LevelInfo
-	switch os.Getenv("LOG_LEVEL") {
+	switch strings.ToUpper(os.Getenv("LOG_LEVEL")) {
 	case "DEBUG":
 		logLevel = slog.LevelDebug
 	case "INFO":
@@ -76,15 +77,9 @@ func main() {
 
 func getHTTPServer(logger *slog.Logger) *http.Server {
 	server := &server{
-		mutex:                   sync.Mutex{},
-		channels:                make(map[string]chan stream),
-		mimeChannels:            make(map[string]chan string),
-		unpersistChannels:       make(map[string]chan bool),
-		logger:                  logger,
-		githubUserKeyMap:        make(map[string][]string),
-		githubUserKeyValidUntil: make(map[string]time.Time),
-		gistCache:               make(map[string]string),
-		gistCacheValidUntil:     make(map[string]time.Time),
+		logger:        logger,
+		channels:      make(map[string]*patchChannel),
+		channelsMutex: sync.RWMutex{},
 	}
 
 	router := mux.NewRouter()
@@ -93,8 +88,8 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 	// add req/resp type handling of connections with the following features:
 	// - /req/* accepts any HTTP method
 	// - /res/* can answer such requests, this also supports a "double clutch" mode:
-	// - /res/{path}?pw_switch=true -> take channel path from body and wait on that channel for data
-	//   one data is received on this channel pipe it to original requester
+	// - /res/{path}?pw_switch=true -> take patchChannel path from body and wait on that patchChannel for data
+	//   one data is received on this patchChannel pipe it to original requester
 	// add multi-path listening:
 	// - allow listening on /mres and specify prefixes in a header
 	//   then when requests come in that match this prefix send them over the connection and
@@ -113,8 +108,8 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 	router.HandleFunc("/u/{username)/{path}", server.userHandler)
 	router.HandleFunc("/u/{username}/{type}/{path:.*}", server.userHandler)
 
-	router.HandleFunc("/s/{fingerprint}/{path:.*}", server.keyHandler)
-	router.HandleFunc("/s/{fingerprint}/{type}/{path:.*}", server.keyHandler)
+	router.HandleFunc("/s/{pubkey}/{path:.*}", server.keyHandler)
+	router.HandleFunc("/s/{pubkey}/{type}/{path:.*}", server.keyHandler)
 
 	router.HandleFunc("/g/{gistId}/{path:.*}", server.gistHandler)
 	router.HandleFunc("/g/{gistId}/{type}/{path:.*}", server.gistHandler)
