@@ -23,8 +23,19 @@ func main() {
 
 	// TODO add line numbers to logger
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	logLevel := slog.LevelInfo
+	switch os.Getenv("LOG_LEVEL") {
+	case "DEBUG":
+		logLevel = slog.LevelDebug
+	case "INFO":
+		logLevel = slog.LevelInfo
+	case "WARN":
+		logLevel = slog.LevelWarn
+	case "ERROR":
+		logLevel = slog.LevelError
+	}
 	loggerOpts := &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level: logLevel,
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, loggerOpts))
 
@@ -65,11 +76,15 @@ func main() {
 
 func getHTTPServer(logger *slog.Logger) *http.Server {
 	server := &server{
-		mutex:             sync.Mutex{},
-		channels:          make(map[string]chan stream),
-		mimeChannels:      make(map[string]chan string),
-		unpersistChannels: make(map[string]chan bool),
-		logger:            logger,
+		mutex:                   sync.Mutex{},
+		channels:                make(map[string]chan stream),
+		mimeChannels:            make(map[string]chan string),
+		unpersistChannels:       make(map[string]chan bool),
+		logger:                  logger,
+		githubUserKeyMap:        make(map[string][]string),
+		githubUserKeyValidUntil: make(map[string]time.Time),
+		gistCache:               make(map[string]string),
+		gistCacheValidUntil:     make(map[string]time.Time),
 	}
 
 	router := mux.NewRouter()
@@ -85,8 +100,9 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 	//   then when requests come in that match this prefix send them over the connection and
 	//   specify the path and other metadata in headers. The answering handling then works over the
 	//   switch handling as described above
+	router.HandleFunc("/.well-known", server.wellKnownHandler)
 	router.HandleFunc("/.well-known/{path:.*}", server.wellKnownHandler)
-	router.HandleFunc("/{$}", server.indexHandler)
+	router.HandleFunc("/", server.indexHandler)
 	router.HandleFunc("/water.css", server.waterHandler)
 
 	router.HandleFunc("/huproxy/{host}/{port}", server.huproxyHandler)
@@ -99,6 +115,9 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 
 	router.HandleFunc("/s/{fingerprint}/{path:.*}", server.keyHandler)
 	router.HandleFunc("/s/{fingerprint}/{type}/{path:.*}", server.keyHandler)
+
+	router.HandleFunc("/g/{gistId}/{path:.*}", server.gistHandler)
+	router.HandleFunc("/g/{gistId}/{type}/{path:.*}", server.gistHandler)
 
 	router.HandleFunc("/healthz", server.statusHandler)
 	router.HandleFunc("/status", server.statusHandler)

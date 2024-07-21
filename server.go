@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 )
 
 type stream struct {
@@ -17,18 +18,19 @@ type stream struct {
 
 type owner struct {
 	name string
-	typ  int // 0 -> key fingerprint, 1 -> GitHub username
+	typ  int // 0 -> key fingerprint, 1 -> GitHub username, 2 -> Gist ID
 }
 
 type server struct {
-	mutex             sync.Mutex
-	channels          map[string]chan stream
-	mimeChannels      map[string]chan string
-	unpersistChannels map[string]chan bool // listeners with persist can be detached by sending a request with ?unpersist=true
-	logger            *slog.Logger
-	// TODO add the following data structures:
-	// map user -> key list with TTL handling
-	// perhaps gist cache to check against data from gists
+	mutex                   sync.Mutex
+	channels                map[string]chan stream
+	mimeChannels            map[string]chan string
+	unpersistChannels       map[string]chan bool // listeners with persist can be detached by sending a request with ?unpersist=true
+	logger                  *slog.Logger
+	githubUserKeyMap        map[string][]string
+	githubUserKeyValidUntil map[string]time.Time
+	gistCache               map[string]string
+	gistCacheValidUntil     map[string]time.Time
 }
 
 func (s *server) statusHandler(w http.ResponseWriter, r *http.Request) {
@@ -70,10 +72,12 @@ func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
 	username := vars["username"]
 	path := vars["path"]
 	reqType := vars["type"]
-	s.handlePatch(w, r, &owner{
-		name: username,
-		typ:  1,
-	}, path, reqType)
+	s.handlePatch(w, r,
+		"u"+username,
+		&owner{
+			name: username,
+			typ:  1,
+		}, path, reqType)
 }
 
 func (s *server) keyHandler(w http.ResponseWriter, r *http.Request) {
@@ -81,26 +85,46 @@ func (s *server) keyHandler(w http.ResponseWriter, r *http.Request) {
 	fingerprint := vars["fingerprint"]
 	path := vars["path"]
 	reqType := vars["type"]
-	s.handlePatch(w, r, &owner{
-		name: fingerprint,
-		typ:  0,
-	}, path, reqType)
+	s.handlePatch(w, r,
+		"k"+fingerprint,
+		&owner{
+			name: fingerprint,
+			typ:  0,
+		}, path, reqType)
+}
+
+func (s *server) gistHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	gistID := vars["gistId"]
+	path := vars["path"]
+	reqType := vars["type"]
+	s.handlePatch(w, r,
+		"g"+gistID,
+		&owner{
+			name: gistID,
+			typ:  2,
+		}, path, reqType)
 }
 
 func (s *server) publicHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	path := vars["path"]
 	reqType := vars["type"]
-	s.handlePatch(w, r, nil, path, reqType)
+	s.handlePatch(w, r, "pub", nil, path, reqType)
 }
 
-func (s *server) authenticateToken(owner *owner, token string, isWriteOp bool) bool {
+func (s *server) authenticateToken(owner *owner, token string, path string, isWriteOp bool) bool {
 	// TODO implement
+	// 1. parse token
+	// 2. check which key signed it
+	// 3. validate signature
+	// 4. check if key is allowed to access the resource
+	// 5. check if token is allowed to write to path if it is a write operation
 	return true
 }
 
 // handle a patch request, private is a string describing the owner of the namespace, if it is nil the space is public
-func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, owner *owner, path, reqType string) {
+func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace string, owner *owner, path, reqType string) {
 	// TODO
 	// BUG pubsub/fifo/persist not working as they should
 	// pubsub -> delivers data only to one listener, but all stop listening after the first message
@@ -108,8 +132,13 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, owner *owne
 	query := r.URL.Query()
 	mimeType := query.Get("mime")
 	if mimeType == "" {
-		mimeType = "text/plain"
-		// mimeType = "application/octet-stream" // safer but less user-friendly
+		requestContentType := r.Header.Get("Content-Type")
+		if requestContentType != "" {
+			mimeType = requestContentType
+		} else {
+			mimeType = "text/plain"
+			// mimeType = "application/octet-stream" // safer but less user-friendly
+		}
 	}
 	target := query.Get("target")
 	if target == "" || (target != "all" && target != "one") {
@@ -121,7 +150,8 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, owner *owne
 	// the first request/message is received
 
 	switch reqType {
-	case "req", "res":
+	case "req", "res", "stream":
+		// stream is a server-sent-events stream that allows listening to multiple path prefixes
 		pathPrefix = "/" + reqType
 		writeString, err := io.WriteString(w, "req/res handling not supported yet")
 		if err != nil {
@@ -180,7 +210,7 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, owner *owne
 			}
 			return
 		}
-		allowed := s.authenticateToken(owner, token, isWriteOp)
+		allowed := s.authenticateToken(owner, token, path, isWriteOp)
 		if !allowed {
 			w.WriteHeader(http.StatusForbidden)
 			writeString, err := io.WriteString(w, "Forbidden")
@@ -191,23 +221,26 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, owner *owne
 		}
 	}
 
+	channelPath := namespace + "/" + path
+
 	s.mutex.Lock()
-	if _, ok := s.channels[path]; !ok {
-		s.channels[path] = make(chan stream)
+	if _, ok := s.channels[channelPath]; !ok {
+		s.channels[channelPath] = make(chan stream)
 	}
-	channel := s.channels[path]
-	if _, ok := s.mimeChannels[path]; !ok {
-		s.mimeChannels[path] = make(chan string)
+	channel := s.channels[channelPath]
+	if _, ok := s.mimeChannels[channelPath]; !ok {
+		s.mimeChannels[channelPath] = make(chan string)
 	}
-	mimeChannel := s.mimeChannels[path]
-	if _, ok := s.unpersistChannels[path]; !ok {
-		s.unpersistChannels[path] = make(chan bool)
+	mimeChannel := s.mimeChannels[channelPath]
+	if _, ok := s.unpersistChannels[channelPath]; !ok {
+		s.unpersistChannels[channelPath] = make(chan bool)
 	}
-	unpersistChannel := s.unpersistChannels[path]
+	unpersistChannel := s.unpersistChannels[channelPath]
 	s.mutex.Unlock()
 
 	// TODO handle target correctly
 	// target=all should copy the body to all listeners
+	// TODO pubsub seems to be loosing data (it never arrives)
 
 	switch r.Method {
 	case http.MethodGet:
@@ -243,10 +276,10 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, owner *owne
 				w.(http.Flusher).Flush()
 				s.logger.Debug("Persisting connection", "req-path", path)
 				s.mutex.Lock()
-				if _, ok := s.channels[path]; !ok {
-					s.channels[path] = make(chan stream)
+				if _, ok := s.channels[channelPath]; !ok {
+					s.channels[channelPath] = make(chan stream)
 				}
-				channel = s.channels[path]
+				channel = s.channels[channelPath]
 				s.mutex.Unlock()
 			}
 		}
