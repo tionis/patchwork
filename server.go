@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/armortal/webcrypto-go"
 	"github.com/gorilla/mux"
 	"github.com/tionis/patchwork/sshsig"
 	"golang.org/x/crypto/ssh"
@@ -16,6 +17,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	ownerTypePublicKey = 0
+	ownerTypeUsername  = 1
+	ownerTypeGistID    = 2
+	ownerTypeWebcrypto = 3
 )
 
 var (
@@ -30,7 +38,7 @@ type stream struct {
 
 type owner struct {
 	name string
-	typ  int // 0 -> public key, 1 -> GitHub username, 2 -> Gist ID
+	typ  int // 0 -> public key, 1 -> GitHub username, 2 -> Gist ID, 3 -> Webcrypto key
 }
 
 type sshPubKeyListEntry struct {
@@ -92,7 +100,7 @@ func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
 		"u"+username,
 		&owner{
 			name: username,
-			typ:  1,
+			typ:  ownerTypeUsername,
 		}, path, reqType)
 }
 
@@ -105,7 +113,20 @@ func (s *server) keyHandler(w http.ResponseWriter, r *http.Request) {
 		"k"+pubkey,
 		&owner{
 			name: pubkey,
-			typ:  0,
+			typ:  ownerTypePublicKey,
+		}, path, reqType)
+}
+
+func (s *server) webcryptoHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	pubkey := vars["pubkey"]
+	path := vars["path"]
+	reqType := vars["type"]
+	s.handlePatch(w, r,
+		"k"+pubkey,
+		&owner{
+			name: pubkey,
+			typ:  ownerTypeWebcrypto,
 		}, path, reqType)
 }
 
@@ -118,7 +139,7 @@ func (s *server) gistHandler(w http.ResponseWriter, r *http.Request) {
 		"g"+gistID,
 		&owner{
 			name: gistID,
-			typ:  2,
+			typ:  ownerTypeGistID,
 		}, path, reqType)
 }
 
@@ -170,7 +191,7 @@ func (s *server) githubFetchUserKeys(username string) ([]ssh.PublicKey, error) {
 
 func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenData, path string, isWriteOp bool) (bool, string, error) {
 	switch owner.typ {
-	case 0:
+	case ownerTypePublicKey:
 		if !bytes.Equal([]byte(owner.name), key.Marshal()) {
 			return false, "token not signed by key for namespace", nil
 		}
@@ -188,7 +209,7 @@ func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenDa
 			}
 		}
 		return false, "token not allowed on path", nil
-	case 1:
+	case ownerTypeUsername:
 		keys, err := s.githubFetchUserKeys(owner.name)
 		if err != nil {
 			return false, "could not fetch user keys", fmt.Errorf("error fetching user keys: %w", err)
@@ -213,7 +234,7 @@ func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenDa
 			}
 		}
 		return false, "token not allowed on path", nil
-	case 2:
+	case ownerTypeGistID:
 		//allowedSigners, err := s.githubFetchGistAllowedSSigners(owner.name)
 		//if err != nil {
 		//	return false, err
@@ -238,6 +259,25 @@ type tokenData struct {
 	ValidUntil        int64    `json:"validUntil"` // -1 means the token is valid forever
 }
 
+type webcryptoToken struct {
+	Data      string              `json:"data"`
+	Algorithm webcrypto.Algorithm `json:"algorithm"`
+	Key       string              `json:"key"`
+}
+
+func (s *server) authenticateWebcryptoToken(token []byte, path string, isWriteOp bool) (bool, string, error) {
+	var t webcryptoToken
+	err := json.Unmarshal(token, &t)
+	if err != nil {
+		return false, "token could not be marshalled", fmt.Errorf("error unmarshalling token: %w", err)
+	}
+	// TODO import key
+	// verify signature key matches namespace owner
+	// verify signature of token
+	// verify token prefix paths (handle this in it's own method to avoid code duplication)
+	return false, "not implemented", errors.New("not implemented")
+}
+
 func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteOp bool) (bool, string, error) {
 	s.logger.Debug("Authenticating token", "owner", owner, "tokenStr", tokenStr, "path", path, "isWriteOp", isWriteOp)
 	decodedCompressedToken, err := base64.StdEncoding.DecodeString(tokenStr)
@@ -251,6 +291,11 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteO
 	decodedToken, err := io.ReadAll(decodedTokenReader)
 	if err != nil {
 		return false, "", fmt.Errorf("error reading decompressed token: %w", err)
+	}
+	switch owner.typ {
+	case ownerTypeWebcrypto:
+		// TODO
+		return s.authenticateWebcryptoToken(decodedToken, path, isWriteOp)
 	}
 	var t token
 	err = json.Unmarshal(decodedToken, &t)

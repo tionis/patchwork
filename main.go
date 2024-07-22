@@ -174,6 +174,9 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 	router.HandleFunc("/u/{username)/{path}", server.userHandler)
 	router.HandleFunc("/u/{username}/{type}/{path:.*}", server.userHandler)
 
+	router.HandleFunc("/w/{pubkey}/{path:.*}", server.webCryptoHandler)
+	router.HandleFunc("/w/{pubkey}/{type}/{path:.*}", server.webCryptoHandler)
+
 	router.HandleFunc("/s/{pubkey}/{path:.*}", server.keyHandler)
 	router.HandleFunc("/s/{pubkey}/{type}/{path:.*}", server.keyHandler)
 
