@@ -95,59 +95,54 @@ func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	username := vars["username"]
 	path := vars["path"]
-	reqType := vars["type"]
 	s.handlePatch(w, r,
 		"u"+username,
 		&owner{
 			name: username,
 			typ:  ownerTypeUsername,
-		}, path, reqType)
+		}, path)
 }
 
 func (s *server) keyHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	pubkey := vars["pubkey"]
 	path := vars["path"]
-	reqType := vars["type"]
 	s.handlePatch(w, r,
 		"k"+pubkey,
 		&owner{
 			name: pubkey,
 			typ:  ownerTypePublicKey,
-		}, path, reqType)
+		}, path)
 }
 
-func (s *server) webcryptoHandler(w http.ResponseWriter, r *http.Request) {
+func (s *server) webCryptoHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	pubkey := vars["pubkey"]
 	path := vars["path"]
-	reqType := vars["type"]
 	s.handlePatch(w, r,
 		"k"+pubkey,
 		&owner{
 			name: pubkey,
 			typ:  ownerTypeWebcrypto,
-		}, path, reqType)
+		}, path)
 }
 
 func (s *server) gistHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	gistID := vars["gistId"]
 	path := vars["path"]
-	reqType := vars["type"]
 	s.handlePatch(w, r,
 		"g"+gistID,
 		&owner{
 			name: gistID,
 			typ:  ownerTypeGistID,
-		}, path, reqType)
+		}, path)
 }
 
 func (s *server) publicHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	path := vars["path"]
-	reqType := vars["type"]
-	s.handlePatch(w, r, "pub", nil, path, reqType)
+	s.handlePatch(w, r, "pub", nil, path)
 }
 
 func (s *server) githubFetchUserKeys(username string) ([]ssh.PublicKey, error) {
@@ -329,7 +324,7 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteO
 }
 
 // handle a patch request, private is a string describing the owner of the namespace, if it is nil the space is public
-func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace string, owner *owner, path, reqType string) {
+func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace string, owner *owner, path string) {
 	handleReqRes := false
 	pathPrefix := ""
 	query := r.URL.Query()
@@ -343,42 +338,35 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 			// mimeType = "application/octet-stream" // safer but less user-friendly
 		}
 	}
-	target := query.Get("target")
-	if target == "" || (target != "all" && target != "one") {
-		target = "one"
-	}
 	persist := query.Get("persist") != "" && query["persist"][0] == "true"
 	unpersist := query.Get("unpersist") != "" && query["unpersist"][0] == "true"
 	// if persist is set to true the patchChannel will not be closed after
 	// the first request/message is received
 
+	reqType := query.Get("type")
 	switch reqType {
 	case "req", "res", "stream":
 		// stream is a server-sent-events stream that allows listening to multiple path prefixes
 		// I will probably not implement stream though, I will keep it here for the future though
-		pathPrefix = "/" + reqType
-		path = "/" + path
 		handleReqRes = true
+	case "blockpub":
+		// TODO implement me
+		w.WriteHeader(http.StatusNotImplemented)
+		writeString, err := io.WriteString(w, "blockpub not implemented")
+		if err != nil {
+			s.logger.Error("Error writing blockpub not implemented to http.ResponseWriter", err, "writeString", writeString)
+		}
+		return
 	case "fifo", "pubsub":
-		pathPrefix = "/" + reqType
-		path = "/" + path
 		// fifo -> one-to-one request-response matching
 		// pubsub -> don't block on sending data
 		// do nothing
 	default:
-		queryType := query.Get("type")
-		path = reqType + "/" + path
-		if queryType == "" {
-			reqType = "fifo"
-			pathPrefix = "/fifo"
-		} else {
-			// pathPrefix stays empty
-			reqType = queryType
-		}
+		reqType = "fifo"
 	}
 	w.Header().Set("pw_path", "/"+pathPrefix+path)
 
-	s.logger.Debug("Handling patch request (pre-auth)", "reqType", reqType, "path", path, "owner", owner, "mimeType", mimeType, "persist", persist)
+	s.logger.Debug("Handling patch request (pre-auth)", "path", path, "reqType", reqType, "owner", owner, "mimeType", mimeType, "persist", persist)
 
 	// if owner is set do some authentication here
 	if owner != nil {
@@ -453,12 +441,6 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 		return
 	}
 
-	// TODO handle target correctly
-	// or replace target with pubsub->all fifo->one
-	// target=all should copy the body to all listeners
-	// TODO pubsub seems to be loosing data (it never arrives) -- maybe fixed? -> test it!
-	// pubsub -> delivers data only to one listener, but all stop listening after the first message
-
 	switch r.Method {
 	case http.MethodGet:
 		for {
@@ -469,8 +451,10 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 					s.logger.Info("Unpersisting connection", "req-path", path)
 					persist = false
 				case mimeType := <-channel.mime:
+					s.logger.Debug("Setting mime type", "mimeType", mimeType)
 					w.Header().Set("Content-Type", mimeType)
 				case stream := <-channel.data:
+					s.logger.Debug("Sending stream to http.ResponseWriter", "req-path", path)
 					_, err := io.Copy(w, stream.reader)
 					if err != nil {
 						s.logger.Error("Error copying stream to http.ResponseWriter", err)
@@ -511,25 +495,45 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 		}
 		switch reqType {
 		case "pubsub":
-			finished := false
+			sentData := false
+			buf, err := io.ReadAll(r.Body)
+			finished := false // TODO this does not work, this just behaves like fifo
 			for {
 				if finished {
 					break
 				}
 				doneSignal := make(chan struct{})
-				stream := stream{reader: io.NopCloser(r.Body), done: doneSignal}
-				select {
+				if err != nil {
+					s.logger.Error("Error reading request body", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					writeString, err := io.WriteString(w, "Internal server error: "+err.Error())
+					if err != nil {
+						s.logger.Error("Error writing Internal server error to http.ResponseWriter", err, "writeString", writeString)
+					}
+					return
+				}
+				stream := stream{reader: io.NopCloser(bytes.NewBuffer(buf)), done: doneSignal}
+				select { // TODO this blocks, why though (pubsub works as blockpub as a result)
 				case channel.data <- stream:
-					s.logger.Info("Connected to consumer", "req-path", path)
+					sentData = true
+					s.logger.Info("Connected to pubsub consumer", "req-path", path)
 				case <-r.Context().Done():
 					s.logger.Info("Producer cancelled", "req-path", path)
 					doneSignal <- struct{}{}
 				default:
-					s.logger.Info("No one connected", "req-path", path)
+					s.logger.Info("No one connected to pubsub", "req-path", path)
+					//s.logger.Debug("No one connected", "req-path", path)
 					close(doneSignal)
 					finished = true
 				}
 				<-doneSignal
+			}
+			if !sentData {
+				w.WriteHeader(http.StatusNoContent)
+				writeString, err := io.WriteString(w, "No one connected to pubsub")
+				if err != nil {
+					s.logger.Error("Error writing No one connected to pubsub to http.ResponseWriter", err, "writeString", writeString)
+				}
 			}
 		case "fifo":
 			doneSignal := make(chan struct{})

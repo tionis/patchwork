@@ -168,20 +168,15 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 
 	router.HandleFunc("/huproxy/{host}/{port}", server.huproxyHandler)
 
-	router.HandleFunc("/p/{path}", server.publicHandler)
-	router.HandleFunc("/p/{type}/{path:.*}", server.publicHandler)
+	router.HandleFunc("/p/{path:.*}", server.publicHandler)
 
-	router.HandleFunc("/u/{username)/{path}", server.userHandler)
-	router.HandleFunc("/u/{username}/{type}/{path:.*}", server.userHandler)
+	router.HandleFunc("/u/{username)/{path:.*}", server.userHandler)
 
 	router.HandleFunc("/w/{pubkey}/{path:.*}", server.webCryptoHandler)
-	router.HandleFunc("/w/{pubkey}/{type}/{path:.*}", server.webCryptoHandler)
 
 	router.HandleFunc("/s/{pubkey}/{path:.*}", server.keyHandler)
-	router.HandleFunc("/s/{pubkey}/{type}/{path:.*}", server.keyHandler)
 
 	router.HandleFunc("/g/{gistId}/{path:.*}", server.gistHandler)
-	router.HandleFunc("/g/{gistId}/{type}/{path:.*}", server.gistHandler)
 
 	router.HandleFunc("/healthz", server.statusHandler)
 	router.HandleFunc("/status", server.statusHandler)
