@@ -326,6 +326,7 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteO
 // handle a patch request, private is a string describing the owner of the namespace, if it is nil the space is public
 func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace string, owner *owner, path string) {
 	handleReqRes := false
+	blockpub := false
 	pathPrefix := ""
 	query := r.URL.Query()
 	mimeType := query.Get("mime")
@@ -349,14 +350,9 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 		// stream is a server-sent-events stream that allows listening to multiple path prefixes
 		// I will probably not implement stream though, I will keep it here for the future though
 		handleReqRes = true
-	case "blockpub":
-		// TODO implement me
-		w.WriteHeader(http.StatusNotImplemented)
-		writeString, err := io.WriteString(w, "blockpub not implemented")
-		if err != nil {
-			s.logger.Error("Error writing blockpub not implemented to http.ResponseWriter", err, "writeString", writeString)
-		}
-		return
+	case "blockpub", "blocksub":
+		reqType = "pubsub"
+		blockpub = true
 	case "fifo", "pubsub":
 		// fifo -> one-to-one request-response matching
 		// pubsub -> don't block on sending data
@@ -431,6 +427,8 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 	channel := s.channels[channelPath]
 	s.channelsMutex.Unlock()
 
+	s.logger.Debug("Handling patch request (post-auth)", "path", path, "reqType", reqType, "owner", owner, "mimeType", mimeType, "persist", persist)
+
 	if handleReqRes {
 		// TODO implement handling of req/res requests here
 		w.WriteHeader(http.StatusNotImplemented)
@@ -489,30 +487,52 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 			}
 		}
 	case http.MethodPost, http.MethodPut:
-		channel.mime <- mimeType
-		if unpersist {
-			channel.unpersist <- true
-		}
 		switch reqType {
 		case "pubsub":
+			finished := false
 			sentData := false
+			if blockpub {
+				s.logger.Debug("Setting mime type (blocking until consumer comes)", "mimeType", mimeType)
+				channel.mime <- mimeType
+			} else {
+				// trying to send mime type to pubsub consumers
+				// if no one is connected return 204 No Content
+				// and close the connection
+				select {
+				case channel.mime <- mimeType:
+					s.logger.Debug("Setting mime type for listener", "mimeType", mimeType)
+				default:
+					w.WriteHeader(http.StatusNoContent)
+					writeString, err := io.WriteString(w, "No one connected to pubsub")
+					if err != nil {
+						s.logger.Error("Error writing No one connected to pubsub to http.ResponseWriter", err, "writeString", writeString)
+						return
+					}
+
+					return
+				}
+			}
+			if unpersist {
+				channel.unpersist <- true
+			}
+			s.logger.Debug("Reading request body", "req-path", path)
 			buf, err := io.ReadAll(r.Body)
-			finished := false // TODO this does not work, this just behaves like fifo
+			if err != nil {
+				s.logger.Error("Error reading request body", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				writeString, err := io.WriteString(w, "Internal server error: "+err.Error())
+				if err != nil {
+					s.logger.Error("Error writing Internal server error to http.ResponseWriter", err, "writeString", writeString)
+				}
+				return
+			}
 			for {
 				if finished {
 					break
 				}
 				doneSignal := make(chan struct{})
-				if err != nil {
-					s.logger.Error("Error reading request body", err)
-					w.WriteHeader(http.StatusInternalServerError)
-					writeString, err := io.WriteString(w, "Internal server error: "+err.Error())
-					if err != nil {
-						s.logger.Error("Error writing Internal server error to http.ResponseWriter", err, "writeString", writeString)
-					}
-					return
-				}
 				stream := stream{reader: io.NopCloser(bytes.NewBuffer(buf)), done: doneSignal}
+				s.logger.Debug("Sending data to pubsub consumers", "req-path", path)
 				select { // TODO this blocks, why though (pubsub works as blockpub as a result)
 				case channel.data <- stream:
 					sentData = true
@@ -526,6 +546,7 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 					close(doneSignal)
 					finished = true
 				}
+				s.logger.Debug("Waiting for done signal", "req-path", path)
 				<-doneSignal
 			}
 			if !sentData {
@@ -536,6 +557,10 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 				}
 			}
 		case "fifo":
+			channel.mime <- mimeType
+			if unpersist {
+				channel.unpersist <- true
+			}
 			doneSignal := make(chan struct{})
 			stream := stream{reader: r.Body, done: doneSignal}
 			select {
