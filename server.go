@@ -96,7 +96,7 @@ func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
 	username := vars["username"]
 	path := vars["path"]
 	s.handlePatch(w, r,
-		"u"+username,
+		"u/"+username,
 		&owner{
 			name: username,
 			typ:  ownerTypeUsername,
@@ -108,7 +108,7 @@ func (s *server) keyHandler(w http.ResponseWriter, r *http.Request) {
 	pubkey := vars["pubkey"]
 	path := vars["path"]
 	s.handlePatch(w, r,
-		"k"+pubkey,
+		"k/"+pubkey,
 		&owner{
 			name: pubkey,
 			typ:  ownerTypePublicKey,
@@ -120,7 +120,7 @@ func (s *server) webCryptoHandler(w http.ResponseWriter, r *http.Request) {
 	pubkey := vars["pubkey"]
 	path := vars["path"]
 	s.handlePatch(w, r,
-		"k"+pubkey,
+		"w/"+pubkey,
 		&owner{
 			name: pubkey,
 			typ:  ownerTypeWebcrypto,
@@ -132,7 +132,7 @@ func (s *server) gistHandler(w http.ResponseWriter, r *http.Request) {
 	gistID := vars["gistId"]
 	path := vars["path"]
 	s.handlePatch(w, r,
-		"g"+gistID,
+		"g/"+gistID,
 		&owner{
 			name: gistID,
 			typ:  ownerTypeGistID,
@@ -289,7 +289,6 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteO
 	}
 	switch owner.typ {
 	case ownerTypeWebcrypto:
-		// TODO
 		return s.authenticateWebcryptoToken(decodedToken, path, isWriteOp)
 	}
 	var t token
@@ -325,7 +324,7 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteO
 
 // handle a patch request, private is a string describing the owner of the namespace, if it is nil the space is public
 func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace string, owner *owner, path string) {
-	handleReqRes := false
+	//handleReqRes := false
 	blockpub := false
 	pathPrefix := ""
 	query := r.URL.Query()
@@ -346,10 +345,6 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 
 	reqType := query.Get("type")
 	switch reqType {
-	case "req", "res", "stream":
-		// stream is a server-sent-events stream that allows listening to multiple path prefixes
-		// I will probably not implement stream though, I will keep it here for the future though
-		handleReqRes = true
 	case "blockpub", "blocksub":
 		reqType = "pubsub"
 		blockpub = true
@@ -428,16 +423,6 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 	s.channelsMutex.Unlock()
 
 	s.logger.Debug("Handling patch request (post-auth)", "path", path, "reqType", reqType, "owner", owner, "mimeType", mimeType, "persist", persist)
-
-	if handleReqRes {
-		// TODO implement handling of req/res requests here
-		w.WriteHeader(http.StatusNotImplemented)
-		writeString, err := io.WriteString(w, "req/res handling not supported yet")
-		if err != nil {
-			s.logger.Error("Error writing Not implemented to http.ResponseWriter", err, "writeString", writeString)
-		}
-		return
-	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -533,7 +518,7 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 				doneSignal := make(chan struct{})
 				stream := stream{reader: io.NopCloser(bytes.NewBuffer(buf)), done: doneSignal}
 				s.logger.Debug("Sending data to pubsub consumers", "req-path", path)
-				select { // TODO this blocks, why though (pubsub works as blockpub as a result)
+				select {
 				case channel.data <- stream:
 					sentData = true
 					s.logger.Info("Connected to pubsub consumer", "req-path", path)
