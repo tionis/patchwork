@@ -260,9 +260,10 @@ type token struct {
 
 // tokenData represents the signed data within a token that is used to authenticate a request
 type tokenData struct {
-	AllowedWritePaths []string `json:"allowedWritePaths"`
-	AllowedReadPaths  []string `json:"allowedReadPaths"`
-	ValidUntil        int64    `json:"validUntil"` // -1 means the token is valid forever
+	AllowedWritePaths []string `json:"AllowedWritePaths"`
+	AllowedReadPaths  []string `json:"AllowedReadPaths"`
+	ValidBefore       int64    `json:"ValidBefore"` // -1 means the token is valid forever
+	ValidAfter        int64    `json:"ValidAfter"`  // -1 means the token is valid from the beginning of time
 }
 
 type webcryptoToken struct {
@@ -328,8 +329,11 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteO
 	if err != nil {
 		return false, "tokenData could not be marshalled", fmt.Errorf("error unmarshalling token data: %w", err)
 	}
-	if tokenData.ValidUntil != -1 && time.Now().Unix() > tokenData.ValidUntil {
+	if tokenData.ValidBefore != -1 && time.Now().Unix() > tokenData.ValidBefore {
 		return false, "token is no longer valid", nil
+	}
+	if tokenData.ValidAfter != -1 && time.Now().Unix() < tokenData.ValidAfter {
+		return false, "token is not yet valid", nil
 	}
 	keyAllowed, reason, err := s.isKeyAllowed(owner, signature.PublicKey, tokenData, path, isWriteOp)
 	if err != nil {

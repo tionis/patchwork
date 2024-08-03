@@ -97,15 +97,16 @@ patchwork:get_uuid() {
 
 ######################################### Globals ##########################################
 patchwork_server="${PATCHWORK_SERVER:-https://patch.tionis.dev}"
-patchwork_server_req="$patchwork_server/req"
+patchwork_server_req="$patchwork_server/p/"
 
 ######################################### Commands ##########################################
 patchwork:desc token "Create a new token"
 patchwork:token() {
-	declare allowedWritePaths allowedReadPaths validUntil key allowedReadPathsJSON allowedWritePathsJSON dataJSON
+	declare allowedWritePaths allowedReadPaths key allowedReadPathsJSON allowedWritePathsJSON dataJSON validBefore validAfter
 	allowedReadPaths=()
 	allowedWritePaths=()
-	validUntil="$(date --date='1 hour' +%s)"
+	validBefore="$(date --date='1 hour' +%s)"
+	validAfter="$(date +%s)"
 	key=~/.ssh/id_ed25519
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -115,7 +116,8 @@ patchwork:token() {
 			echo "  -k, --key <key> The key to sign the token with, defaults to ~/.ssh/id_ed25519"
 			echo "  -r, --read <path> Add a path to the allowed read paths, if not specified all paths are allowed"
 			echo "  -w, --write <path> Add a path to the allowed write paths, if not specified all paths are allowed"
-			echo "  -u, --until <time> The time until the token is valid, defaults to 1 hour from now"
+			echo "  -b, --before <time> The time until the token is valid, defaults to 1 hour from now"
+			echo "  -a, --after <time> The time after which the token is valid, defaults to now"
 			echo "  --no-read Disallow all read paths"
 			echo "  --no-write Disallow all write paths"
 			return 0
@@ -138,9 +140,13 @@ patchwork:token() {
 			shift
 			allowedWritePaths+=("$1")
 			;;
-		-u | --until)
+		-b | --before)
 			shift
-			validUntil="$1"
+			validBefore="$(date --date="$1" +%s)"
+			;;
+		-a | --after)
+			shift
+			validAfter="$(date --date="$1" +%s)"
 			;;
 		*)
 			error "Unknown option: $1"
@@ -159,7 +165,12 @@ patchwork:token() {
 	fi
 	allowedReadPathsJSON="${allowedReadPathsJSON:-"$(printf '%s\n' "${allowedReadPaths[@]}" | jq -R . | jq -s .)"}"
 	allowedWritePathsJSON="${allowedWritePathsJSON:-"$(printf '%s\n' "${allowedWritePaths[@]}" | jq -R . | jq -s .)"}"
-	dataJSON="$(jq -cnS --argjson allowedReadPaths "$allowedReadPathsJSON" --argjson allowedWritePaths "$allowedWritePathsJSON" --argjson validUntil "$validUntil" '{allowedWritePaths: $allowedWritePaths, allowedReadPaths: $allowedReadPaths, validUntil: $validUntil}')"
+	dataJSON="$(jq -cnS \
+		--argjson AllowedReadPaths "$allowedReadPathsJSON" \
+		--argjson AllowedWritePaths "$allowedWritePathsJSON" \
+		--argjson ValidBefore "$validBefore" \
+		--argjson ValidAfter "$validAfter" \
+		'{AllowedWritePaths: $AllowedWritePaths, AllowedReadPaths: $allowedReadPaths, ValidBefore: $ValidBefore, ValidAfter: $ValidAfter}')"
 	echo "$dataJSON" |
 		ssh-keygen -Y sign -n patch.tionis.dev -f "$key" |
 		jq -cRn '{signature: ([inputs] | join("\n")), data: $data}' --arg data "$dataJSON" |
