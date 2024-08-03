@@ -198,6 +198,7 @@ func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenDa
 			s.logger.Debug("Key is not signed by owner", "signerFingerprint", signerFingerprint, "owner", owner)
 			return false, "token not signed by key for namespace", nil
 		}
+		// TODO use pattern lists instead
 		if isWriteOp {
 			for _, allowedPath := range tokenData.AllowedWritePaths {
 				if strings.HasPrefix(path, allowedPath) {
@@ -224,6 +225,7 @@ func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenDa
 			s.logger.Debug("Checking key", "mk", string(mk), "marshaledKey", string(marshaledKey))
 			if bytes.Equal(marshaledKey, mk) {
 				s.logger.Debug("Key is allowed, checking path now", "owner", owner, "key", key, "tokenData", tokenData, "path", path, "isWriteOp", isWriteOp)
+				// TODO use pattern lists instead
 				if isWriteOp {
 					for _, allowedPath := range tokenData.AllowedWritePaths {
 						if strings.HasPrefix(path, allowedPath) {
@@ -245,7 +247,7 @@ func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenDa
 		//if err != nil {
 		//	return false, err
 		//}
-		// TODO
+		// TODO implement me
 		return false, "not implemented", errors.New("not implemented")
 	default:
 		return false, "internal error", errors.New("unknown owner type")
@@ -373,6 +375,14 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 		// fifo -> one-to-one request-response matching
 		// pubsub -> don't block on sending data
 		// do nothing
+	case "req", "res":
+		// TODO implement me (needs special handling and some new data structures)
+		w.WriteHeader(http.StatusNotImplemented)
+		writeString, err := io.WriteString(w, "Not implemented")
+		if err != nil {
+			s.logger.Error("Error writing Not implemented to http.ResponseWriter", err, "writeString", writeString)
+		}
+		return
 	default:
 		reqType = "fifo"
 	}
