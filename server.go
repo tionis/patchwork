@@ -76,6 +76,7 @@ func (s *server) indexHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) waterHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Content-Type", "text/css")
 	_, err := io.WriteString(w, waterCss)
 	if err != nil {
 		s.logger.Error("Error writing waterCss to http.ResponseWriter", "error", err)
