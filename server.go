@@ -192,7 +192,9 @@ func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenDa
 	s.logger.Debug("Checking if key is allowed", "owner", owner, "key", key, "tokenData", tokenData, "path", path, "isWriteOp", isWriteOp)
 	switch owner.typ {
 	case ownerTypePublicKey:
-		if !bytes.Equal([]byte(owner.name), key.Marshal()) {
+		signerFingerprint := ssh.FingerprintSHA256(key)
+		if signerFingerprint != owner.name {
+			s.logger.Debug("Key is not signed by owner", "signerFingerprint", signerFingerprint, "owner", owner)
 			return false, "token not signed by key for namespace", nil
 		}
 		if isWriteOp {

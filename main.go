@@ -182,7 +182,7 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 
 	router.HandleFunc("/w/{pubkey}/{path:.*}", server.webCryptoHandler)
 
-	router.HandleFunc("/s/{pubkey}/{path:.*}", server.keyHandler)
+	router.HandleFunc("/k/{pubkey}/{path:.*}", server.keyHandler)
 
 	router.HandleFunc("/g/{gistId}/{path:.*}", server.gistHandler)
 
