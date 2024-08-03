@@ -18,8 +18,6 @@ import (
 	"time"
 )
 
-// TODO refactor to make it simpler
-
 func main() {
 	app := &cli.App{
 		Name:  "patchwork",
@@ -93,7 +91,6 @@ func startServer() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// TODO add line numbers to logger
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	logLevel := slog.LevelInfo
 	switch strings.ToUpper(os.Getenv("LOG_LEVEL")) {
@@ -158,32 +155,16 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 
 	router := mux.NewRouter()
 
-	// TODO
-	// add req/resp type handling of connections with the following features:
-	// - /req/* accepts any HTTP method
-	// - /res/* can answer such requests, this also supports a "double clutch" mode:
-	// - /res/{path}?pw_switch=true -> take patchChannel path from body and wait on that patchChannel for data
-	//   one data is received on this patchChannel pipe it to original requester
-	// add multi-path listening:
-	// - allow listening on /mres and specify prefixes in a header
-	//   then when requests come in that match this prefix send them over the connection and
-	//   specify the path and other metadata in headers. The answering handling then works over the
-	//   switch handling as described above
 	router.HandleFunc("/.well-known", server.wellKnownHandler)
 	router.HandleFunc("/.well-known/{path:.*}", server.wellKnownHandler)
 	router.HandleFunc("/", server.indexHandler)
 	router.HandleFunc("/water.css", server.waterHandler)
 
 	router.HandleFunc("/huproxy/{host}/{port}", server.huproxyHandler)
-
 	router.HandleFunc("/p/{path:.*}", server.publicHandler)
-
 	router.HandleFunc("/u/{username}/{path:.*}", server.userHandler)
-
 	router.HandleFunc("/w/{pubkey}/{path:.*}", server.webCryptoHandler)
-
 	router.HandleFunc("/k/{pubkey}/{path:.*}", server.keyHandler)
-
 	router.HandleFunc("/g/{gistId}/{path:.*}", server.gistHandler)
 
 	router.HandleFunc("/healthz", server.statusHandler)
