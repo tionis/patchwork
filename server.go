@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"github.com/armortal/webcrypto-go"
 	"github.com/gorilla/mux"
-	"github.com/tionis/patchwork/sshsig"
+	"github.com/hiddeco/sshsig"
 	"golang.org/x/crypto/ssh"
 	"io"
 	"log/slog"
@@ -150,6 +150,7 @@ func (s *server) githubFetchUserKeys(username string) ([]ssh.PublicKey, error) {
 	s.githubUserKeyMutex.RLock()
 	if entry, ok := s.githubUserKeyMap[username]; ok {
 		if time.Now().Before(entry.validUntil) {
+			s.logger.Debug("Returning cached user keys", "username", username)
 			s.githubUserKeyMutex.RUnlock()
 			return entry.keys, nil
 		}
@@ -166,7 +167,10 @@ func (s *server) githubFetchUserKeys(username string) ([]ssh.PublicKey, error) {
 		}
 	}(response.Body)
 	var keys []ssh.PublicKey
-	var rest []byte
+	rest, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body: %w", err)
+	}
 	for len(rest) > 0 {
 		var key ssh.PublicKey
 		key, _, _, rest, err = ssh.ParseAuthorizedKey(rest)
@@ -185,6 +189,7 @@ func (s *server) githubFetchUserKeys(username string) ([]ssh.PublicKey, error) {
 }
 
 func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenData, path string, isWriteOp bool) (bool, string, error) {
+	s.logger.Debug("Checking if key is allowed", "owner", owner, "key", key, "tokenData", tokenData, "path", path, "isWriteOp", isWriteOp)
 	switch owner.typ {
 	case ownerTypePublicKey:
 		if !bytes.Equal([]byte(owner.name), key.Marshal()) {
@@ -210,9 +215,12 @@ func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenDa
 			return false, "could not fetch user keys", fmt.Errorf("error fetching user keys: %w", err)
 		}
 		marshaledKey := key.Marshal()
+		s.logger.Debug("Checking if key is allowed", "marshaledKey", string(marshaledKey), "keys", keys)
 		for _, k := range keys {
 			mk := k.Marshal()
+			s.logger.Debug("Checking key", "mk", string(mk), "marshaledKey", string(marshaledKey))
 			if bytes.Equal(marshaledKey, mk) {
+				s.logger.Debug("Key is allowed, checking path now", "owner", owner, "key", key, "tokenData", tokenData, "path", path, "isWriteOp", isWriteOp)
 				if isWriteOp {
 					for _, allowedPath := range tokenData.AllowedWritePaths {
 						if strings.HasPrefix(path, allowedPath) {
@@ -297,15 +305,20 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteO
 		s.logger.Error("Error unmarshalling token", err, "decodedToken", string(decodedToken))
 		return false, "token could not be marshalled", fmt.Errorf("error unmarshalling token: %w", err)
 	}
-	signature, err := sshsig.ParseSignature([]byte(t.Signature))
+	signature, err := sshsig.Unarmor([]byte(t.Signature))
 	if err != nil {
 		s.logger.Error("Error parsing signature", err, "signature", t.Signature)
 		return false, "signature could not be parsed", fmt.Errorf("error parsing signature: %w", err)
 	}
-	dataReader := bytes.NewReader([]byte(t.Data))
+	dataReader := bytes.NewReader([]byte(t.Data + "\n"))
 	err = sshsig.Verify(dataReader, signature, signature.PublicKey, signature.HashAlgorithm, "patch.tionis.dev")
 	if err != nil {
-		return false, "signature could not be verified", fmt.Errorf("error verifying signature: %w", err)
+		dataReader := bytes.NewReader([]byte(t.Data))
+		err = sshsig.Verify(dataReader, signature, signature.PublicKey, signature.HashAlgorithm, "patch.tionis.dev")
+		if err != nil {
+			s.logger.Error("Error verifying signature", err, "signature", t.Signature, "data", t.Data)
+			return false, "signature could not be verified", fmt.Errorf("error verifying signature: %w", err)
+		}
 	}
 	var tokenData tokenData
 	err = json.Unmarshal([]byte(t.Data), &tokenData)
@@ -325,6 +338,7 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteO
 // handle a patch request, private is a string describing the owner of the namespace, if it is nil the space is public
 func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace string, owner *owner, path string) {
 	//handleReqRes := false
+	path = "/" + strings.TrimPrefix(path, "/")
 	blockpub := false
 	pathPrefix := ""
 	query := r.URL.Query()

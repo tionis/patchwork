@@ -5,7 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"github.com/gorilla/mux"
-	"github.com/tionis/patchwork/sshsig"
+	"github.com/hiddeco/sshsig"
 	"github.com/urfave/cli/v2"
 	"log"
 	"log/slog"
@@ -58,7 +58,12 @@ func main() {
 						if err != nil {
 							log.Fatalf("Error opening file: %v", err)
 						}
-						defer file.Close()
+						defer func(file *os.File) {
+							err := file.Close()
+							if err != nil {
+								log.Fatalf("Error closing file: %v", err)
+							}
+						}(file)
 						buf := make([]byte, 1024)
 						for {
 							n, err := file.Read(buf)
@@ -68,7 +73,7 @@ func main() {
 							sigBytes = append(sigBytes, buf[:n]...)
 						}
 					}
-					sig, err := sshsig.ParseSignature(sigBytes)
+					sig, err := sshsig.Unarmor(sigBytes)
 					if err != nil {
 						log.Fatalf("Error parsing SSH signature: %v", err)
 					}
@@ -102,7 +107,8 @@ func startServer() {
 		logLevel = slog.LevelError
 	}
 	loggerOpts := &slog.HandlerOptions{
-		Level: logLevel,
+		Level:     logLevel,
+		AddSource: logLevel == slog.LevelDebug,
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, loggerOpts))
 
@@ -143,9 +149,11 @@ func startServer() {
 
 func getHTTPServer(logger *slog.Logger) *http.Server {
 	server := &server{
-		logger:        logger,
-		channels:      make(map[string]*patchChannel),
-		channelsMutex: sync.RWMutex{},
+		logger:             logger,
+		channels:           make(map[string]*patchChannel),
+		channelsMutex:      sync.RWMutex{},
+		githubUserKeyMap:   make(map[string]sshPubKeyListEntry),
+		githubUserKeyMutex: sync.RWMutex{},
 	}
 
 	router := mux.NewRouter()
@@ -170,7 +178,7 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 
 	router.HandleFunc("/p/{path:.*}", server.publicHandler)
 
-	router.HandleFunc("/u/{username)/{path:.*}", server.userHandler)
+	router.HandleFunc("/u/{username}/{path:.*}", server.userHandler)
 
 	router.HandleFunc("/w/{pubkey}/{path:.*}", server.webCryptoHandler)
 
