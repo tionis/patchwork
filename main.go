@@ -159,6 +159,9 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 	router.HandleFunc("/.well-known/{path:.*}", server.wellKnownHandler)
 	router.HandleFunc("/", server.indexHandler)
 	router.HandleFunc("/water.css", server.waterHandler)
+	router.HandleFunc("/favicon.ico", server.faviconHandler)
+	router.HandleFunc("/patchwork.sh", server.patchworkShHandler)
+	router.HandleFunc("/robots.txt", server.robotsHandler)
 
 	router.HandleFunc("/huproxy/{host}/{port}", server.huproxyHandler)
 	router.HandleFunc("/p/{path:.*}", server.publicHandler)

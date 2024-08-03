@@ -11,7 +11,7 @@ function stack_trace() {
 		echo "    ($i) ${FUNCNAME[$i]:-(top level)} ${BASH_SOURCE[$i]:-(no file)}:${BASH_LINENO[$((i - 1))]}"
 	done
 }
-error() { printf "\e[1;31m[ERROR]\e[0m %s\n" "${1:-error message missing}" && trap true ERR && exit 1; }
+error() { printf "\e[1;31m[ERROR]\e[0m %s\n" "${1:-error message missing}" && trap true ERR && return 1; }
 warning() { printf "\e[1;33m[WARNING]\e[0m %s\n" "$1" >&2; }
 success() { printf "\e[1;32m[SUCCESS]\e[0m %s\n" "$1" >&2; }
 info() { printf "\e[1;34m[INFO]\e[0m %s\n" "$1" >&2; }
@@ -21,35 +21,35 @@ blue() { if [[ -t 0 ]]; then printf "\e[1;34m%s\e[0m" "$1"; else printf "%s" "$1
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 export SCRIPT_DIR
 #--------------------------------------------
-declare -A patchwork_commands
-declare -A patchwork_command_descriptions
-patchwork:desc() {
-	patchwork_commands["$1"]="$1"
-	patchwork_command_descriptions["$1"]="$2"
+declare -A patchwork__commands
+declare -A patchwork__command_descriptions
+patchwork::desc() {
+	patchwork__commands["$1"]="$1"
+	patchwork__command_descriptions["$1"]="$2"
 }
-declare -A patchwork_aliases
-patchwork:alias() {
-	patchwork_aliases["$1"]+="|$2"
-	patchwork_commands["$2"]="$1"
+declare -A patchwork__aliases
+patchwork::alias() {
+	patchwork__aliases["$1"]+="|$2"
+	patchwork__commands["$2"]="$1"
 }
-patchwork:desc help "Show this help message"
-patchwork:help() {
+patchwork::desc help "Show this help message"
+patchwork::help() {
 	case "${1:-list}" in
 	*/)
 		printf "Group Commands for %s:\n" "$(green "${1}")"
-		for key in "${!patchwork_command_descriptions[@]}"; do
-			if [[ "$key" == "${1}"* ]]; then
+		for key in "${!patchwork__command_descriptions[@]}"; do
+			if [[ "$key" == "${1}"?* ]]; then
 				local name_without_group="${key:${#1}}"
 				if [[ (! "$name_without_group" == */*) ||
-					"$name_without_group" =~ [a-zA-Z0-9]*/$ ]]; then
-					if [[ -v ESCPAPED_NAME_aliases[$key] ]]; then
+					"$name_without_group" =~ ^[a-zA-Z0-9]+/$ ]]; then
+					if [[ -v patchwork__aliases[$key] ]]; then
 						printf "  %s: %s\n" \
-							"$(green "$key${patchwork_aliases[$key]}")" \
-							"${patchwork_command_descriptions[$key]}"
+							"$(green "$key${patchwork__aliases[$key]}")" \
+							"${patchwork__command_descriptions[$key]}"
 					else
 						printf "  %s: %s\n" \
 							"$(green "$key")" \
-							"${patchwork_command_descriptions[$key]}"
+							"${patchwork__command_descriptions[$key]}"
 					fi
 				fi
 			fi
@@ -58,28 +58,28 @@ patchwork:help() {
 	list)
 		echo "Usage: patchwork [command]"
 		echo "Commands:"
-		for key in "${!patchwork_command_descriptions[@]}"; do
+		for key in "${!patchwork__command_descriptions[@]}"; do
 			if [[ (! "$key" == */*) ||
-				"$key" =~ [a-zA-Z0-9_.-]*/$ ]]; then
-				if [[ -v patchwork_aliases[$key] ]]; then
+				"$key" =~ ^[a-zA-Z0-9_.-]+/$ ]]; then
+				if [[ -v patchwork__aliases[$key] ]]; then
 					printf "  %s: %s\n" \
-						"$(green "$key${patchwork_aliases[$key]}")" \
-						"${patchwork_command_descriptions[$key]}"
+						"$(green "$key${patchwork__aliases[$key]}")" \
+						"${patchwork__command_descriptions[$key]}"
 				else
 					printf "  %s: %s\n" \
 						"$(green "$key")" \
-						"${patchwork_command_descriptions[$key]}"
+						"${patchwork__command_descriptions[$key]}"
 				fi
 			fi
 		done
 		;;
 	*)
-		if [[ -v patchwork_command_descriptions[$1] ]]; then
+		if [[ -v patchwork__command_descriptions[$1] ]]; then
 			printf "Usage: patchwork %s\n" "$(green "$1")"
-			if [[ -v patchwork_aliases[$1] ]]; then
-				printf "Aliases: %s\n" "$(green "${patchwork_aliases[$1]//|/ }")"
+			if [[ -v patchwork__aliases[$1] ]]; then
+				printf "Aliases: %s\n" "$(green "${patchwork__aliases[$1]//|/ }")"
 			fi
-			printf "%s\n" "${patchwork_command_descriptions[$1]}"
+			printf "%s\n" "${patchwork__command_descriptions[$1]}"
 		else
 			error "Unknown command: $1"
 		fi
@@ -87,21 +87,31 @@ patchwork:help() {
 	esac
 }
 
-patchwork:get_uuid() {
-	if command -v uuidgen &>/dev/null; then
-		uuidgen
+patchwork() {
+	local base_zero
+	base_zero="$(basename "$0")"
+	if [[ "$base_zero" = ".main" || "$base_zero" = "patchwork" || "$base_zero" = "patchwork.sh" ]]; then
+		command="${1:-help}"
+		shift || true
 	else
-		cat /proc/sys/kernel/random/uuid
+		command="$base_zero"
+	fi
+	if [[ "$command" == */ ]]; then
+		"patchwork::help" "$command" "$@"
+	elif [[ -v patchwork__commands[$command] ]]; then
+		"patchwork::${patchwork__commands[$command]}" "$@"
+	else
+		error "Unknown command: $command"
 	fi
 }
 
 ######################################### Globals ##########################################
-patchwork_server="${PATCHWORK_SERVER:-https://patch.tionis.dev}"
-patchwork_server_req="$patchwork_server/p/"
+patchwork__server="${PATCHWORK_SERVER:-https://patch.tionis.dev}"
+patchwork__server_req="$patchwork__server/p/"
 
 ######################################### Commands ##########################################
-patchwork:desc token "Create a new token"
-patchwork:token() {
+patchwork::desc token "Create a new token"
+patchwork::token() {
 	declare allowedWritePaths allowedReadPaths key allowedReadPathsJSON allowedWritePathsJSON dataJSON validBefore validAfter
 	allowedReadPaths=()
 	allowedWritePaths=()
@@ -170,7 +180,7 @@ patchwork:token() {
 		--argjson AllowedWritePaths "$allowedWritePathsJSON" \
 		--argjson ValidBefore "$validBefore" \
 		--argjson ValidAfter "$validAfter" \
-		'{AllowedWritePaths: $AllowedWritePaths, AllowedReadPaths: $allowedReadPaths, ValidBefore: $ValidBefore, ValidAfter: $ValidAfter}')"
+		'{AllowedWritePaths: $AllowedWritePaths, AllowedReadPaths: $AllowedReadPaths, ValidBefore: $ValidBefore, ValidAfter: $ValidAfter}')"
 	echo "$dataJSON" |
 		ssh-keygen -Y sign -n patch.tionis.dev -f "$key" |
 		jq -cRn '{signature: ([inputs] | join("\n")), data: $data}' --arg data "$dataJSON" |
@@ -178,8 +188,8 @@ patchwork:token() {
 		base64 --wrap=0
 }
 
-patchwork:desc send "Send data via the patchwork server"
-patchwork:send() {
+patchwork::desc send "Send data via the patchwork server"
+patchwork::send() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--help)
@@ -202,31 +212,16 @@ patchwork:send() {
 		error "No filename specified"
 	fi
 	id="${id:-$(patchwork:get_uuid)}"
-	info "Sending data to $patchwork_server_req/$id"
+	info "Sending data to $patchwork__server_req/$id"
 	if [[ "$filename" == "-" ]]; then
-		curl -X POST --data-binary @- "$patchwork_server_req/$id"
+		curl -X POST --data-binary @- "$patchwork__server_req/$id"
 	else
-		curl -X POST --data-binary "@$filename" "$patchwork_server_req/$id"
+		curl -X POST --data-binary "@$filename" "$patchwork__server_req/$id"
 	fi
 
 }
 
-######################################### Main ##############################################
-patchwork:main() {
-	if [[ "$(basename "$0")" = "patchwork" ]]; then
-		command="${1:-help}"
-	else
-		command="$(basename "$0")"
-	fi
-	shift || true
-	if [[ "$command" == */ ]]; then
-		"patchwork:help" "$command" "$@"
-	elif [[ -v patchwork_commands[$command] ]]; then
-		"patchwork:${patchwork_commands[$command]}" "$@"
-	else
-		error "Unknown command: $command"
-	fi
-}
-if [[ $- != *i* ]]; then
-	patchwork:main "$@"
+# Run main if not sourced
+if [[ "$0" == "${BASH_SOURCE[0]}" ]]; then
+	patchwork "$@"
 fi

@@ -83,6 +83,26 @@ func (s *server) waterHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) faviconHandler(w http.ResponseWriter, r *http.Request) {
+	_, err := io.WriteString(w, "") // TODO add proper favicon
+	if err != nil {
+		s.logger.Error("Error writing empty string to http.ResponseWriter", err)
+	}
+}
+
+func (s *server) robotsHandler(w http.ResponseWriter, r *http.Request) {
+	_, err := io.WriteString(w, "User-agent: *\nDisallow: /\n")
+	if err != nil {
+		s.logger.Error("Error writing robots.txt to http.ResponseWriter", err)
+	}
+}
+
+func (s *server) patchworkShHandler(w http.ResponseWriter, r *http.Request) {
+	_, err := io.WriteString(w, patchworkSh)
+	if err != nil {
+		s.logger.Error("Error writing patchworkSh to http.ResponseWriter", err)
+	}
+}
 func (s *server) wellKnownHandler(w http.ResponseWriter, r *http.Request) {
 	// return 404 for all requests to /.well-known/*
 	w.WriteHeader(http.StatusNotFound)

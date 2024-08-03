@@ -55,3 +55,7 @@ AllowedWritePaths and AllowedReadPaths are OpenSSH style pattern lists
 (essentially a list of globs), while the ValidBefore and ValidAfter
 fields specify a unix time after/before which the token is invalid. If
 it\'s -1, there is no expiry.
+
+## Tools
+
+You can download a bash based client [here](/patchwork.sh).
