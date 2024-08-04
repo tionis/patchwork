@@ -82,7 +82,7 @@ func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) keyHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	pubkey := vars["pubkey"]
+	pubkey := strings.ReplaceAll(strings.ReplaceAll(vars["pubkey"], "_", "/"), "-", "+")
 	path := vars["path"]
 	s.handlePatch(w, r,
 		"k/"+pubkey,
@@ -94,7 +94,7 @@ func (s *server) keyHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) webCryptoHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	pubkey := vars["pubkey"]
+	pubkey := strings.ReplaceAll(strings.ReplaceAll(vars["pubkey"], "_", "/"), "-", "+")
 	path := vars["path"]
 	s.handlePatch(w, r,
 		"w/"+pubkey,
