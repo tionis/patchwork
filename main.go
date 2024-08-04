@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"github.com/dusted-go/logging/prettylog"
 	"github.com/gorilla/mux"
 	"github.com/hiddeco/sshsig"
 	"github.com/urfave/cli/v2"
@@ -106,11 +107,20 @@ func startServer() {
 	case "ERROR":
 		logLevel = slog.LevelError
 	}
+	var addSource bool
+	switch strings.ToLower(os.Getenv("LOG_SOURCE")) {
+	case "true", "yes":
+		addSource = true
+	case "false":
+		addSource = false
+	default:
+		addSource = false
+	}
 	loggerOpts := &slog.HandlerOptions{
 		Level:     logLevel,
-		AddSource: logLevel == slog.LevelDebug,
+		AddSource: addSource,
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stdout, loggerOpts))
+	logger := slog.New(prettylog.NewHandler(loggerOpts))
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
@@ -147,7 +157,7 @@ func startServer() {
 	logger.Info("Patchwork stopped")
 }
 
-func serveFile(path string, contentType string) http.HandlerFunc {
+func serveFile(logger *slog.Logger, path string, contentType string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, err := assets.ReadFile(path)
 		if err != nil {
@@ -155,12 +165,16 @@ func serveFile(path string, contentType string) http.HandlerFunc {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			log.Printf("Error reading file: %v", err)
+			logger.Error("Error reading file: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", contentType)
-		w.Write(p)
+		_, err = w.Write(p)
+		if err != nil {
+			logger.Error("Error writing file: %v", err)
+			return
+		}
 	}
 }
 
@@ -175,6 +189,8 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 		channelsMutex:      sync.RWMutex{},
 		githubUserKeyMap:   make(map[string]sshPubKeyListEntry),
 		githubUserKeyMutex: sync.RWMutex{},
+		reqResponses:       make(map[string]chan res),
+		reqResponsesMux:    sync.RWMutex{},
 	}
 
 	router := mux.NewRouter()
@@ -182,14 +198,14 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 	router.HandleFunc("/.well-known", notFoundHandler)
 	router.HandleFunc("/.well-known/{path:.*}", notFoundHandler)
 	router.HandleFunc("/robots.txt", notFoundHandler)
-	router.HandleFunc("/favicon.ico", serveFile("assets/favicon.ico", "image/x-icon"))
-	router.HandleFunc("/site.webmanifest", serveFile("assets/site.webmanifest", "application/manifest+json"))
-	router.HandleFunc("/android-chrome-192x192.png", serveFile("assets/android-chrome-192x192.png", "image/png"))
-	router.HandleFunc("/android-chrome-512x512.png", serveFile("assets/android-chrome-512x512.png", "image/png"))
-	router.HandleFunc("/apple-touch-icon.png", serveFile("assets/apple-touch-icon.png", "image/png"))
-	router.HandleFunc("/favicon-16x16.png", serveFile("assets/favicon-16x16.png", "image/png"))
-	router.HandleFunc("/favicon-32x32.png", serveFile("assets/favicon-32x32.png", "image/png"))
-	router.HandleFunc("/", serveFile("assets/index.html", "text/html"))
+	router.HandleFunc("/favicon.ico", serveFile(logger, "assets/favicon.ico", "image/x-icon"))
+	router.HandleFunc("/site.webmanifest", serveFile(logger, "assets/site.webmanifest", "application/manifest+json"))
+	router.HandleFunc("/android-chrome-192x192.png", serveFile(logger, "assets/android-chrome-192x192.png", "image/png"))
+	router.HandleFunc("/android-chrome-512x512.png", serveFile(logger, "assets/android-chrome-512x512.png", "image/png"))
+	router.HandleFunc("/apple-touch-icon.png", serveFile(logger, "assets/apple-touch-icon.png", "image/png"))
+	router.HandleFunc("/favicon-16x16.png", serveFile(logger, "assets/favicon-16x16.png", "image/png"))
+	router.HandleFunc("/favicon-32x32.png", serveFile(logger, "assets/favicon-32x32.png", "image/png"))
+	router.HandleFunc("/", serveFile(logger, "assets/index.html", "text/html"))
 
 	router.HandleFunc("/static/{path:.*}", func(w http.ResponseWriter, r *http.Request) {
 		logger.Debug("Serving static file: %v", mux.Vars(r)["path"])
@@ -224,7 +240,11 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 		default:
 			w.Header().Set("Content-Type", http.DetectContentType(p))
 		}
-		w.Write(p)
+		_, err = w.Write(p)
+		if err != nil {
+			logger.Error("Error writing static file: %v", err)
+			return
+		}
 	})
 
 	router.HandleFunc("/huproxy/{host}/{port}", server.huproxyHandler)
@@ -245,7 +265,11 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
-		w.Write(p)
+		_, err = w.Write(p)
+		if err != nil {
+			logger.Error("Error writing index.html: %v", err)
+			return
+		}
 	})
 
 	http.Handle("/", router)
