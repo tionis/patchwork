@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	_ "embed"
+	"embed"
 	"errors"
 	"github.com/gorilla/mux"
 	"github.com/hiddeco/sshsig"
@@ -17,6 +17,9 @@ import (
 	"syscall"
 	"time"
 )
+
+//go:embed assets/*
+var assets embed.FS
 
 func main() {
 	app := &cli.App{
@@ -144,6 +147,27 @@ func startServer() {
 	logger.Info("Patchwork stopped")
 }
 
+func serveFile(path string, contentType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, err := assets.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			log.Printf("Error reading file: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Write(p)
+	}
+}
+
+func notFoundHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotFound)
+}
+
 func getHTTPServer(logger *slog.Logger) *http.Server {
 	server := &server{
 		logger:             logger,
@@ -155,13 +179,53 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 
 	router := mux.NewRouter()
 
-	router.HandleFunc("/.well-known", server.wellKnownHandler)
-	router.HandleFunc("/.well-known/{path:.*}", server.wellKnownHandler)
-	router.HandleFunc("/", server.indexHandler)
-	router.HandleFunc("/water.css", server.waterHandler)
-	router.HandleFunc("/favicon.ico", server.faviconHandler)
-	router.HandleFunc("/patchwork.sh", server.patchworkShHandler)
-	router.HandleFunc("/robots.txt", server.robotsHandler)
+	router.HandleFunc("/.well-known", notFoundHandler)
+	router.HandleFunc("/.well-known/{path:.*}", notFoundHandler)
+	router.HandleFunc("/robots.txt", notFoundHandler)
+	router.HandleFunc("/favicon.ico", serveFile("assets/favicon.ico", "image/x-icon"))
+	router.HandleFunc("/site.webmanifest", serveFile("assets/site.webmanifest", "application/manifest+json"))
+	router.HandleFunc("/android-chrome-192x192.png", serveFile("assets/android-chrome-192x192.png", "image/png"))
+	router.HandleFunc("/android-chrome-512x512.png", serveFile("assets/android-chrome-512x512.png", "image/png"))
+	router.HandleFunc("/apple-touch-icon.png", serveFile("assets/apple-touch-icon.png", "image/png"))
+	router.HandleFunc("/favicon-16x16.png", serveFile("assets/favicon-16x16.png", "image/png"))
+	router.HandleFunc("/favicon-32x32.png", serveFile("assets/favicon-32x32.png", "image/png"))
+	router.HandleFunc("/", serveFile("assets/index.html", "text/html"))
+
+	router.HandleFunc("/static/{path:.*}", func(w http.ResponseWriter, r *http.Request) {
+		logger.Debug("Serving static file: %v", mux.Vars(r)["path"])
+		p, err := assets.ReadFile("assets/" + mux.Vars(r)["path"])
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			logger.Error("Error reading static file: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		fileEnding := mux.Vars(r)["path"][strings.LastIndex(mux.Vars(r)["path"], ".")+1:]
+		switch fileEnding {
+		case "css":
+			w.Header().Set("Content-Type", "text/css")
+		case "js":
+			w.Header().Set("Content-Type", "application/javascript")
+		case "png":
+			w.Header().Set("Content-Type", "image/png")
+		case "ico":
+			w.Header().Set("Content-Type", "image/x-icon")
+		case "svg":
+			w.Header().Set("Content-Type", "image/svg+xml")
+		case "json":
+			w.Header().Set("Content-Type", "application/json")
+		case "html":
+			w.Header().Set("Content-Type", "text/html")
+		case "txt":
+			w.Header().Set("Content-Type", "text/plain")
+		default:
+			w.Header().Set("Content-Type", http.DetectContentType(p))
+		}
+		w.Write(p)
+	})
 
 	router.HandleFunc("/huproxy/{host}/{port}", server.huproxyHandler)
 	router.HandleFunc("/p/{path:.*}", server.publicHandler)
@@ -172,6 +236,17 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 
 	router.HandleFunc("/healthz", server.statusHandler)
 	router.HandleFunc("/status", server.statusHandler)
+
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		p, err := assets.ReadFile("assets/index.html")
+		if err != nil {
+			logger.Error("Error reading index.html: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(p)
+	})
 
 	http.Handle("/", router)
 

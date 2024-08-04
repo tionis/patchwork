@@ -68,50 +68,6 @@ func (s *server) statusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *server) indexHandler(w http.ResponseWriter, r *http.Request) {
-	_, err := io.WriteString(w, indexHtml)
-	if err != nil {
-		s.logger.Error("Error writing indexHtml to http.ResponseWriter", "error", err)
-	}
-}
-
-func (s *server) waterHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add("Content-Type", "text/css")
-	_, err := io.WriteString(w, waterCss)
-	if err != nil {
-		s.logger.Error("Error writing waterCss to http.ResponseWriter", "error", err)
-	}
-}
-
-func (s *server) faviconHandler(w http.ResponseWriter, r *http.Request) {
-	_, err := io.WriteString(w, "") // TODO add proper favicon
-	if err != nil {
-		s.logger.Error("Error writing empty string to http.ResponseWriter", err)
-	}
-}
-
-func (s *server) robotsHandler(w http.ResponseWriter, r *http.Request) {
-	_, err := io.WriteString(w, "User-agent: *\nDisallow: /\n")
-	if err != nil {
-		s.logger.Error("Error writing robots.txt to http.ResponseWriter", err)
-	}
-}
-
-func (s *server) patchworkShHandler(w http.ResponseWriter, r *http.Request) {
-	_, err := io.WriteString(w, patchworkSh)
-	if err != nil {
-		s.logger.Error("Error writing patchworkSh to http.ResponseWriter", err)
-	}
-}
-func (s *server) wellKnownHandler(w http.ResponseWriter, r *http.Request) {
-	// return 404 for all requests to /.well-known/*
-	w.WriteHeader(http.StatusNotFound)
-	writeString, err := io.WriteString(w, "404 Not Found")
-	if err != nil {
-		s.logger.Error("Error writing 404 to http.ResponseWriter", err, "writeString", writeString)
-	}
-}
-
 func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	username := vars["username"]
