@@ -1,98 +1,100 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
-    <title>Patchwork</title>
-    <link rel="stylesheet" href="/static/water.css" />
-  </head>
 
-  <body>
-    <h1>Patchwork</h1>
-    <p>
-      A simple communication backend for scripts and other small applications.
-    </p>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+  <title>Patchwork</title>
+  <link rel="stylesheet" href="/static/water.css" />
+</head>
 
-    <h2>Usage</h2>
-    <p>
-      Patchworks data model is based on
-      <a href="https://patchbay.pub">Patchbay.pub's</a> approach. The service
-      provides a nearly unlimited amount of virtual "channels" represented by a
-      path. Data POSTed to a channel can be received by clients doing GET
-      requests, the exact behaviour depends on the type (specified with the
-      "type" query parameter). The Mime content-type can also be specified with
-      the "mime" query parameter.
-    </p>
-    <p>The available types are:</p>
-    <ul>
-      <li>
-        <strong>fifo/queue</strong>: Each message is received by exactly one
-        receiver, if no listeners are active the server blocks until there is
-        one. This is the default mode.
-      </li>
+<body>
+  <img style="float: right" src="./android-chrome-192x192.png" alt="Patchwork logo" width="96" height="96" />
+  <h1>Patchwork</h1>
+  <p>
+    A simple communication backend for scripts and other small applications.
+  </p>
 
-      <li>
-        <strong>pubsub</strong>: All receivers receive the published message, if
-        no listeners are active the server returns "HTTP 204 NO CONTENT".
-      </li>
-      <li>
-        <strong>blockpub/blocksub</strong>: Same behaviour as pubsub, but the
-        server blocks until there is at least one listener.
-      </li>
-    </ul>
+  <h2>Usage</h2>
+  <p>
+    Patchworks data model is based on
+    <a href="https://patchbay.pub">Patchbay.pub's</a> approach. The service
+    provides a nearly unlimited amount of virtual "channels" represented by a
+    path. Data POSTed to a channel can be received by clients doing GET
+    requests, the exact behaviour depends on the type (specified with the
+    "type" query parameter). The Mime content-type can also be specified with
+    the "mime" query parameter.
+  </p>
+  <p>The available types are:</p>
+  <ul>
+    <li>
+      <strong>fifo/queue</strong>: Each message is received by exactly one
+      receiver, if no listeners are active the server blocks until there is
+      one. This is the default mode.
+    </li>
 
-    <h2>Authentication and Authorization</h2>
-    <p>
-      The server is partionend by namespaces. Each namespace has different rules
-      for auth:
-    </p>
-    <ul>
-      <li><strong>/p/**</strong>: No authentication required.</li>
-      <li>
-        <strong>/u/{github_user}/**</strong>: Token has to be signed by a ssh
-        key of the github user.
-      </li>
-      <li>
-        <strong>/k/{key_fingerprint}/**</strong>: Token has to be signed by the
-        ssh key with the given fingerprint.
-      </li>
-      <li>
-        <strong>/w/{webcrypto_fingerprint}/**</strong>: Token has to be signed
-        by the webcrypto key with the given fingerprint.
-      </li>
-      <li>
-        <strong>/g/{gist_id}/**</strong>: Token has to be signed by an allowed
-        signer loaded from the gist
-      </li>
-    </ul>
+    <li>
+      <strong>pubsub</strong>: All receivers receive the published message, if
+      no listeners are active the server returns "HTTP 204 NO CONTENT".
+    </li>
+    <li>
+      <strong>blockpub/blocksub</strong>: Same behaviour as pubsub, but the
+      server blocks until there is at least one listener.
+    </li>
+  </ul>
 
-    <h2>Token Format</h2>
-    <p>
-      Tokens are base64-encoded, gzipped json objects with two keys: "signature"
-      and "data". The "signature" is an openssh signature of the "data". The
-      "data" key is a json object with the following keys:
-    </p>
-    <pre>
+  <h2>Authentication and Authorization</h2>
+  <p>
+    The server is partionend by namespaces. Each namespace has different rules
+    for auth:
+  </p>
+  <ul>
+    <li><strong>/p/**</strong>: No authentication required.</li>
+    <li>
+      <strong>/u/{github_user}/**</strong>: Token has to be signed by a ssh
+      key of the github user.
+    </li>
+    <li>
+      <strong>/k/{key_fingerprint}/**</strong>: Token has to be signed by the
+      ssh key with the given fingerprint.
+    </li>
+    <li>
+      <strong>/w/{webcrypto_fingerprint}/**</strong>: Token has to be signed
+      by the webcrypto key with the given fingerprint.
+    </li>
+    <li>
+      <strong>/g/{gist_id}/**</strong>: Token has to be signed by an allowed
+      signer loaded from the gist
+    </li>
+  </ul>
+
+  <h2>Token Format</h2>
+  <p>
+    Tokens are base64-encoded, gzipped json objects with two keys: "signature"
+    and "data". The "signature" is an openssh signature of the "data". The
+    "data" key is a json object with the following keys:
+  </p>
+  <pre>
     {
     "AllowedWritePaths": ["/some-path/*", "!/some-path/forbidden/*"],
     "AllowedReadPaths": [],
     "ValidBefore": -1,
     "ValidAfter": -1,
     }
-  </pre
-    >
-    <p>
-      AllowedWritePaths and AllowedReadPaths are OpenSSH style pattern lists
-      (essentially a list of globs), while the ValidBefore and ValidAfter fields
-      specify a unix time after/before which the token is invalid. If it's -1,
-      there is no expiry.
-    </p>
+  </pre>
+  <p>
+    AllowedWritePaths and AllowedReadPaths are OpenSSH style pattern lists
+    (essentially a list of globs), while the ValidBefore and ValidAfter fields
+    specify a unix time after/before which the token is invalid. If it's -1,
+    there is no expiry.
+  </p>
 
-    <h2>Tools</h2>
-    <p>
-      You can download a bash based client
-      <a href="/static/patchwork.sh">here</a>.
-    </p>
-  </body>
+  <h2>Tools</h2>
+  <p>
+    You can download a bash based client
+    <a href="/static/patchwork.sh">here</a>.
+  </p>
+</body>
+
 </html>
