@@ -2,11 +2,15 @@
 
 Patchwork is simple communication backend to distribute data mainly meant for scripts and small applications.
 It's design is based [patchbay.pub's](https://patchbay.pub) with the addition of an authentication layer based
-on private ssh/webcrypto keys.
+on private ssh/webcrypto keys.  
+This service can then be used to power use cases like static file hosting, file sharing,
+cross-platform notifications, webhooks handling (including the maybe simplest CI setup using
+traditional git forges), smart home routing, IoT Reporting, job queues, chat systems, bots....
+All without bothering with writing a proper server hosting setup. For many use case curl and bash are enough.
 
 ## Usage
 
-The service provides a nearly unlimited amount of virtual channels represented by a path and a namespace.
+Patchwork provides a nearly unlimited amount of virtual channels represented by a path and a namespace.
 Data POSTed to a channel can be received by clients doing GET requests, the exact behaviour depends on the
 type (specified with the `type` query parameter).
 The available types are:
@@ -45,16 +49,17 @@ rules for auth:
 ## Token Format
 
 Tokens are base64-encoded, gzipped json objects with two keys:
-\"signature\" and \"data\". The \"signature\" is an openssh signature of
-the \"data\". The \"data\" key is a json object with the following keys:
+`signature` and `data`. The `signature` is an openssh signature of
+the `data`. The `data` key is a json object with the following keys:
 
-        {
-        "AllowedWritePaths": ["/some-path/*", "!/some-path/forbidden/*"],
-        "AllowedReadPaths": [],
-        "ValidBefore": -1,
-        "ValidAfter": -1,
-        }
-
+```json5
+{
+  AllowedWritePaths: ["/some-path/*", "!/some-path/forbidden/*"],
+  AllowedReadPaths: [],
+  ValidBefore: -1,
+  ValidAfter: -1,
+}
+```
 
 AllowedWritePaths and AllowedReadPaths are OpenSSH style pattern lists
 (essentially a list of globs), while the ValidBefore and ValidAfter
