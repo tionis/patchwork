@@ -168,10 +168,10 @@ patchwork::token() {
 		error "Key file not found: $key"
 	fi
 	if [[ "${#allowedReadPaths[@]}" -eq 0 ]]; then
-		allowedReadPaths+=("/")
+		allowedReadPaths+=("*")
 	fi
 	if [[ "${#allowedWritePaths[@]}" -eq 0 ]]; then
-		allowedWritePaths+=("/")
+		allowedWritePaths+=("*")
 	fi
 	allowedReadPathsJSON="${allowedReadPathsJSON:-"$(printf '%s\n' "${allowedReadPaths[@]}" | jq -R . | jq -s .)"}"
 	allowedWritePathsJSON="${allowedWritePathsJSON:-"$(printf '%s\n' "${allowedWritePaths[@]}" | jq -R . | jq -s .)"}"

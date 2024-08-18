@@ -3,16 +3,17 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/armortal/webcrypto-go"
 	"github.com/hiddeco/sshsig"
+	sshUtil "github.com/tionis/ssh-tools/util"
 	"golang.org/x/crypto/ssh"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -23,17 +24,59 @@ type token struct {
 }
 
 // tokenData represents the signed data within a token that is used to authenticate a request
-type tokenData struct {
+type tokenDataJSON struct {
 	AllowedWritePaths []string `json:"AllowedWritePaths"` // writing means sending requests in this case
 	AllowedReadPaths  []string `json:"AllowedReadPaths"`  // reading mean receiving requests in this case
 	ValidBefore       int64    `json:"ValidBefore"`       // -1 means the token is valid forever
 	ValidAfter        int64    `json:"ValidAfter"`        // -1 means the token is valid from the beginning of time
 }
 
+type tokenData struct {
+	AllowedWritePaths []*sshUtil.Pattern `json:"AllowedWritePaths"` // writing means sending requests in this case
+	AllowedReadPaths  []*sshUtil.Pattern `json:"AllowedReadPaths"`  // reading mean receiving requests in this case
+	ValidBefore       sql.NullTime       `json:"ValidBefore"`       // -1 means the token is valid forever
+	ValidAfter        sql.NullTime       `json:"ValidAfter"`        // -1 means the token is valid from the beginning of time
+}
+
 type webcryptoToken struct {
 	Data      string              `json:"data"`
 	Algorithm webcrypto.Algorithm `json:"algorithm"`
 	Key       string              `json:"key"`
+}
+
+func (t *tokenDataJSON) Unmarshal() (tokenData, error) {
+	var allowedReadPaths []*sshUtil.Pattern
+	for _, line := range t.AllowedReadPaths {
+		patt, err := sshUtil.NewPattern(line)
+		if err != nil {
+			return tokenData{}, fmt.Errorf("failed parsing pattern %s: %w", line, err)
+		}
+		allowedReadPaths = append(allowedReadPaths, patt)
+	}
+	var allowedWritePaths []*sshUtil.Pattern
+	for _, line := range t.AllowedWritePaths {
+		patt, err := sshUtil.NewPattern(line)
+		if err != nil {
+			return tokenData{}, fmt.Errorf("failed parsing pattern %s: %w", line, err)
+		}
+		allowedWritePaths = append(allowedWritePaths, patt)
+	}
+	var validAfter sql.NullTime
+	var validBefore sql.NullTime
+	if t.ValidBefore != -1 {
+		validBefore.Valid = true
+		validBefore.Time = time.Unix(t.ValidBefore, 0)
+	}
+	if t.ValidAfter != -1 {
+		validAfter.Valid = true
+		validAfter.Time = time.Unix(t.ValidAfter, 0)
+	}
+	return tokenData{
+		AllowedReadPaths:  allowedReadPaths,
+		AllowedWritePaths: allowedWritePaths,
+		ValidAfter:        validAfter,
+		ValidBefore:       validBefore,
+	}, nil
 }
 
 func (s *server) authenticateWebcryptoToken(token []byte, path string, isWriteOp bool) (bool, string, error) {
@@ -88,15 +131,17 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteO
 			return false, "signature could not be verified", fmt.Errorf("error verifying signature: %w", err)
 		}
 	}
-	var tokenData tokenData
-	err = json.Unmarshal([]byte(t.Data), &tokenData)
+	var marshalledTokenData tokenDataJSON
+	err = json.Unmarshal([]byte(t.Data), &marshalledTokenData)
 	if err != nil {
 		return false, "tokenData could not be marshalled", fmt.Errorf("error unmarshalling token data: %w", err)
 	}
-	if tokenData.ValidBefore != -1 && time.Now().Unix() > tokenData.ValidBefore {
+	tokenData, err := marshalledTokenData.Unmarshal()
+	now := time.Now()
+	if tokenData.ValidBefore.Valid && tokenData.ValidBefore.Time.After(now) {
 		return false, "token is no longer valid", nil
 	}
-	if tokenData.ValidAfter != -1 && time.Now().Unix() < tokenData.ValidAfter {
+	if tokenData.ValidAfter.Valid && tokenData.ValidAfter.Time.Before(now) {
 		return false, "token is not yet valid", nil
 	}
 	keyAllowed, reason, err := s.isKeyAllowed(owner, signature.PublicKey, tokenData, path, isWriteOp)
@@ -158,21 +203,21 @@ func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenDa
 			s.logger.Debug("Key is not signed by owner", "signerFingerprint", signerFingerprint, "owner", owner)
 			return false, "token not signed by key for namespace", nil
 		}
-		// TODO use pattern lists instead
 		if isWriteOp {
-			for _, allowedPath := range tokenData.AllowedWritePaths {
-				if strings.HasPrefix(path, allowedPath) {
-					return true, "", nil
-				}
+			matches := sshUtil.MatchPatternList(tokenData.AllowedWritePaths, path)
+			if matches {
+				return true, "", nil
+			} else {
+				return false, "token not allowed on path", nil
 			}
 		} else {
-			for _, allowedPath := range tokenData.AllowedReadPaths {
-				if strings.HasPrefix(path, allowedPath) {
-					return true, "", nil
-				}
+			matches := sshUtil.MatchPatternList(tokenData.AllowedReadPaths, path)
+			if matches {
+				return true, "", nil
+			} else {
+				return false, "token not allowed on path", nil
 			}
 		}
-		return false, "token not allowed on path", nil
 	case ownerTypeUsername:
 		keys, err := s.githubFetchUserKeys(owner.name)
 		if err != nil {
@@ -185,18 +230,19 @@ func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenDa
 			s.logger.Debug("Checking key", "mk", string(mk), "marshaledKey", string(marshaledKey))
 			if bytes.Equal(marshaledKey, mk) {
 				s.logger.Debug("Key is allowed, checking path now", "owner", owner, "key", key, "tokenData", tokenData, "path", path, "isWriteOp", isWriteOp)
-				// TODO use pattern lists instead
 				if isWriteOp {
-					for _, allowedPath := range tokenData.AllowedWritePaths {
-						if strings.HasPrefix(path, allowedPath) {
-							return true, "", nil
-						}
+					matches := sshUtil.MatchPatternList(tokenData.AllowedWritePaths, path)
+					if matches {
+						return true, "", nil
+					} else {
+						return false, "token not allowed on path", nil
 					}
 				} else {
-					for _, allowedPath := range tokenData.AllowedReadPaths {
-						if strings.HasPrefix(path, allowedPath) {
-							return true, "", nil
-						}
+					matches := sshUtil.MatchPatternList(tokenData.AllowedReadPaths, path)
+					if matches {
+						return true, "", nil
+					} else {
+						return false, "token not allowed on path", nil
 					}
 				}
 			}
