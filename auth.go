@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -39,9 +40,9 @@ type tokenData struct {
 }
 
 type webcryptoToken struct {
-	Data      string              `json:"data"`
-	Algorithm webcrypto.Algorithm `json:"algorithm"`
-	Key       string              `json:"key"`
+	Data      string               `json:"data"`
+	Algorithm *webcrypto.Algorithm `json:"algorithm"`
+	Signature string               `json:"signature"`
 }
 
 func (t *tokenDataJSON) Unmarshal() (tokenData, error) {
@@ -79,17 +80,60 @@ func (t *tokenDataJSON) Unmarshal() (tokenData, error) {
 	}, nil
 }
 
-func (s *server) authenticateWebcryptoToken(token []byte, path string, isWriteOp bool) (bool, string, error) {
-	var t webcryptoToken
-	err := json.Unmarshal(token, &t)
+func (s *server) authenticateWebcryptoToken(owner string, token []byte, path string, isWriteOp bool) (bool, string, error) {
+	var wt webcryptoToken
+	cleanedOwnerName := strings.ReplaceAll("-", "+", strings.ReplaceAll("_", "/", owner))
+	decodedOwner, err := base64.StdEncoding.DecodeString(cleanedOwnerName)
 	if err != nil {
-		return false, "token could not be marshalled", fmt.Errorf("error unmarshalling token: %w", err)
+		return false, "failed parsing owner name", fmt.Errorf("error decoding owner name: %w", err)
 	}
-	// TODO import key
-	// verify signature key matches namespace owner
-	// verify signature of token
-	// verify token prefix paths (handle this in it's own method to avoid code duplication)
-	return false, "not implemented", errors.New("not implemented")
+	err = json.Unmarshal(token, &wt)
+	if err != nil {
+		return false, "token could not be unmarshalled", fmt.Errorf("error unmarshalling token: %w", err)
+	}
+	subtle := webcrypto.Subtle()
+	key, err := subtle.ImportKey(webcrypto.Raw, decodedOwner, wt.Algorithm, false, []webcrypto.KeyUsage{webcrypto.Sign})
+	if err != nil {
+		return false, "could not import key from path", fmt.Errorf("error importing key: %w", err)
+	}
+	verify, err := subtle.Verify(wt.Algorithm, key, []byte(wt.Data), []byte(wt.Signature))
+	if err != nil {
+		return false, "could not verify signature", fmt.Errorf("error verifying signature: %w", err)
+	}
+	if !verify {
+		return false, "signature not valid", nil
+	}
+	var marshalledTokenData tokenDataJSON
+	err = json.Unmarshal([]byte(wt.Data), &marshalledTokenData)
+	if err != nil {
+		return false, "could not unmarshal token data", fmt.Errorf("error unmarshalling token data: %w", err)
+	}
+	tokenData, err := marshalledTokenData.Unmarshal()
+	if err != nil {
+		return false, "could not unmarshal token data", fmt.Errorf("error unmarshalling token data: %w", err)
+	}
+	now := time.Now()
+	if tokenData.ValidBefore.Valid && tokenData.ValidBefore.Time.After(now) {
+		return false, "token is no longer valid", nil
+	}
+	if tokenData.ValidAfter.Valid && tokenData.ValidAfter.Time.Before(now) {
+		return false, "token is not yet valid", nil
+	}
+	if isWriteOp {
+		matches := sshUtil.MatchPatternList(tokenData.AllowedWritePaths, path)
+		if matches {
+			return true, "", nil
+		} else {
+			return false, "token not allowed on path", nil
+		}
+	} else {
+		matches := sshUtil.MatchPatternList(tokenData.AllowedReadPaths, path)
+		if matches {
+			return true, "", nil
+		} else {
+			return false, "token not allowed on path", nil
+		}
+	}
 }
 
 func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteOp bool) (bool, string, error) {
@@ -108,7 +152,7 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteO
 	}
 	switch owner.typ {
 	case ownerTypeWebcrypto:
-		return s.authenticateWebcryptoToken(decodedToken, path, isWriteOp)
+		return s.authenticateWebcryptoToken(owner.name, decodedToken, path, isWriteOp)
 	}
 	var t token
 	err = json.Unmarshal(decodedToken, &t)
