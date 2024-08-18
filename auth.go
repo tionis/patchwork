@@ -249,13 +249,85 @@ func (s *server) isKeyAllowed(owner *owner, key ssh.PublicKey, tokenData tokenDa
 		}
 		return false, "token not allowed on path", nil
 	case ownerTypeGistID:
-		//allowedSigners, err := s.githubFetchGistAllowedSSigners(owner.name)
-		//if err != nil {
-		//	return false, err
-		//}
-		// TODO implement me
-		return false, "not implemented", errors.New("not implemented")
+		allowedSigners, err := s.githubFetchGistAllowedSigners(owner.name)
+		if err != nil {
+			return false, "could not fetch allowed signers gist", fmt.Errorf("error fetching allowed signers gist: %w", err)
+		}
+		mk := key.Marshal()
+		allowedKeyPresent := false
+		for _, allowedKey := range allowedSigners {
+			if bytes.Equal(mk, allowedKey.Key.Marshal()) {
+				allowedKeyPresent = sshUtil.MatchPatternList(allowedKey.Namespaces, path)
+				break
+			}
+		}
+		if !allowedKeyPresent {
+			return false, "key not present or allowed in path in allowed_signers", nil
+		}
+		if isWriteOp {
+			matches := sshUtil.MatchPatternList(tokenData.AllowedWritePaths, path)
+			if matches {
+				return true, "", nil
+			} else {
+				return false, "token not allowed on path", nil
+			}
+		} else {
+			matches := sshUtil.MatchPatternList(tokenData.AllowedReadPaths, path)
+			if matches {
+				return true, "", nil
+			} else {
+				return false, "token not allowed on path", nil
+			}
+		}
 	default:
 		return false, "internal error", errors.New("unknown owner type")
 	}
+}
+
+func compareStringPointerAndString(ptr *string, str string) bool {
+	if ptr == nil {
+		return false
+	}
+	return *ptr == str
+}
+
+func (s *server) githubFetchGistAllowedSigners(gistID string) ([]sshUtil.AllowedSigner, error) {
+	s.gistCacheMutex.RLock()
+	if entry, ok := s.gistCache[gistID]; ok {
+		if time.Now().Before(entry.ttl) {
+			s.gistCacheMutex.RUnlock()
+			return entry.allowedSigners, nil
+		}
+	}
+	s.gistCacheMutex.RUnlock()
+
+	gist, _, err := s.githubClient.Gists.Get(s.ctx, gistID)
+	if err != nil {
+		return nil, fmt.Errorf("failed fetching gist: %w", err)
+	}
+	if _, exists := gist.Files["allowed_signers"]; !exists {
+		return nil, fmt.Errorf("gist does not include an allowed_signers file")
+	}
+	if _, exists := gist.Files["namespace"]; !exists {
+		return nil, fmt.Errorf("gist does not include a namespace file")
+	}
+	if !compareStringPointerAndString(gist.Files["namespace"].Content, "patch.tionis.dev") {
+		return nil, fmt.Errorf("gist namespace does not match (\"%s\" != \"patch.tionis.dev\")", gist.Files["namespace"].Content)
+	}
+	if gist.Files["allowed_signers"].Content == nil {
+		return nil, fmt.Errorf("gist content is nil")
+	}
+	gistBytes := []byte(*gist.Files["allowed_signers"].Content)
+
+	signers, err := sshUtil.ParseAllowedSigners(gistBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed parsing allowed signers: %w", err)
+	}
+	s.gistCacheMutex.Lock()
+	s.gistCache[gistID] = gistEntry{
+		allowedSigners: signers,
+		ttl:            time.Now().Add(githubGistCacheTTL),
+	}
+	s.gistCacheMutex.Unlock()
+	return signers, nil
 }

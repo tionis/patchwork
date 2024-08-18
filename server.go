@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"github.com/google/go-github/v63/github"
 	"github.com/gorilla/mux"
+	sshUtil "github.com/tionis/ssh-tools/util"
 	"golang.org/x/crypto/ssh"
 	"io"
 	"log/slog"
@@ -22,7 +25,7 @@ const (
 
 var (
 	githubUserCacheTTL = 5 * time.Minute
-	//gistCacheTTL       = 5 * time.Minute
+	githubGistCacheTTL = 5 * time.Minute
 )
 
 type stream struct {
@@ -60,6 +63,11 @@ type patchChannel struct {
 	unpersist chan bool // listeners with persist can be detached by sending a request with ?unpersist=true
 }
 
+type gistEntry struct {
+	ttl            time.Time
+	allowedSigners []sshUtil.AllowedSigner
+}
+
 type server struct {
 	logger             *slog.Logger
 	channelsMutex      sync.RWMutex
@@ -69,7 +77,10 @@ type server struct {
 	reqResponses       map[string]chan res
 	reqResponsesMux    sync.RWMutex
 	//reqs               map[string]chan req
-	//gistCache               map[string]string
+	gistCache      map[string]gistEntry
+	gistCacheMutex sync.RWMutex
+	githubClient   *github.Client
+	ctx            context.Context
 }
 
 func (s *server) statusHandler(w http.ResponseWriter, r *http.Request) {

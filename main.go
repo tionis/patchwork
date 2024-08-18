@@ -5,6 +5,7 @@ import (
 	"embed"
 	"errors"
 	"github.com/dusted-go/logging/prettylog"
+	"github.com/google/go-github/v63/github"
 	"github.com/gorilla/mux"
 	"github.com/hiddeco/sshsig"
 	"github.com/urfave/cli/v2"
@@ -125,7 +126,7 @@ func startServer() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 
-	srv := getHTTPServer(logger.WithGroup("http"))
+	srv := getHTTPServer(logger.WithGroup("http"), ctx)
 	go func() {
 		err := srv.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -182,7 +183,7 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotFound)
 }
 
-func getHTTPServer(logger *slog.Logger) *http.Server {
+func getHTTPServer(logger *slog.Logger, ctx context.Context) *http.Server {
 	server := &server{
 		logger:             logger,
 		channels:           make(map[string]*patchChannel),
@@ -191,6 +192,8 @@ func getHTTPServer(logger *slog.Logger) *http.Server {
 		githubUserKeyMutex: sync.RWMutex{},
 		reqResponses:       make(map[string]chan res),
 		reqResponsesMux:    sync.RWMutex{},
+		ctx:                ctx,
+		githubClient:       github.NewClient(nil),
 	}
 
 	router := mux.NewRouter()
