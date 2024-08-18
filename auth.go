@@ -356,7 +356,7 @@ func (s *server) githubFetchGistAllowedSigners(gistID string) ([]sshUtil.Allowed
 		return nil, fmt.Errorf("gist does not include a namespace file")
 	}
 	if !compareStringPointerAndString(gist.Files["namespace"].Content, "patch.tionis.dev") {
-		return nil, fmt.Errorf("gist namespace does not match (\"%s\" != \"patch.tionis.dev\")", gist.Files["namespace"].Content)
+		return nil, fmt.Errorf("gist namespace does not match (\"%s\" != \"patch.tionis.dev\")", *gist.Files["namespace"].Content)
 	}
 	if gist.Files["allowed_signers"].Content == nil {
 		return nil, fmt.Errorf("gist content is nil")
