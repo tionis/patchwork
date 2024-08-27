@@ -23,6 +23,6 @@ primary_region = 'ams'
     path = '/status'
 
 [[vm]]
-  memory = '1gb'
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
