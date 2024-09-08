@@ -105,6 +105,9 @@ func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
 func (s *server) keyHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	pubkey := strings.ReplaceAll(strings.ReplaceAll(vars["pubkey"], "_", "/"), "-", "+")
+	if !strings.HasPrefix(pubkey, "SHA256:") {
+		pubkey = "SHA256:" + pubkey
+	}
 	path := vars["path"]
 	s.handlePatch(w, r,
 		"k/"+pubkey,
@@ -291,6 +294,12 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 			}
 		}
 		token := r.Header.Get("Authorization")
+		if token == "" {
+			token = r.URL.Query().Get("token")
+		}
+		if token == "" {
+			token = r.URL.Query().Get("t")
+		}
 		if token == "" {
 			w.WriteHeader(http.StatusUnauthorized)
 			writeString, err := io.WriteString(w, "Unauthorized")
