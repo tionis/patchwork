@@ -126,8 +126,8 @@ patchwork::token() {
 			echo "  -k, --key <key> The key to sign the token with, defaults to ~/.ssh/id_ed25519"
 			echo "  -r, --read <path> Add a path to the allowed read paths, if not specified all paths are allowed"
 			echo "  -w, --write <path> Add a path to the allowed write paths, if not specified all paths are allowed"
-			echo "  -b, --before <time> The time until the token is valid, defaults to 1 hour from now"
-			echo "  -a, --after <time> The time after which the token is valid, defaults to now"
+			echo "  -b, --before <time> The time until the token is valid, defaults to 1 hour from now, use 'inf' for infinite validity"
+			echo "  -a, --after <time> The time after which the token is valid, defaults to now, use 'inf' for infinite validity"
 			echo "  --no-read Disallow all read paths"
 			echo "  --no-write Disallow all write paths"
 			return 0
@@ -152,11 +152,19 @@ patchwork::token() {
 			;;
 		-b | --before)
 			shift
-			validBefore="$(date --date="$1" +%s)"
+			if [[ "$1" == "inf" ]]; then
+				validBefore="-1"
+			else
+				validBefore="$(date --date="$1" +%s)"
+			fi
 			;;
 		-a | --after)
 			shift
-			validAfter="$(date --date="$1" +%s)"
+			if [[ "$1" == "inf" ]]; then
+				validAfter="-1"
+			else
+				validAfter="$(date --date="$1" +%s)"
+			fi
 			;;
 		*)
 			error "Unknown option: $1"
