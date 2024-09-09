@@ -146,7 +146,7 @@ func (s *server) keyHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) biscuitHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	pubkey := strings.ReplaceAll(strings.ReplaceAll(vars["pubkey"], "_", "/"), "-", "+")
+	pubkey := vars["pubkey"]
 	path := vars["path"]
 	s.handlePatch(w, r,
 		"b/"+pubkey,

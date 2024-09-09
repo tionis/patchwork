@@ -67,8 +67,8 @@
     <li>
       <strong>/b/{biscuit_pubkey}/**</strong>: Token has to be a
       <a href="https://biscuitsec.org">biscuit token</a> with the appropiate
-      root key according to the public key. The public key is base64 encoded
-      and made url safe by transforming + to - and / to _.
+      root key according to the public key.
+      The public key is url safe base64 encoded.
     </li>
     <li>
       <strong>/g/{gist_id}/**</strong>: Token has to be signed by an allowed
@@ -78,7 +78,7 @@
 
   <h2>Token Format</h2>
   <p>
-    Tokens are base64-encoded, gzipped json objects with two keys: "signature"
+    Tokens are url-safe base64-encoded, gzipped json objects with two keys: "signature"
     and "data". The "signature" is an openssh signature of the "data". The
     "data" key is a json object with the following keys:
   </p>

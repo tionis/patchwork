@@ -59,8 +59,8 @@ func main() {
 								return fmt.Errorf("failed to generate keypair: %w", err)
 							}
 							// print private key to stdout and public key to stderr
-							fmt.Println(base64.StdEncoding.EncodeToString(privKey))
-							_, err = fmt.Fprintln(os.Stderr, base64.StdEncoding.EncodeToString(pubKey))
+							fmt.Println(base64.URLEncoding.EncodeToString(privKey))
+							_, err = fmt.Fprintln(os.Stderr, base64.URLEncoding.EncodeToString(pubKey))
 							if err != nil {
 								return fmt.Errorf("failed to write public key: %w", err)
 							}
@@ -90,8 +90,8 @@ func main() {
 							if err != nil {
 								return fmt.Errorf("failed to read private key: %w", err)
 							}
-							privateKeyContents := make([]byte, base64.StdEncoding.DecodedLen(len(privateKeyContentsEncoded)))
-							_, err = base64.StdEncoding.Decode(privateKeyContents, privateKeyContentsEncoded)
+							privateKeyContents := make([]byte, base64.URLEncoding.DecodedLen(len(privateKeyContentsEncoded)))
+							_, err = base64.URLEncoding.Decode(privateKeyContents, privateKeyContentsEncoded)
 							if err != nil {
 								return fmt.Errorf("failed to decode private key: %w")
 							}

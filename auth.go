@@ -87,8 +87,7 @@ func (t *tokenDataJSON) Unmarshal() (tokenData, error) {
 
 func (s *server) authenticateWebcryptoToken(owner string, token []byte, path string, isWriteOp bool) (bool, string, error) {
 	var wt webcryptoToken
-	cleanedOwnerName := strings.ReplaceAll("-", "+", strings.ReplaceAll("_", "/", owner))
-	decodedOwner, err := base64.StdEncoding.DecodeString(cleanedOwnerName)
+	decodedOwner, err := base64.URLEncoding.DecodeString(owner)
 	if err != nil {
 		return false, "failed parsing owner name", fmt.Errorf("error decoding owner name: %w", err)
 	}
@@ -142,7 +141,7 @@ func (s *server) authenticateWebcryptoToken(owner string, token []byte, path str
 }
 
 func (s *server) authenticateBiscuitToken(owner *owner, tokenStr, path string, reqType string, isWriteOp bool, clientIP net.IP) (bool, string, error) {
-	tokenData, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(strings.ReplaceAll(tokenStr, "-", "+"), "_", "/"))
+	tokenData, err := base64.URLEncoding.DecodeString(tokenStr)
 	if err != nil {
 		return false, "could not decode biscuit token", fmt.Errorf("error decoding biscuit token: %w", err)
 	}
@@ -151,7 +150,7 @@ func (s *server) authenticateBiscuitToken(owner *owner, tokenStr, path string, r
 	if err != nil {
 		return false, "could not unmarshal biscuit token", fmt.Errorf("error unmarshalling biscuit token: %w", err)
 	}
-	unmarshalledOwner, err := base64.StdEncoding.DecodeString(owner.name)
+	unmarshalledOwner, err := base64.URLEncoding.DecodeString(owner.name)
 	if err != nil {
 		return false, "could not decode biscuit root pubkey", fmt.Errorf("error decoding owner name: %w", err)
 	}
@@ -197,7 +196,13 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path, reqType string,
 	case ownerTypeBiscuit:
 		return s.authenticateBiscuitToken(owner, tokenStr, path, reqType, isWriteOp, clientIP)
 	}
-	decodedCompressedToken, err := base64.StdEncoding.DecodeString(tokenStr)
+	var decodedCompressedToken []byte
+	var err error
+	if strings.Contains(tokenStr, "-") || strings.Contains(tokenStr, "_") {
+		decodedCompressedToken, err = base64.URLEncoding.DecodeString(tokenStr)
+	} else {
+		decodedCompressedToken, err = base64.StdEncoding.DecodeString(tokenStr)
+	}
 	if err != nil {
 		return false, "token could not be decoded", fmt.Errorf("error decoding token: %w", err)
 	}
