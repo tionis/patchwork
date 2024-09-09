@@ -3,16 +3,20 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/ed25519"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/armortal/webcrypto-go"
+	"github.com/biscuit-auth/biscuit-go"
+	"github.com/biscuit-auth/biscuit-go/parser"
 	"github.com/hiddeco/sshsig"
 	sshUtil "github.com/tionis/ssh-tools/util"
 	"golang.org/x/crypto/ssh"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -136,8 +140,71 @@ func (s *server) authenticateWebcryptoToken(owner string, token []byte, path str
 	}
 }
 
-func (s *server) authenticateToken(owner *owner, tokenStr, path string, isWriteOp bool) (bool, string, error) {
+func (s *server) authenticateBiscuitToken(owner *owner, tokenStr, path string, reqType string, isWriteOp bool, clientIP net.IP) (bool, string, error) {
+	b, err := biscuit.Unmarshal([]byte(tokenStr))
+	if err != nil {
+		return false, "could not unmarshal biscuit token", fmt.Errorf("error unmarshalling biscuit token: %w", err)
+	}
+	unmarshalledOwner, err := base64.StdEncoding.DecodeString(owner.name)
+	if err != nil {
+		return false, "could not decode biscuit root pubkey", fmt.Errorf("error decoding owner name: %w", err)
+	}
+	publicRoot := ed25519.PublicKey(unmarshalledOwner)
+	authorizer, err := b.Authorizer(publicRoot)
+	if err != nil {
+		return false, "could not create authorizer", fmt.Errorf("error creating authorizer: %w", err)
+	}
+	p := parser.New()
+	var operationFact biscuit.Fact
+	pathFact, err := p.Fact("path(\"" + path + "\")")
+	if err != nil {
+		return false, "could not create path fact", fmt.Errorf("error creating path fact: %w", err)
+	}
+	authorizer.AddFact(pathFact)
+	if isWriteOp {
+		operationFact, err = p.Fact("write")
+	} else {
+		operationFact, err = p.Fact("read")
+	}
+	if err != nil {
+		return false, "could not create operation fact", fmt.Errorf("error creating operation fact: %w", err)
+	}
+	authorizer.AddFact(operationFact)
+
+	// Note: Time is in ISO 8601 format (UTC)
+	timeFact, err := p.Fact("time(\"" + time.Now().UTC().Format(time.RFC3339) + "\")")
+	if err != nil {
+		return false, "could not create time fact", fmt.Errorf("error creating time fact: %w", err)
+	}
+	authorizer.AddFact(timeFact)
+
+	if clientIP != nil {
+		clientIPFact, err := p.Fact("client_ip(\"" + clientIP.String() + "\")")
+		if err != nil {
+			return false, "could not create client_ip fact", fmt.Errorf("error creating client_ip fact: %w", err)
+		}
+		authorizer.AddFact(clientIPFact)
+	}
+
+	reqTypeFact, err := p.Fact("type(\"" + reqType + "\")")
+	if err != nil {
+		return false, "could not create type fact", fmt.Errorf("error creating type fact: %w", err)
+	}
+	authorizer.AddFact(reqTypeFact)
+
+	if err := authorizer.Authorize(); err != nil {
+		return false, "could not authorize token", fmt.Errorf("error authorizing token: %w", err)
+	} else {
+		return true, "", nil
+	}
+}
+
+func (s *server) authenticateToken(owner *owner, tokenStr, path, reqType string, isWriteOp bool, clientIP net.IP) (bool, string, error) {
 	s.logger.Debug("Authenticating token", "owner", owner, "tokenStr", tokenStr, "path", path, "isWriteOp", isWriteOp)
+	switch owner.typ {
+	case ownerTypeBiscuit:
+		return s.authenticateBiscuitToken(owner, tokenStr, path, reqType, isWriteOp, clientIP)
+	}
 	decodedCompressedToken, err := base64.StdEncoding.DecodeString(tokenStr)
 	if err != nil {
 		return false, "token could not be decoded", fmt.Errorf("error decoding token: %w", err)

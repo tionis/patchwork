@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	log "github.com/sirupsen/logrus"
@@ -19,7 +20,16 @@ var (
 )
 
 func (s *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	host := vars["host"]
+	port := vars["port"]
+	address := net.JoinHostPort(host, port)
 	authToken := r.Header.Get("Authorization")
+	clientIPStr := r.Header.Get("X-Forwarded-For")
+	if clientIPStr == "" {
+		clientIPStr = r.RemoteAddr
+	}
+	clientIP := net.ParseIP(clientIPStr)
 	if authToken == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -27,7 +37,7 @@ func (s *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
 		allowed, reason, err := s.authenticateToken(&owner{
 			name: "tionis",
 			typ:  1,
-		}, authToken, "huproxy", true)
+		}, authToken, address, "huproxy", true, clientIP)
 		if err != nil {
 			http.Error(w, "Internal Server Error: "+reason, http.StatusInternalServerError)
 			return
@@ -39,10 +49,6 @@ func (s *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-
-	vars := mux.Vars(r)
-	host := vars["host"]
-	port := vars["port"]
 
 	conn, err := huProxyUpgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -56,7 +62,7 @@ func (s *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}(conn)
 
-	targetConn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), huProxyDialTimeout)
+	targetConn, err := net.DialTimeout("tcp", address, huProxyDialTimeout)
 	if err != nil {
 		log.Warningf("Failed to connect to %q:%q: %v", host, port, err)
 		return
@@ -98,7 +104,7 @@ func (s *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
 	if err := lib.File2WS(ctx, cancel, targetConn, conn); err == io.EOF {
 		if err := conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-			time.Now().Add(huProxyWriteTimeout)); err == websocket.ErrCloseSent {
+			time.Now().Add(huProxyWriteTimeout)); errors.Is(err, websocket.ErrCloseSent) {
 		} else if err != nil {
 			log.Warningf("Error sending close message: %v", err)
 		}

@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ const (
 	ownerTypeUsername  = 1
 	ownerTypeGistID    = 2
 	ownerTypeWebcrypto = 3
+	ownerTypeBiscuit   = 4
 )
 
 var (
@@ -50,7 +52,7 @@ type res struct {
 
 type owner struct {
 	name string
-	typ  int // 0 -> public key, 1 -> GitHub username, 2 -> Gist ID, 3 -> Webcrypto key
+	typ  int // 0 -> public key, 1 -> GitHub username, 2 -> Gist ID, 3 -> Webcrypto key, 4 -> Biscuit key
 }
 
 type sshPubKeyListEntry struct {
@@ -114,6 +116,18 @@ func (s *server) keyHandler(w http.ResponseWriter, r *http.Request) {
 		&owner{
 			name: pubkey,
 			typ:  ownerTypePublicKey,
+		}, path)
+}
+
+func (s *server) biscuitHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	pubkey := strings.ReplaceAll(strings.ReplaceAll(vars["pubkey"], "_", "/"), "-", "+")
+	path := vars["path"]
+	s.handlePatch(w, r,
+		"b/"+pubkey,
+		&owner{
+			name: pubkey,
+			typ:  ownerTypeBiscuit,
 		}, path)
 }
 
@@ -224,9 +238,9 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 					headersToSet[strings.TrimPrefix(k, "pw-h-")] = v[0]
 				}
 			}
-			res_code := r.Header.Get("pw-res-code")
+			resCode := r.Header.Get("pw-res-code")
 			s.reqResponsesMux.RLock()
-			if _, ok := s.reqResponses[res_code]; !ok {
+			if _, ok := s.reqResponses[resCode]; !ok {
 				w.WriteHeader(http.StatusNotFound)
 				writeString, err := io.WriteString(w, "Response code not found")
 				if err != nil {
@@ -235,7 +249,7 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 				s.reqResponsesMux.RUnlock()
 				return
 			}
-			resChan := s.reqResponses[res_code]
+			resChan := s.reqResponses[resCode]
 			s.reqResponsesMux.RUnlock()
 
 			doneSignal := make(chan struct{})
@@ -308,7 +322,15 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 			}
 			return
 		}
-		allowed, reason, err := s.authenticateToken(owner, token, path, isWriteOp)
+		// get the client IP (As patchwork is designed to be operated from behind a reverse_proxy
+		// we will trust the X-Forwarded-For header). For local development we will fall back
+		// to the remote address of the request when the header is not present.
+		clientIPStr := r.Header.Get("X-Forwarded-For")
+		if clientIPStr == "" {
+			clientIPStr = r.RemoteAddr
+		}
+		clientIP := net.ParseIP(clientIPStr)
+		allowed, reason, err := s.authenticateToken(owner, token, path, reqType, isWriteOp, clientIP)
 		if err != nil {
 			s.logger.Error("Error authenticating token", "err", err, "token", token, "path", path, "isWriteOp", isWriteOp, "owner", owner)
 			w.WriteHeader(http.StatusInternalServerError)

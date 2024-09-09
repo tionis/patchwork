@@ -65,6 +65,12 @@
       by the webcrypto key with the given fingerprint.
     </li>
     <li>
+      <strong>/b/{biscuit_pubkey}/**</strong>: Token has to be a
+      <a href="https://biscuitsec.org">biscuit token</a> with the appropiate
+      root key according to the public key. The public key is base64 encoded
+      and made url safe by transforming + to - and / to _.
+    </li>
+    <li>
       <strong>/g/{gist_id}/**</strong>: Token has to be signed by an allowed
       signer loaded from the gist
     </li>

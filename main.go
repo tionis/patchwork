@@ -2,8 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"embed"
+	"encoding/base64"
 	"errors"
+	"fmt"
+	"github.com/biscuit-auth/biscuit-go"
+	"github.com/biscuit-auth/biscuit-go/parser"
 	"github.com/dusted-go/logging/prettylog"
 	"github.com/google/go-github/v63/github"
 	"github.com/gorilla/mux"
@@ -35,6 +41,123 @@ func main() {
 				Action: func(c *cli.Context) error {
 					startServer()
 					return nil
+				},
+			},
+			{
+				Name:    "biscuit",
+				Aliases: []string{"b"},
+				Usage:   "biscuit crypto",
+				Subcommands: []*cli.Command{
+					{
+						Name:    "keygen",
+						Aliases: []string{"k"},
+						Usage:   "generate a new ed25519 keypair for use with biscuit",
+						Action: func(c *cli.Context) error {
+							rng := rand.Reader
+							pubKey, privKey, err := ed25519.GenerateKey(rng)
+							if err != nil {
+								return fmt.Errorf("failed to generate keypair: %w", err)
+							}
+							// print private key to stdout and public key to stderr
+							fmt.Println(base64.StdEncoding.EncodeToString(privKey))
+							_, err = fmt.Fprintln(os.Stderr, base64.StdEncoding.EncodeToString(pubKey))
+							if err != nil {
+								return fmt.Errorf("failed to write public key: %w", err)
+							}
+							return nil
+						},
+					},
+					{
+						Name:    "generate",
+						Aliases: []string{"g"},
+						Usage:   "generate a biscuit from a private key and settings for an authority block",
+						Flags: []cli.Flag{
+							&cli.PathFlag{
+								Name:     "private-key",
+								Aliases:  []string{"p"},
+								Usage:    "path to the private key",
+								Required: true,
+							},
+							&cli.StringSliceFlag{
+								Name:    "fact",
+								Aliases: []string{"f"},
+								Usage:   "fact to add to the biscuit",
+							},
+							&cli.StringSliceFlag{
+								Name:    "rule",
+								Aliases: []string{"r"},
+								Usage:   "rule to add to the biscuit",
+							},
+							&cli.StringSliceFlag{
+								Name:    "check",
+								Aliases: []string{"c"},
+								Usage:   "check to add to the biscuit",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							privateKeyContentsEncoded, err := os.ReadFile(c.String("private-key"))
+							if err != nil {
+								return fmt.Errorf("failed to read private key: %w", err)
+							}
+							privateKeyContents := make([]byte, base64.StdEncoding.DecodedLen(len(privateKeyContentsEncoded)))
+							_, err = base64.StdEncoding.Decode(privateKeyContents, privateKeyContentsEncoded)
+							if err != nil {
+								return fmt.Errorf("failed to decode private key: %w")
+							}
+							privKey := ed25519.PrivateKey(privateKeyContents)
+
+							builder := biscuit.NewBuilder(privKey)
+							p := parser.New()
+
+							for _, fact := range c.StringSlice("fact") {
+								f, err := p.Fact(fact)
+								if err != nil {
+									return fmt.Errorf("failed to parse fact: %w", err)
+								}
+								err = builder.AddAuthorityFact(f)
+								if err != nil {
+									return fmt.Errorf("failed to add fact to biscuit: %w", err)
+								}
+							}
+
+							for _, rule := range c.StringSlice("rule") {
+								r, err := p.Rule(rule)
+								if err != nil {
+									return fmt.Errorf("failed to parse rule: %w", err)
+								}
+								err = builder.AddAuthorityRule(r)
+								if err != nil {
+									return fmt.Errorf("failed to add rule to biscuit: %w", err)
+								}
+							}
+
+							for _, check := range c.StringSlice("check") {
+								c, err := p.Check(check)
+								if err != nil {
+									return fmt.Errorf("failed to parse check: %w", err)
+								}
+								err = builder.AddAuthorityCheck(c)
+								if err != nil {
+									return fmt.Errorf("failed to add check to biscuit: %w", err)
+								}
+							}
+
+							b, err := builder.Build()
+							if err != nil {
+								return fmt.Errorf("failed to build biscuit: %w", err)
+							}
+
+							token, err := b.Serialize()
+							if err != nil {
+								return fmt.Errorf("failed to serialize biscuit: %w", err)
+							}
+
+							// token is now a []byte, ready to be shared
+							// The biscuit spec mandates the use of URL-safe base64 encoding for textual representation:
+							fmt.Println(base64.URLEncoding.EncodeToString(token))
+							return nil
+						},
+					},
 				},
 			},
 			{
@@ -252,6 +375,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context) *http.Server {
 
 	router.HandleFunc("/huproxy/{host}/{port}", server.huproxyHandler)
 	router.HandleFunc("/p/{path:.*}", server.publicHandler)
+	router.HandleFunc("/b/{pubkey}/{path:.*}", server.biscuitHandler)
 	router.HandleFunc("/u/{username}/{path:.*}", server.userHandler)
 	router.HandleFunc("/w/{pubkey}/{path:.*}", server.webCryptoHandler)
 	router.HandleFunc("/k/{pubkey}/{path:.*}", server.keyHandler)
