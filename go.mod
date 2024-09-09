@@ -4,7 +4,7 @@ go 1.22.5
 
 require (
 	github.com/armortal/webcrypto-go v0.1.0-alpha.1
-	github.com/biscuit-auth/biscuit-go v1.0.0
+	github.com/biscuit-auth/biscuit-go/v2 v2.2.0
 	github.com/dusted-go/logging v1.2.2
 	github.com/google/go-github/v63 v63.0.0
 	github.com/gorilla/mux v1.8.1
@@ -17,7 +17,7 @@ require (
 )
 
 require (
-	github.com/alecthomas/participle/v2 v2.0.0-alpha5 // indirect
+	github.com/alecthomas/participle/v2 v2.0.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.4 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/uuid v1.3.1 // indirect

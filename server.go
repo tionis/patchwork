@@ -55,6 +55,31 @@ type owner struct {
 	typ  int // 0 -> public key, 1 -> GitHub username, 2 -> Gist ID, 3 -> Webcrypto key, 4 -> Biscuit key
 }
 
+func typToDesc(typ int) string {
+	switch typ {
+	case ownerTypePublicKey:
+		return "public key"
+	case ownerTypeUsername:
+		return "GitHub username"
+	case ownerTypeGistID:
+		return "Gist ID"
+	case ownerTypeWebcrypto:
+		return "Webcrypto key"
+	case ownerTypeBiscuit:
+		return "Biscuit key"
+	default:
+		return "unknown"
+	}
+}
+
+func (o *owner) Marshal() string {
+	return o.name + "(" + typToDesc(o.typ) + ")"
+}
+
+func (o *owner) JSONMarshal() string {
+	return `{"name":"` + o.name + `","type":` + strconv.Itoa(o.typ) + `}`
+}
+
 type sshPubKeyListEntry struct {
 	keys       []ssh.PublicKey
 	validUntil time.Time

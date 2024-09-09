@@ -8,8 +8,8 @@ import (
 // String returns the EBNF for the grammar.
 //
 // Productions are always upper cased. Lexer tokens are always lower case.
-func (p *Parser) String() string {
-	return ebnf(p.root)
+func (p *Parser[G]) String() string {
+	return ebnf(p.typeNodes[p.rootType])
 }
 
 type ebnfp struct {
@@ -50,7 +50,28 @@ func buildEBNF(root bool, n node, seen map[node]bool, p *ebnfp, outp *[]*ebnfp) 
 		if !root {
 			p.out += ")"
 		}
-		return
+
+	case *union:
+		name := strings.ToUpper(n.typ.Name()[:1]) + n.typ.Name()[1:]
+		if p != nil {
+			p.out += name
+		}
+		if seen[n] {
+			return
+		}
+		p = &ebnfp{name: name}
+		*outp = append(*outp, p)
+		seen[n] = true
+		for i, next := range n.disjunction.nodes {
+			if i > 0 {
+				p.out += " | "
+			}
+			buildEBNF(false, next, seen, p, outp)
+		}
+
+	case *custom:
+		name := strings.ToUpper(n.typ.Name()[:1]) + n.typ.Name()[1:]
+		p.out += name
 
 	case *strct:
 		name := strings.ToUpper(n.typ.Name()[:1]) + n.typ.Name()[1:]
@@ -64,7 +85,6 @@ func buildEBNF(root bool, n node, seen map[node]bool, p *ebnfp, outp *[]*ebnfp) 
 		p = &ebnfp{name: name}
 		*outp = append(*outp, p)
 		buildEBNF(true, n.expr, seen, p, outp)
-		return
 
 	case *sequence:
 		group := n.next != nil && !root
@@ -81,7 +101,6 @@ func buildEBNF(root bool, n node, seen map[node]bool, p *ebnfp, outp *[]*ebnfp) 
 		if group {
 			p.out += ")"
 		}
-		return
 
 	case *parseable:
 		p.out += n.t.Name()
@@ -92,18 +111,9 @@ func buildEBNF(root bool, n node, seen map[node]bool, p *ebnfp, outp *[]*ebnfp) 
 	case *reference:
 		p.out += "<" + strings.ToLower(n.identifier) + ">"
 
-	case *optional:
-		buildEBNF(false, n.node, seen, p, outp)
-		p.out += "?"
-
-	case *repetition:
-		buildEBNF(false, n.node, seen, p, outp)
-		p.out += "*"
-
 	case *negation:
-		p.out += "!"
+		p.out += "~"
 		buildEBNF(false, n.node, seen, p, outp)
-		return
 
 	case *literal:
 		p.out += fmt.Sprintf("%q", n.s)
@@ -131,10 +141,15 @@ func buildEBNF(root bool, n node, seen map[node]bool, p *ebnfp, outp *[]*ebnfp) 
 			p.out += "+"
 		case groupMatchOnce:
 		}
-		return
 
-	case *trace:
-		buildEBNF(root, n.node, seen, p, outp)
+	case *lookaheadGroup:
+		if !n.negative {
+			p.out += "(?= "
+		} else {
+			p.out += "(?! "
+		}
+		buildEBNF(true, n.expr, seen, p, outp)
+		p.out += ")"
 
 	default:
 		panic(fmt.Sprintf("unsupported node type %T", n))

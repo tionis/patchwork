@@ -7,22 +7,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/biscuit-auth/biscuit-go/datalog"
+	"github.com/biscuit-auth/biscuit-go/v2/datalog"
 )
 
-const MaxSchemaVersion uint32 = 2
+const MinSchemaVersion uint32 = 3
+const MaxSchemaVersion uint32 = 3
 
 // defaultSymbolTable predefines some symbols available in every implementation, to avoid
 // transmitting them with every token
-var defaultSymbolTable = &datalog.SymbolTable{
-	"authority",
-	"ambient",
-	"resource",
-	"operation",
-	"right",
-	"current_time",
-	"revocation_id",
-}
+var defaultSymbolTable = &datalog.SymbolTable{}
 
 type Block struct {
 	symbols *datalog.SymbolTable
@@ -31,6 +24,35 @@ type Block struct {
 	checks  []datalog.Check
 	context string
 	version uint32
+}
+
+func (b *Block) Code(symbols *datalog.SymbolTable) string {
+	debug := &datalog.SymbolDebugger{
+		SymbolTable: symbols,
+	}
+	facts := make([]string, len(*b.facts))
+	for i, f := range *b.facts {
+		facts[i] = debug.Predicate(f.Predicate)
+	}
+	rules := make([]string, len(b.rules))
+	for i, r := range b.rules {
+		rules[i] = debug.Rule(r)
+	}
+
+	checks := make([]string, len(b.checks))
+	for i, c := range b.checks {
+		checks[i] = debug.Check(c)
+	}
+
+	return fmt.Sprintf(`Block {
+		%v
+		%s
+		%s
+	}`,
+		strings.Join(facts, ";\n"),
+		strings.Join(rules, ";\n"),
+		strings.Join(checks, ";\n"),
+	)
 }
 
 func (b *Block) String(symbols *datalog.SymbolTable) string {
@@ -52,14 +74,14 @@ func (b *Block) String(symbols *datalog.SymbolTable) string {
 		context: %q
 		facts: %v
 		rules: %v
-		checks: %v
+		checks: [%s]
 		version: %d
 	}`,
 		*b.symbols,
 		b.context,
 		debug.FactSet(b.facts),
 		rules,
-		checks,
+		strings.Join(checks, ", "),
 		b.version,
 	)
 }
@@ -78,6 +100,17 @@ func (fs FactSet) String() string {
 	}
 
 	return fmt.Sprintf("[%s]", outStr)
+}
+
+type ParsedBlock struct {
+	Facts  FactSet
+	Rules  []Rule
+	Checks []Check
+}
+
+type ParsedAuthorizer struct {
+	Policies []Policy
+	Block    ParsedBlock
 }
 
 type Fact struct {
@@ -575,10 +608,10 @@ const (
 )
 
 var (
-	// DefaultAllowPolicy allows the biscuit to verify sucessfully as long as all its rules generate some facts.
-	DefaultAllowPolicy = Policy{Kind: PolicyKindAllow, Queries: []Rule{{Head: Predicate{Name: "true"}}}}
+	// DefaultAllowPolicy allows the biscuit to verify sucessfully as long as all its checks generate some facts.
+	DefaultAllowPolicy = Policy{Kind: PolicyKindAllow, Queries: []Rule{{Head: Predicate{Name: "allow"}}}}
 	// DefaultDenyPolicy makes the biscuit verification fail in all cases.
-	DefaultDenyPolicy = Policy{Kind: PolicyKindDeny, Queries: []Rule{{Head: Predicate{Name: "true"}}}}
+	DefaultDenyPolicy = Policy{Kind: PolicyKindDeny, Queries: []Rule{{Head: Predicate{Name: "deny"}}}}
 )
 
 type Policy struct {

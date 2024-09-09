@@ -1,17 +1,16 @@
-# github.com/alecthomas/participle/v2 v2.0.0-alpha5
-## explicit; go 1.13
+# github.com/alecthomas/participle/v2 v2.0.0
+## explicit; go 1.18
 github.com/alecthomas/participle/v2
 github.com/alecthomas/participle/v2/lexer
-github.com/alecthomas/participle/v2/lexer/stateful
 # github.com/armortal/webcrypto-go v0.1.0-alpha.1
 ## explicit; go 1.22.2
 github.com/armortal/webcrypto-go
-# github.com/biscuit-auth/biscuit-go v1.0.0
-## explicit; go 1.16
-github.com/biscuit-auth/biscuit-go
-github.com/biscuit-auth/biscuit-go/datalog
-github.com/biscuit-auth/biscuit-go/parser
-github.com/biscuit-auth/biscuit-go/pb
+# github.com/biscuit-auth/biscuit-go/v2 v2.2.0
+## explicit; go 1.19
+github.com/biscuit-auth/biscuit-go/v2
+github.com/biscuit-auth/biscuit-go/v2/datalog
+github.com/biscuit-auth/biscuit-go/v2/parser
+github.com/biscuit-auth/biscuit-go/v2/pb
 # github.com/cpuguy83/go-md2man/v2 v2.0.4
 ## explicit; go 1.11
 github.com/cpuguy83/go-md2man/v2/md2man

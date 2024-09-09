@@ -47,7 +47,7 @@ func decorate(err *error, name func() string) {
 	if perr, ok := (*err).(Error); ok {
 		*err = Errorf(perr.Position(), "%s: %s", name(), perr.Message())
 	} else {
-		*err = &parseError{Msg: fmt.Sprintf("%s: %s", name(), *err)}
+		*err = &ParseError{Msg: fmt.Sprintf("%s: %s", name(), *err)}
 	}
 }
 
@@ -60,9 +60,10 @@ func (p *parseable) String() string   { return ebnf(p) }
 func (p *parseable) GoString() string { return p.t.String() }
 
 func (p *parseable) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
+	defer ctx.printTrace(p)()
 	rv := reflect.New(p.t)
 	v := rv.Interface().(Parseable)
-	err = v.Parse(ctx.PeekingLexer)
+	err = v.Parse(&ctx.PeekingLexer)
 	if err != nil {
 		if err == NextMatch {
 			return nil, nil
@@ -72,6 +73,48 @@ func (p *parseable) Parse(ctx *parseContext, parent reflect.Value) (out []reflec
 	return []reflect.Value{rv.Elem()}, nil
 }
 
+// @@ (but for a custom production)
+type custom struct {
+	typ     reflect.Type
+	parseFn reflect.Value
+}
+
+func (c *custom) String() string   { return ebnf(c) }
+func (c *custom) GoString() string { return c.typ.Name() }
+
+func (c *custom) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
+	defer ctx.printTrace(c)()
+	results := c.parseFn.Call([]reflect.Value{reflect.ValueOf(&ctx.PeekingLexer)})
+	if err, _ := results[1].Interface().(error); err != nil {
+		if err == NextMatch {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return []reflect.Value{results[0]}, nil
+}
+
+// @@ (for a union)
+type union struct {
+	unionDef
+	disjunction disjunction
+}
+
+func (u *union) String() string   { return ebnf(u) }
+func (u *union) GoString() string { return u.typ.Name() }
+
+func (u *union) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
+	defer ctx.printTrace(u)()
+	vals, err := u.disjunction.Parse(ctx, parent)
+	if err != nil {
+		return nil, err
+	}
+	for i := range vals {
+		vals[i] = maybeRef(u.members[i], vals[i]).Convert(u.typ)
+	}
+	return vals, nil
+}
+
 // @@
 type strct struct {
 	typ              reflect.Type
@@ -79,18 +122,20 @@ type strct struct {
 	tokensFieldIndex []int
 	posFieldIndex    []int
 	endPosFieldIndex []int
+	usages           int
 }
 
 func newStrct(typ reflect.Type) *strct {
 	s := &strct{
-		typ: typ,
+		typ:    typ,
+		usages: 1,
 	}
 	field, ok := typ.FieldByName("Pos")
-	if ok && field.Type == positionType {
+	if ok && positionType.ConvertibleTo(field.Type) {
 		s.posFieldIndex = field.Index
 	}
 	field, ok = typ.FieldByName("EndPos")
-	if ok && field.Type == positionType {
+	if ok && positionType.ConvertibleTo(field.Type) {
 		s.endPosFieldIndex = field.Index
 	}
 	field, ok = typ.FieldByName("Tokens")
@@ -104,12 +149,10 @@ func (s *strct) String() string   { return ebnf(s) }
 func (s *strct) GoString() string { return s.typ.Name() }
 
 func (s *strct) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
+	defer ctx.printTrace(s)()
 	sv := reflect.New(s.typ).Elem()
 	start := ctx.RawCursor()
-	t, err := ctx.Peek(0)
-	if err != nil {
-		return nil, err
-	}
+	t := ctx.Peek()
 	s.maybeInjectStartToken(t, sv)
 	if out, err = s.expr.Parse(ctx, sv); err != nil {
 		_ = ctx.Apply() // Best effort to give partial AST.
@@ -119,24 +162,26 @@ func (s *strct) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Va
 		return nil, nil
 	}
 	end := ctx.RawCursor()
-	t, _ = ctx.RawPeek(0)
+	t = ctx.RawPeek()
 	s.maybeInjectEndToken(t, sv)
 	s.maybeInjectTokens(ctx.Range(start, end), sv)
 	return []reflect.Value{sv}, ctx.Apply()
 }
 
-func (s *strct) maybeInjectStartToken(token lexer.Token, v reflect.Value) {
+func (s *strct) maybeInjectStartToken(token *lexer.Token, v reflect.Value) {
 	if s.posFieldIndex == nil {
 		return
 	}
-	v.FieldByIndex(s.posFieldIndex).Set(reflect.ValueOf(token.Pos))
+	f := v.FieldByIndex(s.posFieldIndex)
+	f.Set(reflect.ValueOf(token.Pos).Convert(f.Type()))
 }
 
-func (s *strct) maybeInjectEndToken(token lexer.Token, v reflect.Value) {
+func (s *strct) maybeInjectEndToken(token *lexer.Token, v reflect.Value) {
 	if s.endPosFieldIndex == nil {
 		return
 	}
-	v.FieldByIndex(s.endPosFieldIndex).Set(reflect.ValueOf(token.Pos))
+	f := v.FieldByIndex(s.endPosFieldIndex)
+	f.Set(reflect.ValueOf(token.Pos).Convert(f.Type()))
 }
 
 func (s *strct) maybeInjectTokens(tokens []lexer.Token, v reflect.Value) {
@@ -187,6 +232,7 @@ type group struct {
 func (g *group) String() string   { return ebnf(g) }
 func (g *group) GoString() string { return fmt.Sprintf("group{%s}", g.mode) }
 func (g *group) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
+	defer ctx.printTrace(g)()
 	// Configure min/max matches.
 	min := 1
 	max := 1
@@ -197,7 +243,7 @@ func (g *group) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Va
 			return out, err
 		}
 		if len(out) == 0 {
-			t, _ := ctx.Peek(0)
+			t := ctx.Peek()
 			return out, Errorf(t.Pos, "sub-expression %s cannot be empty", g)
 		}
 		return out, nil
@@ -216,25 +262,25 @@ func (g *group) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Va
 	for ; matches < max; matches++ {
 		branch := ctx.Branch()
 		v, err := g.expr.Parse(branch, parent)
-		out = append(out, v...)
 		if err != nil {
 			ctx.MaybeUpdateError(err)
 			// Optional part failed to match.
 			if ctx.Stop(err, branch) {
+				out = append(out, v...) // Try to return as much of the parse tree as possible
 				return out, err
 			}
 			break
-		} else {
-			ctx.Accept(branch)
 		}
+		out = append(out, v...)
+		ctx.Accept(branch)
 		if v == nil {
 			break
 		}
 	}
 	// fmt.Printf("%d < %d < %d: out == nil? %v\n", min, matches, max, out == nil)
-	t, _ := ctx.Peek(0)
+	t := ctx.Peek()
 	if matches >= MaxIterations {
-		panic(Errorf(t.Pos, "too many iterations of %s (> %d)", g, MaxIterations))
+		return nil, Errorf(t.Pos, "too many iterations of %s (> %d)", g, MaxIterations)
 	}
 	if matches < min {
 		return out, Errorf(t.Pos, "sub-expression %s must match at least once", g)
@@ -246,6 +292,28 @@ func (g *group) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Va
 	return out, nil
 }
 
+// (?= <expr> ) for positive lookahead, (?! <expr> ) for negative lookahead; neither consumes input
+type lookaheadGroup struct {
+	expr     node
+	negative bool
+}
+
+func (l *lookaheadGroup) String() string   { return ebnf(l) }
+func (l *lookaheadGroup) GoString() string { return "lookaheadGroup{}" }
+
+func (l *lookaheadGroup) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
+	defer ctx.printTrace(l)()
+	// Create a branch to avoid advancing the parser as any match will be discarded
+	branch := ctx.Branch()
+	out, err = l.expr.Parse(branch, parent)
+	matchedLookahead := err == nil && out != nil
+	expectingMatch := !l.negative
+	if matchedLookahead != expectingMatch {
+		return nil, &UnexpectedTokenError{Unexpected: *ctx.Peek()}
+	}
+	return []reflect.Value{}, nil // Empty match slice means a match, unlike nil
+}
+
 // <expr> {"|" <expr>}
 type disjunction struct {
 	nodes []node
@@ -255,6 +323,7 @@ func (d *disjunction) String() string   { return ebnf(d) }
 func (d *disjunction) GoString() string { return "disjunction{}" }
 
 func (d *disjunction) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
+	defer ctx.printTrace(d)()
 	var (
 		deepestError = 0
 		firstError   error
@@ -275,9 +344,9 @@ func (d *disjunction) Parse(ctx *parseContext, parent reflect.Value) (out []refl
 				deepestError = branch.Cursor()
 			}
 		} else if value != nil {
-			bt, _ := branch.Peek(0)
-			ct, _ := ctx.Peek(0)
-			if bt == ct {
+			bt := branch.RawPeek()
+			ct := ctx.RawPeek()
+			if bt == ct && bt.Type != lexer.EOF {
 				panic(Errorf(bt.Pos, "branch %s was accepted but did not progress the lexer at %s (%q)", a, bt.Pos, bt.Value))
 			}
 			ctx.Accept(branch)
@@ -293,7 +362,7 @@ func (d *disjunction) Parse(ctx *parseContext, parent reflect.Value) (out []refl
 
 // <node> ...
 type sequence struct {
-	head bool
+	head bool // True if this is the head node.
 	node node
 	next *sequence
 }
@@ -302,6 +371,7 @@ func (s *sequence) String() string   { return ebnf(s) }
 func (s *sequence) GoString() string { return "sequence{}" }
 
 func (s *sequence) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
+	defer ctx.printTrace(s)()
 	for n := s; n != nil; n = n.next {
 		child, err := n.node.Parse(ctx, parent)
 		out = append(out, child...)
@@ -313,11 +383,14 @@ func (s *sequence) Parse(ctx *parseContext, parent reflect.Value) (out []reflect
 			if n == s {
 				return nil, nil
 			}
-			token, err := ctx.Peek(0)
-			if err != nil {
-				return nil, err
-			}
-			return out, UnexpectedTokenError{Unexpected: token, Expected: n.String()}
+			token := ctx.Peek()
+			return out, &UnexpectedTokenError{Unexpected: *token, expectNode: n}
+		}
+		// Special-case for when children return an empty match.
+		// Appending an empty, non-nil slice to a nil slice returns a nil slice.
+		// https://go.dev/play/p/lV1Xk-IP6Ta
+		if out == nil {
+			out = []reflect.Value{}
 		}
 	}
 	return out, nil
@@ -333,6 +406,7 @@ func (c *capture) String() string   { return ebnf(c) }
 func (c *capture) GoString() string { return "capture{}" }
 
 func (c *capture) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
+	defer ctx.printTrace(c)()
 	start := ctx.RawCursor()
 	v, err := c.node.Parse(ctx, parent)
 	if v != nil {
@@ -349,7 +423,7 @@ func (c *capture) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.
 
 // <identifier> - named lexer token reference
 type reference struct {
-	typ        rune
+	typ        lexer.TokenType
 	identifier string // Used for informational purposes.
 }
 
@@ -357,85 +431,21 @@ func (r *reference) String() string   { return ebnf(r) }
 func (r *reference) GoString() string { return fmt.Sprintf("reference{%s}", r.identifier) }
 
 func (r *reference) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
-	token, err := ctx.Peek(0)
-	if err != nil {
-		return nil, err
-	}
+	defer ctx.printTrace(r)()
+	token, cursor := ctx.PeekAny(func(t lexer.Token) bool {
+		return t.Type == r.typ
+	})
 	if token.Type != r.typ {
 		return nil, nil
 	}
-	_, _ = ctx.Next()
+	ctx.FastForward(cursor)
 	return []reflect.Value{reflect.ValueOf(token.Value)}, nil
-}
-
-// [ <expr> ] <sequence>
-type optional struct {
-	node node
-}
-
-func (o *optional) String() string   { return ebnf(o) }
-func (o *optional) GoString() string { return "optional{}" }
-
-func (o *optional) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
-	branch := ctx.Branch()
-	out, err = o.node.Parse(branch, parent)
-	if err != nil {
-		// Optional part failed to match.
-		if ctx.Stop(err, branch) {
-			return out, err
-		}
-	} else {
-		ctx.Accept(branch)
-	}
-	if out == nil {
-		out = []reflect.Value{}
-	}
-	return out, nil
-}
-
-// { <expr> } <sequence>
-type repetition struct {
-	node node
-}
-
-func (r *repetition) String() string   { return ebnf(r) }
-func (r *repetition) GoString() string { return "repitition{}" }
-
-// Parse a repetition. Once a repetition is encountered it will always match, so grammars
-// should ensure that branches are differentiated prior to the repetition.
-func (r *repetition) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
-	i := 0
-	for ; i < MaxIterations; i++ {
-		branch := ctx.Branch()
-		v, err := r.node.Parse(branch, parent)
-		out = append(out, v...)
-		if err != nil {
-			// Optional part failed to match.
-			if ctx.Stop(err, branch) {
-				return out, err
-			}
-			break
-		} else {
-			ctx.Accept(branch)
-		}
-		if v == nil {
-			break
-		}
-	}
-	if i >= MaxIterations {
-		t, _ := ctx.Peek(0)
-		panic(Errorf(t.Pos, "too many iterations of %s (> %d)", r, MaxIterations))
-	}
-	if out == nil {
-		out = []reflect.Value{}
-	}
-	return out, nil
 }
 
 // Match a token literal exactly "..."[:<type>].
 type literal struct {
 	s  string
-	t  rune
+	t  lexer.TokenType
 	tt string // Used for display purposes - symbolic name of t.
 }
 
@@ -443,22 +453,20 @@ func (l *literal) String() string   { return ebnf(l) }
 func (l *literal) GoString() string { return fmt.Sprintf("literal{%q, %q}", l.s, l.tt) }
 
 func (l *literal) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
-	token, err := ctx.Peek(0)
-	if err != nil {
-		return nil, err
-	}
-	equal := false // nolint: ineffassign
-	if ctx.caseInsensitive[token.Type] {
-		equal = strings.EqualFold(token.Value, l.s)
-	} else {
-		equal = token.Value == l.s
-	}
-	if equal && (l.t == -1 || l.t == token.Type) {
-		next, err := ctx.Next()
-		if err != nil {
-			return nil, err
+	defer ctx.printTrace(l)()
+	match := func(t lexer.Token) bool {
+		var equal bool
+		if ctx.caseInsensitive[t.Type] {
+			equal = l.s == "" || strings.EqualFold(t.Value, l.s)
+		} else {
+			equal = l.s == "" || t.Value == l.s
 		}
-		return []reflect.Value{reflect.ValueOf(next.Value)}, nil
+		return (l.t == lexer.EOF || l.t == t.Type) && equal
+	}
+	token, cursor := ctx.PeekAny(match)
+	if match(token) {
+		ctx.FastForward(cursor)
+		return []reflect.Value{reflect.ValueOf(token.Value)}, nil
 	}
 	return nil, nil
 }
@@ -471,30 +479,24 @@ func (n *negation) String() string   { return ebnf(n) }
 func (n *negation) GoString() string { return "negation{}" }
 
 func (n *negation) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
+	defer ctx.printTrace(n)()
 	// Create a branch to avoid advancing the parser, but call neither Stop nor Accept on it
 	// since we will discard a match.
 	branch := ctx.Branch()
-	notEOF, err := ctx.Peek(0)
-	if err != nil {
-		return nil, err
-	}
+	notEOF := ctx.Peek()
 	if notEOF.EOF() {
 		// EOF cannot match a negation, which expects something
 		return nil, nil
 	}
 
 	out, err = n.node.Parse(branch, parent)
-
 	if out != nil && err == nil {
 		// out being non-nil means that what we don't want is actually here, so we report nomatch
-		return nil, Errorf(notEOF.Pos, "unexpected '%s'", notEOF.Value)
+		return nil, &UnexpectedTokenError{Unexpected: *notEOF}
 	}
 
 	// Just give the next token
-	next, err := ctx.Next()
-	if err != nil {
-		return nil, err
-	}
+	next := ctx.Next()
 	return []reflect.Value{reflect.ValueOf(next.Value)}, nil
 }
 
@@ -525,7 +527,7 @@ func conform(t reflect.Type, values []reflect.Value) (out []reflect.Value, err e
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			n, err := strconv.ParseInt(v.String(), 0, sizeOfKind(kind))
 			if err != nil {
-				return nil, fmt.Errorf("invalid integer %q: %s", v.String(), err)
+				return nil, err
 			}
 			v = reflect.New(t).Elem()
 			v.SetInt(n)
@@ -533,7 +535,7 @@ func conform(t reflect.Type, values []reflect.Value) (out []reflect.Value, err e
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			n, err := strconv.ParseUint(v.String(), 0, sizeOfKind(kind))
 			if err != nil {
-				return nil, fmt.Errorf("invalid integer %q: %s", v.String(), err)
+				return nil, err
 			}
 			v = reflect.New(t).Elem()
 			v.SetUint(n)
@@ -544,7 +546,7 @@ func conform(t reflect.Type, values []reflect.Value) (out []reflect.Value, err e
 		case reflect.Float32, reflect.Float64:
 			n, err := strconv.ParseFloat(v.String(), sizeOfKind(kind))
 			if err != nil {
-				return nil, fmt.Errorf("invalid integer %q: %s", v.String(), err)
+				return nil, err
 			}
 			v = reflect.New(t).Elem()
 			v.SetFloat(n)
@@ -569,6 +571,21 @@ func sizeOfKind(kind reflect.Kind) int {
 		return strconv.IntSize
 	}
 	panic("unsupported kind " + kind.String())
+}
+
+func maybeRef(tmpl reflect.Type, strct reflect.Value) reflect.Value {
+	if strct.Type() == tmpl {
+		return strct
+	}
+	if tmpl.Kind() == reflect.Ptr {
+		if strct.CanAddr() {
+			return strct.Addr()
+		}
+		ptr := reflect.New(tmpl)
+		ptr.Set(strct)
+		return ptr
+	}
+	return strct
 }
 
 // Set field.
@@ -654,9 +671,14 @@ func setField(tokens []lexer.Token, strct reflect.Value, field structLexerField,
 		if err != nil {
 			return err
 		}
-		for _, v := range fieldValue {
-			f.Set(reflect.ValueOf(f.String() + v.String()).Convert(f.Type()))
+		if len(fieldValue) == 0 {
+			return nil
 		}
+		accumulated := f.String()
+		for _, v := range fieldValue {
+			accumulated += v.String()
+		}
+		f.SetString(accumulated)
 		return nil
 	}
 
@@ -673,6 +695,9 @@ func setField(tokens []lexer.Token, strct reflect.Value, field structLexerField,
 	fieldValue, err = conform(f.Type(), fieldValue)
 	if err != nil {
 		return err
+	}
+	if len(fieldValue) == 0 {
+		return nil // Nothing to capture, can happen when trying to get a partial parse tree
 	}
 
 	fv := fieldValue[0]
@@ -699,7 +724,7 @@ func setField(tokens []lexer.Token, strct reflect.Value, field structLexerField,
 			f.Set(fv)
 		}
 
-	case reflect.Bool, reflect.Struct:
+	case reflect.Bool, reflect.Struct, reflect.Interface:
 		if f.Kind() == reflect.Bool && fv.Kind() == reflect.Bool {
 			f.SetBool(fv.Bool())
 			break

@@ -83,9 +83,9 @@ func (e *Expression) Print(symbols *SymbolTable) string {
 			id := op.(Value).ID
 			switch id.Type() {
 			case TermTypeString:
-				s.Push(symbols.Str(id.(String)))
+				s.Push(fmt.Sprintf("\"%s\"", symbols.Str(id.(String))))
 			case TermTypeVariable:
-				s.Push(symbols.Var(id.(Variable)))
+				s.Push(fmt.Sprintf("$%s", symbols.Var(id.(Variable))))
 			default:
 				s.Push(id.String())
 			}
@@ -273,6 +273,10 @@ func (op BinaryOp) Print(left, right string) string {
 		out = fmt.Sprintf("%s && %s", left, right)
 	case BinaryOr:
 		out = fmt.Sprintf("%s || %s", left, right)
+	case BinaryIntersection:
+		out = fmt.Sprintf("%s.intersection(%s)", left, right)
+	case BinaryUnion:
+		out = fmt.Sprintf("%s.union(%s)", left, right)
 	default:
 		out = fmt.Sprintf("unknown(%s, %s)", left, right)
 	}
@@ -447,12 +451,23 @@ func (Contains) Type() BinaryOpType {
 	return BinaryContains
 }
 func (Contains) Eval(left Term, right Term, symbols *SymbolTable) (Term, error) {
+	sleft, ok := left.(String)
+	if ok {
+		sright, ok := right.(String)
+		if !ok {
+			return nil, fmt.Errorf("datalog: Contains requires right value to be a String, got %T", right)
+		}
+
+		return Bool(strings.Contains(symbols.Str(sleft), symbols.Str(sright))), nil
+	}
+
 	switch right.Type() {
 	case TermTypeInteger:
 	case TermTypeBytes:
 	case TermTypeString:
 	case TermTypeDate:
 	case TermTypeBool:
+	case TermTypeSet:
 
 	default:
 		return nil, fmt.Errorf("datalog: unexpected Contains right value type: %d", right.Type())
@@ -463,10 +478,24 @@ func (Contains) Eval(left Term, right Term, symbols *SymbolTable) (Term, error) 
 		return nil, errors.New("datalog: Contains left value must be a Set")
 	}
 
-	for _, elt := range set {
-		if g, w := elt.Type(), right.Type(); g != w {
-			return nil, fmt.Errorf("datalog: unexpected Contains set element type: got %d, want %d", g, w)
+	rhsset, ok := right.(Set)
+
+	if ok {
+		for _, rhselt := range rhsset {
+			rhsinlhs := false
+			for _, lhselt := range set {
+				if lhselt.Equal(rhselt) {
+					rhsinlhs = true
+				}
+			}
+			if !rhsinlhs {
+				return Bool(false), nil
+			}
 		}
+		return Bool(true), nil
+	}
+
+	for _, elt := range set {
 		if right.Equal(elt) {
 			return Bool(true), nil
 		}
@@ -587,6 +616,17 @@ func (Add) Type() BinaryOpType {
 	return BinaryAdd
 }
 func (Add) Eval(left Term, right Term, symbols *SymbolTable) (Term, error) {
+	sleft, ok := left.(String)
+	if ok {
+		sright, ok := right.(String)
+		if !ok {
+			return nil, fmt.Errorf("datalog: Add requires right value to be a String, got %T", right)
+		}
+
+		s := symbols.Insert(symbols.Str(sleft) + symbols.Str(sright))
+		return s, nil
+	}
+
 	ileft, ok := left.(Integer)
 	if !ok {
 		return nil, fmt.Errorf("datalog: Add requires left value to be an Integer, got %T", left)

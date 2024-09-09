@@ -63,24 +63,23 @@ func (s *structLexer) GetField(field int) structLexerField {
 	}
 }
 
-func (s *structLexer) Peek() (lexer.Token, error) {
+func (s *structLexer) Peek() (*lexer.Token, error) {
 	field := s.field
 	lex := s.lexer
 	for {
-		token, err := lex.Peek(0)
-		if err != nil {
-			return token, err
-		}
+		token := lex.Peek()
 		if !token.EOF() {
 			token.Pos.Line = field + 1
 			return token, nil
 		}
 		field++
 		if field >= s.NumField() {
-			return lexer.EOFToken(token.Pos), nil
+			t := lexer.EOFToken(token.Pos)
+			return &t, nil
 		}
 		ft := s.GetField(field).StructField
 		tag := fieldLexerTag(ft)
+		var err error
 		lex, err = lexer.Upgrade(newTagLexer(ft.Name, tag))
 		if err != nil {
 			return token, err
@@ -88,21 +87,20 @@ func (s *structLexer) Peek() (lexer.Token, error) {
 	}
 }
 
-func (s *structLexer) Next() (lexer.Token, error) {
-	token, err := s.lexer.Next()
-	if err != nil {
-		return token, err
-	}
+func (s *structLexer) Next() (*lexer.Token, error) {
+	token := s.lexer.Next()
 	if !token.EOF() {
 		token.Pos.Line = s.field + 1
 		return token, nil
 	}
 	if s.field+1 >= s.NumField() {
-		return lexer.EOFToken(token.Pos), nil
+		t := lexer.EOFToken(token.Pos)
+		return &t, nil
 	}
 	s.field++
 	ft := s.Field().StructField
 	tag := fieldLexerTag(ft)
+	var err error
 	s.lexer, err = lexer.Upgrade(newTagLexer(ft.Name, tag))
 	if err != nil {
 		return token, err
@@ -177,7 +175,7 @@ func (t *tagLexer) Next() (lexer.Token, error) {
 		return lexer.Token{}, t.err
 	}
 	return textScannerTransform(lexer.Token{
-		Type:  typ,
+		Type:  lexer.TokenType(typ),
 		Value: text,
 		Pos:   pos,
 	})
@@ -202,6 +200,8 @@ func textScannerTransform(token lexer.Token) (lexer.Token, error) {
 		}
 	case scanner.RawString:
 		token.Value = token.Value[1 : len(token.Value)-1]
+
+	default:
 	}
 	return token, nil
 }

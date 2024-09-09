@@ -1,10 +1,10 @@
 # A dead simple parser package for Go
 <a id="markdown-a-dead-simple-parser-package-for-go" name="a-dead-simple-parser-package-for-go"></a>
 
-[![PkgGoDev](https://pkg.go.dev/badge/github.com/alecthomas/participle/v2)](https://pkg.go.dev/github.com/alecthomas/participle/v2) [![CircleCI](https://img.shields.io/circleci/project/github/alecthomas/participle.svg)](https://circleci.com/gh/alecthomas/participle)
+[![PkgGoDev](https://pkg.go.dev/badge/github.com/alecthomas/participle/v2)](https://pkg.go.dev/github.com/alecthomas/participle/v2) [![GHA Build](https://github.com/alecthomas/participle/actions/workflows/ci.yml/badge.svg)](https://github.com/alecthomas/participle/actions)
  [![Go Report Card](https://goreportcard.com/badge/github.com/alecthomas/participle/v2)](https://goreportcard.com/report/github.com/alecthomas/participle/v2) [![Slack chat](https://img.shields.io/static/v1?logo=slack&style=flat&label=slack&color=green&message=gophers)](https://gophers.slack.com/messages/CN9DS8YF3)
 
-<!-- TOC depthfrom:2 insertanchor:true updateonsave:true -->
+<!-- MarkdownTOC autolink="true" lowercase="only_ascii" -->
 
 - [V2](#v2)
 - [Introduction](#introduction)
@@ -13,28 +13,31 @@
 - [Overview](#overview)
 - [Grammar syntax](#grammar-syntax)
 - [Capturing](#capturing)
-    - [Capturing boolean value](#capturing-boolean-value)
-- [Streaming](#streaming)
+	- [Capturing boolean value](#capturing-boolean-value)
+- ["Union" types](#union-types)
+- [Custom parsing](#custom-parsing)
 - [Lexing](#lexing)
-    - [Stateful lexer](#stateful-lexer)
-    - [Example stateful lexer](#example-stateful-lexer)
-    - [Example simple/non-stateful lexer](#example-simplenon-stateful-lexer)
-    - [Experimental - code generation](#experimental---code-generation)
+	- [Stateful lexer](#stateful-lexer)
+	- [Example stateful lexer](#example-stateful-lexer)
+	- [Example simple/non-stateful lexer](#example-simplenon-stateful-lexer)
+	- [Experimental - code generation](#experimental---code-generation)
 - [Options](#options)
 - [Examples](#examples)
 - [Performance](#performance)
 - [Concurrency](#concurrency)
 - [Error reporting](#error-reporting)
+- [Comments](#comments)
 - [Limitations](#limitations)
 - [EBNF](#ebnf)
 - [Syntax/Railroad Diagrams](#syntaxrailroad-diagrams)
 
-<!-- /TOC -->
+<!-- /MarkdownTOC -->
 
 ## V2
-<a id="markdown-v2" name="v2"></a>
 
-This is version 2 of Participle. See the [Change Log](CHANGES.md) for details.
+This is a beta version of version 2 of Participle. It is still subject to change but should be mostly stable at this point.
+
+See the [Change Log](CHANGES.md) for details.
 
 > **Note:** semantic versioning API guarantees do not apply to the [experimental](https://pkg.go.dev/github.com/alecthomas/participle/v2/experimental) packages - the API may break between minor point releases.
 
@@ -50,8 +53,7 @@ The latest version from v0 can be installed via:
 $ go get github.com/alecthomas/participle@latest
 ```
 
-## Introduction
-<a id="markdown-introduction" name="introduction"></a>
+## <a name='Introduction'></a>Introduction
 
 The goal of this package is to provide a simple, idiomatic and elegant way of
 defining parsers in Go.
@@ -62,12 +64,10 @@ what and how input is mapped to those same fields. This is not unusual for Go
 encoders, but is unusual for a parser.
 
 ## Tutorial
-<a id="markdown-tutorial" name="tutorial"></a>
 
 A [tutorial](TUTORIAL.md) is available, walking through the creation of an .ini parser.
 
 ## Tag syntax
-<a id="markdown-tag-syntax" name="tag-syntax"></a>
 
 Participle supports two forms of struct tag grammar syntax.
 
@@ -89,7 +89,6 @@ Field string `parser:"@ident (',' Ident)*" json:"field"`
 
 
 ## Overview
-<a id="markdown-overview" name="overview"></a>
 
 A grammar is an annotated Go structure used to both define the parser grammar,
 and be the AST output by the parser. As an example, following is the final INI
@@ -113,7 +112,8 @@ parser from the tutorial.
 
  type Value struct {
    String *string  `  @String`
-   Number *float64 `| @Float`
+   Float *float64  `| @Float`
+   Int    *int     `| @Int`
  }
  ```
 
@@ -122,23 +122,21 @@ parser from the tutorial.
 A parser is constructed from a grammar and a lexer:
 
 ```go
-parser, err := participle.Build(&INI{})
+parser, err := participle.Build[INI]()
 ```
 
 Once constructed, the parser is applied to input to produce an AST:
 
 ```go
-ast := &INI{}
-err := parser.ParseString("", "size = 10", ast)
+ast, err := parser.ParseString("", "size = 10")
 // ast == &INI{
 //   Properties: []*Property{
-//     {Key: "size", Value: &Value{Number: &10}},
+//     {Key: "size", Value: &Value{Int: &10}},
 //   },
 // }
 ```
 
 ## Grammar syntax
-<a id="markdown-grammar-syntax" name="grammar-syntax"></a>
 
 Participle grammars are defined as tagged Go structures. Participle will
 first look for tags in the form `parser:"..."`. It will then fall back to
@@ -154,7 +152,9 @@ The grammar format is:
 - `"...":<identifier>` Match the literal, specifying the exact lexer token type to match.
 - `<expr> <expr> ...` Match expressions.
 - `<expr> | <expr> | ...` Match one of the alternatives. Each alternative is tried in order, with backtracking.
-- `!<expr>` Match any token that is _not_ the start of the expression (eg: `@!";"` matches anything but the `;` character into the field).
+- `~<expr>` Match any token that is _not_ the start of the expression (eg: `@~";"` matches anything but the `;` character into the field).
+- `(?= ... )` Positive lookahead group - requires the contents to match further input, without consuming it.
+- `(?! ... )` Negative lookahead group - requires the contents not to match further input, without consuming it.
 
 The following modifiers can be used after any expression:
 
@@ -172,7 +172,6 @@ Notes:
   clear and simple to maintain.
 
 ## Capturing
-<a id="markdown-capturing" name="capturing"></a>
 
 Prefixing any expression in the grammar with `@` will capture matching values
 for that expression into the corresponding field.
@@ -215,9 +214,8 @@ will be capturable too. One caveat is that `UnmarshalText()` will be called once
 for each captured token, so eg. `@(Ident Ident Ident)` will be called three times.
 
 ### Capturing boolean value
-<a id="markdown-capturing-boolean-value" name="capturing-boolean-value"></a>
 
-By default a boolean field is used to indicate that a match occurred, which
+By default, a boolean field is used to indicate that a match occurred, which
 turns out to be much more useful and common in Participle than parsing true
 or false literals. For example, parsing a variable declaration with a
 trailing optional syntax:
@@ -230,7 +228,7 @@ type Var struct {
 }
 ```
 
-In practice this gives more useful AST's. If bool were to be parsed literally
+In practice this gives more useful ASTs. If bool were to be parsed literally
 then you'd need to have some alternate type for Optional such as string or a
 custom type.
 
@@ -253,31 +251,51 @@ type Value struct {
 }
 ```
 
-## Streaming
-<a id="markdown-streaming" name="streaming"></a>
+## "Union" types
 
-Participle supports streaming parsing. Simply pass a channel of your grammar into
-`Parse*()`. The grammar will be repeatedly parsed and sent to the channel. Note that
-the `Parse*()` call will not return until parsing completes, so it should generally be
-started in a goroutine.
+A very common pattern in parsers is "union" types, an example of which is
+shown above in the `Value` type. A common way of expressing this in Go is via
+a sealed interface, with each member of the union implementing this
+interface.
+
+eg. this is how the `Value` type could be expressed in this way:
 
 ```go
-type token struct {
-  Str string `  @Ident`
-  Num int    `| @Int`
-}
+type Value interface { value() }
 
-parser, err := participle.Build(&token{})
+type Float struct { Value float64 `@Float` }
+func (f Float) value() {}
 
-tokens := make(chan *token, 128)
-err := parser.ParseString("", `hello 10 11 12 world`, tokens)
-for token := range tokens {
-  fmt.Printf("%#v\n", token)
-}
+type Int struct { Value int `@Int` }
+func (f Int) value() {}
+
+type String struct { Value string `@String` }
+func (f String) value() {}
+
+type Bool struct { Value Boolean `@("true" | "false")` }
+func (f Bool) value() {}
 ```
 
+Thanks to the efforts of [Jacob Ryan McCollum](https://github.com/mccolljr), Participle
+now supports this pattern. Simply construct your parser with the `Union[T](member...T)`
+option, eg.
+
+```go
+parser := participle.MustBuild[AST](participle.Union[Value](Float{}, Int{}, String{}, Bool{}))
+```
+
+Custom parsers may also be defined for union types with the [ParseTypeWith](https://pkg.go.dev/github.com/alecthomas/participle/v2#ParseTypeWith) option.
+
+## Custom parsing
+
+There are three ways of defining custom parsers for nodes in the grammar:
+
+1. Implement the [Capture](https://pkg.go.dev/github.com/alecthomas/participle/v2#Capture) interface.
+2. Implement the [Parseable](https://pkg.go.dev/github.com/alecthomas/participle/v2#Parseable) interface.
+3. Use the [ParseTypeWith](https://pkg.go.dev/github.com/alecthomas/participle/v2#ParseTypeWith) option to specify a custom parser for union interface types.
+
+
 ## Lexing
-<a id="markdown-lexing" name="lexing"></a>
 
 Participle relies on distinct lexing and parsing phases. The lexer takes raw
 bytes and produces tokens which the parser consumes. The parser transforms
@@ -286,7 +304,7 @@ these tokens into Go values.
 The default lexer, if one is not explicitly configured, is based on the Go
 `text/scanner` package and thus produces tokens for C/Go-like source code. This
 is surprisingly useful, but if you do require more control over lexing the
-builtin [`participle/lexer/stateful`](#markdown-stateful-lexer) lexer should
+included stateful [`participle/lexer`](#markdown-stateful-lexer) lexer should
 cover most other cases. If that in turn is not flexible enough, you can
 implement your own lexer.
 
@@ -297,11 +315,12 @@ To use your own Lexer you will need to implement two interfaces:
 (and optionally [StringsDefinition](https://pkg.go.dev/github.com/alecthomas/participle/v2/lexer#StringDefinition) and [BytesDefinition](https://pkg.go.dev/github.com/alecthomas/participle/v2/lexer#BytesDefinition)) and [Lexer](https://pkg.go.dev/github.com/alecthomas/participle/v2/lexer#Lexer).
 
 ### Stateful lexer
-<a id="markdown-stateful-lexer" name="stateful-lexer"></a>
 
-Participle's included stateful/modal lexer provides powerful yet convenient
-construction of most lexers (notably, indentation based lexers cannot be
-expressed).
+In addition to the default lexer, Participle includes an optional
+stateful/modal lexer which provides powerful yet convenient
+construction of most lexers.  (Notably, indentation based lexers cannot
+be expressed using the `stateful` lexer -- for discussion of how these
+lexers can be implemented, see [#20](https://github.com/alecthomas/participle/issues/20)).
 
 It is sometimes the case that a simple lexer cannot fully express the tokens
 required by a parser. The canonical example of this is interpolated strings
@@ -312,20 +331,20 @@ let a = "hello ${name + ", ${last + "!"}"}"
 ```
 
 This is impossible to tokenise with a normal lexer due to the arbitrarily
-deep nesting of expressions.
-
-To support this case Participle's lexer is now stateful by default.
+deep nesting of expressions. To support this case Participle's lexer is now
+stateful by default.
 
 The lexer is a state machine defined by a map of rules keyed by the state
 name. Each rule within the state includes the name of the produced token, the
 regex to match, and an optional operation to apply when the rule matches.
 
-As a convenience, any `Rule` starting with a lowercase letter will be elided from output.
+As a convenience, any `Rule` starting with a lowercase letter will be elided
+from output, though it is recommended to use `participle.Elide()` instead, as it
+better integrates with the parser.
 
 Lexing starts in the `Root` group. Each rule is matched in order, with the first
 successful match producing a lexeme. If the matching rule has an associated Action
-it will be executed. The name of each non-root rule is prefixed with the name
-of its group to yield the token identifier used during matching.
+it will be executed.
 
 A state change can be introduced with the Action `Push(state)`. `Pop()` will
 return to the previous state.
@@ -342,14 +361,13 @@ group. This can be used to parse, among other things, heredocs. See the
 for an example of this, among others.
 
 ### Example stateful lexer
-<a id="markdown-example-stateful-lexer" name="example-stateful-lexer"></a>
 
 Here's a cut down example of the string interpolation described above. Refer to
 the [stateful example](https://github.com/alecthomas/participle/tree/master/_examples/stateful)
 for the corresponding parser.
 
 ```go
-var lexer = stateful.Must(Rules{
+var lexer = lexer.Must(Rules{
 	"Root": {
 		{`String`, `"`, Push("String")},
 	},
@@ -370,45 +388,67 @@ var lexer = stateful.Must(Rules{
 ```
 
 ### Example simple/non-stateful lexer
-<a id="markdown-example-simple%2Fnon-stateful-lexer" name="example-simple%2Fnon-stateful-lexer"></a>
 
-The Stateful lexer is now the only custom lexer supported by Participle, but
-most parsers won't need this level of flexibility. To support this common
-case, which replaces the old `Regex` and `EBNF` lexers, you can use
-`stateful.MustSimple()` and `stateful.NewSimple()`.
+Other than the default and stateful lexers, it's easy to define your
+own _stateless_ lexer using the `lexer.MustSimple()` and
+`lexer.NewSimple()` functions.  These functions accept a slice of
+`lexer.SimpleRule{}` objects consisting of a key and a regex-style pattern.
 
-eg. The lexer for a form of BASIC:
+> **Note:** The stateful lexer replaces the old regex lexer.
+
+For example, the lexer for a form of BASIC:
 
 ```go
-var basicLexer = stateful.MustSimple([]stateful.Rule{
-    {"Comment", `(?i)rem[^\n]*`, nil},
-    {"String", `"(\\"|[^"])*"`, nil},
-    {"Number", `[-+]?(\d*\.)?\d+`, nil},
-    {"Ident", `[a-zA-Z_]\w*`, nil},
-    {"Punct", `[-[!@#$%^&*()+_={}\|:;"'<,>.?/]|]`, nil},
-    {"EOL", `[\n\r]+`, nil},
-    {"whitespace", `[ \t]+`, nil},
+var basicLexer = stateful.MustSimple([]stateful.SimpleRule{
+    {"Comment", `(?i)rem[^\n]*`},
+    {"String", `"(\\"|[^"])*"`},
+    {"Number", `[-+]?(\d*\.)?\d+`},
+    {"Ident", `[a-zA-Z_]\w*`},
+    {"Punct", `[-[!@#$%^&*()+_={}\|:;"'<,>.?/]|]`},
+    {"EOL", `[\n\r]+`},
+    {"whitespace", `[ \t]+`},
 })
 ```
+
 ### Experimental - code generation
-<a id="markdown-experimental---code-generation" name="experimental---code-generation"></a>
 
 Participle v2 now has experimental support for generating code to perform
-lexing. Use `participle/experimental/codegen.GenerateLexer()` to compile a
-`stateful` lexer to Go code.
+lexing.
 
 This will generally provide around a 10x improvement in lexing performance
 while producing O(1) garbage.
 
+To use:
+1. Serialize the `stateful` lexer definition to a JSON file (pass to `json.Marshal`).
+2. Run the `participle` command (see `scripts/participle`) to generate go code from the lexer JSON definition. For example:
+```
+participle gen lexer <package name> [--name SomeCustomName] < mylexer.json | gofmt > mypackage/mylexer.go
+```
+(see `genLexer` in `conformance_test.go` for a more detailed example)
+
+3. When constructing your parser, use the generated lexer for your lexer definition, such as:
+```
+var ParserDef = participle.MustBuild[someGrammer](participle.Lexer(mylexer.SomeCustomnameLexer))
+```
+
+Consider contributing to the tests in `conformance_test.go` if they do not
+appear to cover the types of expressions you are using the generated
+lexer.
+
+**Known limitations of the code generated lexer:**
+
+* The lexer is always greedy. e.g., the regex `"[A-Z][A-Z][A-Z]?T"` will not match `"EST"` in the generated lexer because the quest operator is a greedy match and does not "give back" to try other possibilities; you can overcome by using `|` if you have a non-greedy match, e.g., `"[A-Z][A-Z]|(?:[A-Z]T|T)"` will produce correct results in both lexers (see [#276](https://github.com/alecthomas/participle/issues/276) for more detail); this limitation allows the generated lexer to be very fast and memory efficient
+* Backreferences in regular expressions are not currently supported
+
 ## Options
-<a id="markdown-options" name="options"></a>
 
 The Parser's behaviour can be configured via [Options](https://pkg.go.dev/github.com/alecthomas/participle/v2#Option).
 
 ## Examples
-<a id="markdown-examples" name="examples"></a>
 
-There are several [examples](https://github.com/alecthomas/participle/tree/master/_examples) included:
+There are several [examples included](https://github.com/alecthomas/participle/tree/master/_examples),
+some of which are linked directly here. These examples should be run from the
+`_examples` subdirectory within a cloned copy of this repository.
 
 Example | Description
 --------|---------------
@@ -438,7 +478,6 @@ import (
 
 	"github.com/alecthomas/participle/v2"
 	"github.com/alecthomas/participle/v2/lexer"
-	"github.com/alecthomas/participle/v2/lexer/stateful"
 )
 
 type File struct {
@@ -491,14 +530,14 @@ type Value struct {
 }
 
 var (
-	graphQLLexer = stateful.MustSimple([]stateful.Rule{
+	graphQLLexer = lexer.MustSimple([]lexer.Rule{
 		{"Comment", `(?:#|//)[^\n]*\n?`, nil},
 		{"Ident", `[a-zA-Z]\w*`, nil},
 		{"Number", `(?:\d*\.)?\d+`, nil},
 		{"Punct", `[-[!@#$%^&*()+_={}\|:;"'<,>.?/]|]`, nil},
 		{"Whitespace", `[ \t\n\r]+`, nil},
 	})
-	parser = participle.MustBuild(&File{},
+	parser = participle.MustBuild[File](
 		participle.Lexer(graphQLLexer),
 		participle.Elide("Comment", "Whitespace"),
 		participle.UseLookahead(2),
@@ -517,10 +556,9 @@ func main() {
 		ctx.Exit(0)
 	}
 	for _, file := range cli.Files {
-		ast := &File{}
 		r, err := os.Open(file)
 		ctx.FatalIfErrorf(err)
-		err = parser.Parse(file, r, ast)
+		ast, err := parser.Parse(file, r)
 		r.Close()
 		repr.Println(ast)
 		ctx.FatalIfErrorf(err)
@@ -529,7 +567,6 @@ func main() {
 ```
 
 ## Performance
-<a id="markdown-performance" name="performance"></a>
 
 One of the included examples is a complete Thrift parser
 (shell-style comments are not supported). This gives
@@ -548,44 +585,70 @@ On a real life codebase of 47K lines of Thrift, Participle takes 200ms and go-
 thrift takes 630ms, which aligns quite closely with the benchmarks.
 
 ## Concurrency
-<a id="markdown-concurrency" name="concurrency"></a>
 
 A compiled `Parser` instance can be used concurrently. A `LexerDefinition` can be used concurrently. A `Lexer` instance cannot be used concurrently.
 
 ## Error reporting
-<a id="markdown-error-reporting" name="error-reporting"></a>
 
 There are a few areas where Participle can provide useful feedback to users of your parser.
 
-1. Errors returned by [Parser.Parse*()](https://pkg.go.dev/github.com/alecthomas/participle/v2#Parser.Parse) will be of type [Error](https://pkg.go.dev/github.com/alecthomas/participle/v2#Error). This will contain positional information where available.
+1. Errors returned by [Parser.Parse*()](https://pkg.go.dev/github.com/alecthomas/participle/v2#Parser.Parse) will be:
+	1. Of type [Error](https://pkg.go.dev/github.com/alecthomas/participle/v2#Error). This will contain positional information where available.
+	2. May either be [ParseError](https://pkg.go.dev/github.com/alecthomas/participle/v2#ParseError) or [lexer.Error](https://pkg.go.dev/github.com/alecthomas/participle/v2/lexer#Error)
 2. Participle will make a best effort to return as much of the AST up to the error location as possible.
-3. Any node in the AST containing a field `Pos lexer.Position` will be automatically
+3. Any node in the AST containing a field `Pos lexer.Position` [^1] will be automatically
    populated from the nearest matching token.
-4. Any node in the AST containing a field `EndPos lexer.Position` will be
+4. Any node in the AST containing a field `EndPos lexer.Position` [^1] will be
    automatically populated from the token at the end of the node.
-5. Any node in the AST containing a field `Tokens []lexer.Token` will be automatically
+5. Any node in the AST containing a field `Tokens []lexer.Token` [^1] will be automatically
    populated with _all_ tokens captured by the node, _including_ elided tokens.
+
+[^1]: Either the concrete type or a type convertible to it, allowing user defined types to be used.
 
 These related pieces of information can be combined to provide fairly comprehensive error reporting.
 
+## Comments
+
+Comments can be difficult to capture as in most languages they may appear almost
+anywhere. There are three ways of capturing comments, with decreasing fidelity.
+
+The first is to elide tokens in the parser, then add `Tokens []lexer.Token` as a
+field to each AST node. Comments will be included. This has the downside that
+there's no straightforward way to know where the comments are relative to
+non-comment tokens in that node.
+
+The second way is to _not_ elide comment tokens, and explicitly capture them at
+every location in the AST where they might occur. This has the downside that
+unless you place these captures in every possible valid location, users might
+insert valid comments that then fail to parse.
+
+The third way is to elide comment tokens and capture them where they're
+semantically meaningful, such as for documentation comments. Participle supports
+explicitly matching elided tokens for this purpose.
+
 ## Limitations
-<a id="markdown-limitations" name="limitations"></a>
 
 Internally, Participle is a recursive descent parser with backtracking (see
 `UseLookahead(K)`).
 
-Among other things, this means that they do not support left recursion. Left
-recursion must be eliminated by restructuring your grammar.
+Among other things, this means that Participle grammars do not support left
+recursion. Left recursion must be eliminated by restructuring your grammar.
 
 ## EBNF
-<a id="markdown-ebnf" name="ebnf"></a>
+
+The old `EBNF` lexer was removed in a major refactoring at
+[362b26](https://github.com/alecthomas/participle/commit/362b26640fa3dc406aa60960f7d9a5b9a909414e)
+-- if you have an EBNF grammar you need to implement, you can either translate
+it into regex-style `lexer.Rule{}` syntax or implement your own EBNF lexer
+you might be able to use [the old EBNF lexer](https://github.com/alecthomas/participle/blob/2403858c8b2068b4b0cf96a6b36dd7069674039b/lexer/ebnf/ebnf.go)
+-- as a starting point.
 
 Participle supports outputting an EBNF grammar from a Participle parser. Once
 the parser is constructed simply call `String()`.
 
 Participle also [includes a parser](https://pkg.go.dev/github.com/alecthomas/participle/v2/ebnf) for this form of EBNF (naturally).
 
-eg. The [GraphQL example](https://github.com/alecthomas/participle/v2/blob/cbe0cc62a3ad95955311002abd642f11543cb8ed/_examples/graphql/main.go#L14-L61)
+eg. The [GraphQL example](https://github.com/alecthomas/participle/blob/master/_examples/graphql/main.go#L15-L62)
 gives in the following EBNF:
 
 ```ebnf
@@ -601,7 +664,6 @@ Enum = "enum" ident "{" ident* "}" .
 ```
 
 ## Syntax/Railroad Diagrams
-<a id="markdown-syntax%2Frailroad-diagrams" name="syntax%2Frailroad-diagrams"></a>
 
 Participle includes a [command-line utility]() to take an EBNF representation of a Participle grammar
 (as returned by `Parser.String()`) and produce a Railroad Diagram using

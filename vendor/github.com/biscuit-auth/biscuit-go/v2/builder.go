@@ -6,8 +6,8 @@ import (
 	"errors"
 	"io"
 
-	"github.com/biscuit-auth/biscuit-go/datalog"
-	"github.com/biscuit-auth/biscuit-go/pb"
+	"github.com/biscuit-auth/biscuit-go/v2/datalog"
+	"github.com/biscuit-auth/biscuit-go/v2/pb"
 
 	//"github.com/biscuit-auth/biscuit-go/sig"
 	"google.golang.org/protobuf/proto"
@@ -19,6 +19,7 @@ var (
 )
 
 type Builder interface {
+	AddBlock(block ParsedBlock) error
 	AddAuthorityFact(fact Fact) error
 	AddAuthorityRule(rule Rule) error
 	AddAuthorityCheck(check Check) error
@@ -39,7 +40,7 @@ type builder struct {
 
 type builderOption func(b *builder)
 
-func WihtRandom(rng io.Reader) builderOption {
+func WithRandom(rng io.Reader) builderOption {
 	return func(b *builder) {
 		b.rng = rng
 	}
@@ -66,6 +67,28 @@ func NewBuilder(root ed25519.PrivateKey, opts ...builderOption) Builder {
 	}
 
 	return b
+}
+
+func (b *builder) AddBlock(block ParsedBlock) error {
+	for _, f := range block.Facts {
+		if err := b.AddAuthorityFact(f); err != nil {
+			return err
+		}
+	}
+	for _, r := range block.Rules {
+		err := b.AddAuthorityRule(r)
+		if err != nil {
+			return err
+		}
+	}
+	for _, c := range block.Checks {
+		err := b.AddAuthorityCheck(c)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (b *builder) AddAuthorityFact(fact Fact) error {
@@ -169,6 +192,7 @@ func (u *Unmarshaler) Unmarshal(serialized []byte) (*Biscuit, error) {
 }
 
 type BlockBuilder interface {
+	AddBlock(block ParsedBlock) error
 	AddFact(fact Fact) error
 	AddRule(rule Rule) error
 	AddCheck(check Check) error
@@ -193,6 +217,29 @@ func NewBlockBuilder(baseSymbols *datalog.SymbolTable) BlockBuilder {
 		symbols:      baseSymbols,
 		facts:        new(datalog.FactSet),
 	}
+}
+
+func (b *blockBuilder) AddBlock(block ParsedBlock) error {
+	for _, f := range block.Facts {
+		err := b.AddFact(f)
+		if err != nil {
+			return err
+		}
+	}
+	for _, r := range block.Rules {
+		err := b.AddRule(r)
+		if err != nil {
+			return err
+		}
+	}
+	for _, c := range block.Checks {
+		err := b.AddCheck(c)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (b *blockBuilder) AddFact(fact Fact) error {

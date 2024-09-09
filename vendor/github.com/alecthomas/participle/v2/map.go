@@ -22,7 +22,7 @@ type Mapper func(token lexer.Token) (lexer.Token, error)
 //
 // "symbols" specifies the token symbols that the Mapper will be applied to. If empty, all tokens will be mapped.
 func Map(mapper Mapper, symbols ...string) Option {
-	return func(p *Parser) error {
+	return func(p *parserOptions) error {
 		p.mappers = append(p.mappers, mapperByToken{
 			mapper:  mapper,
 			symbols: symbols,
@@ -73,7 +73,7 @@ func Upper(types ...string) Option {
 
 // Elide drops tokens of the specified types.
 func Elide(types ...string) Option {
-	return func(p *Parser) error {
+	return func(p *parserOptions) error {
 		p.elide = append(p.elide, types...)
 		return nil
 	}
@@ -87,7 +87,7 @@ type mappingLexerDef struct {
 
 var _ lexer.Definition = &mappingLexerDef{}
 
-func (m *mappingLexerDef) Symbols() map[string]rune { return m.l.Symbols() }
+func (m *mappingLexerDef) Symbols() map[string]lexer.TokenType { return m.l.Symbols() }
 
 func (m *mappingLexerDef) Lex(filename string, r io.Reader) (lexer.Lexer, error) {
 	l, err := m.l.Lex(filename, r)

@@ -10,9 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/armortal/webcrypto-go"
-	"github.com/biscuit-auth/biscuit-go"
-	"github.com/biscuit-auth/biscuit-go/parser"
+	"github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/hiddeco/sshsig"
+	log "github.com/sirupsen/logrus"
 	sshUtil "github.com/tionis/ssh-tools/util"
 	"golang.org/x/crypto/ssh"
 	"io"
@@ -141,7 +142,12 @@ func (s *server) authenticateWebcryptoToken(owner string, token []byte, path str
 }
 
 func (s *server) authenticateBiscuitToken(owner *owner, tokenStr, path string, reqType string, isWriteOp bool, clientIP net.IP) (bool, string, error) {
-	b, err := biscuit.Unmarshal([]byte(tokenStr))
+	tokenData, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(strings.ReplaceAll(tokenStr, "-", "+"), "_", "/"))
+	if err != nil {
+		return false, "could not decode biscuit token", fmt.Errorf("error decoding biscuit token: %w", err)
+	}
+	log.Debug("Unmarshalling biscuit token", "tokenData", tokenData, "tokenStr", tokenStr)
+	b, err := biscuit.Unmarshal(tokenData)
 	if err != nil {
 		return false, "could not unmarshal biscuit token", fmt.Errorf("error unmarshalling biscuit token: %w", err)
 	}
@@ -155,42 +161,28 @@ func (s *server) authenticateBiscuitToken(owner *owner, tokenStr, path string, r
 		return false, "could not create authorizer", fmt.Errorf("error creating authorizer: %w", err)
 	}
 	p := parser.New()
-	var operationFact biscuit.Fact
-	pathFact, err := p.Fact("path(\"" + path + "\")")
-	if err != nil {
-		return false, "could not create path fact", fmt.Errorf("error creating path fact: %w", err)
-	}
-	authorizer.AddFact(pathFact)
+
+	var operationStr string
 	if isWriteOp {
-		operationFact, err = p.Fact("write")
+		operationStr = "write"
 	} else {
-		operationFact, err = p.Fact("read")
-	}
-	if err != nil {
-		return false, "could not create operation fact", fmt.Errorf("error creating operation fact: %w", err)
-	}
-	authorizer.AddFact(operationFact)
-
-	// Note: Time is in ISO 8601 format (UTC)
-	timeFact, err := p.Fact("time(\"" + time.Now().UTC().Format(time.RFC3339) + "\")")
-	if err != nil {
-		return false, "could not create time fact", fmt.Errorf("error creating time fact: %w", err)
-	}
-	authorizer.AddFact(timeFact)
-
-	if clientIP != nil {
-		clientIPFact, err := p.Fact("client_ip(\"" + clientIP.String() + "\")")
-		if err != nil {
-			return false, "could not create client_ip fact", fmt.Errorf("error creating client_ip fact: %w", err)
-		}
-		authorizer.AddFact(clientIPFact)
+		operationStr = "read"
 	}
 
-	reqTypeFact, err := p.Fact("type(\"" + reqType + "\")")
-	if err != nil {
-		return false, "could not create type fact", fmt.Errorf("error creating type fact: %w", err)
-	}
-	authorizer.AddFact(reqTypeFact)
+	block, err := p.Block(`
+		path({path});
+		operation({operation});
+	    time({time});
+		req_type({req_type});
+		client_ip({client_ip});
+	`, map[string]biscuit.Term{
+		"path":      biscuit.String(path),
+		"operation": biscuit.String(operationStr),
+		"req_type":  biscuit.String(reqType),
+		"time":      biscuit.Date(time.Now().UTC()),
+		"client_ip": biscuit.String(clientIP.String())})
+
+	authorizer.AddBlock(block)
 
 	if err := authorizer.Authorize(); err != nil {
 		return false, "could not authorize token", fmt.Errorf("error authorizing token: %w", err)

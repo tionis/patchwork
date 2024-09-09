@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/biscuit-auth/biscuit-go/datalog"
-	"github.com/biscuit-auth/biscuit-go/pb"
+	"github.com/biscuit-auth/biscuit-go/v2/datalog"
+	"github.com/biscuit-auth/biscuit-go/v2/pb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -17,6 +17,8 @@ var (
 )
 
 type Authorizer interface {
+	AddAuthorizer(a ParsedAuthorizer)
+	AddBlock(b ParsedBlock)
 	AddFact(fact Fact)
 	AddRule(rule Rule)
 	AddCheck(check Check)
@@ -31,11 +33,12 @@ type Authorizer interface {
 }
 
 type authorizer struct {
-	biscuit     *Biscuit
-	baseWorld   *datalog.World
-	world       *datalog.World
-	baseSymbols *datalog.SymbolTable
-	symbols     *datalog.SymbolTable
+	biscuit      *Biscuit
+	baseWorld    *datalog.World
+	world        *datalog.World
+	baseSymbols  *datalog.SymbolTable
+	symbols      *datalog.SymbolTable
+	block_worlds []*datalog.World
 
 	checks   []Check
 	policies []Policy
@@ -45,17 +48,51 @@ type authorizer struct {
 
 var _ Authorizer = (*authorizer)(nil)
 
-func NewVerifier(b *Biscuit) (Authorizer, error) {
-	baseWorld := datalog.NewWorld()
+type AuthorizerOption func(w *authorizer)
 
-	return &authorizer{
-		biscuit:     b,
-		baseWorld:   baseWorld,
-		world:       baseWorld.Clone(),
-		symbols:     defaultSymbolTable.Clone(),
-		baseSymbols: defaultSymbolTable.Clone(),
-		checks:      []Check{},
-	}, nil
+func WithWorldOptions(opts ...datalog.WorldOption) AuthorizerOption {
+	return func(a *authorizer) {
+		a.baseWorld = datalog.NewWorld(opts...)
+	}
+}
+
+func NewVerifier(b *Biscuit, opts ...AuthorizerOption) (Authorizer, error) {
+	a := &authorizer{
+		biscuit:      b,
+		baseWorld:    datalog.NewWorld(),
+		baseSymbols:  defaultSymbolTable.Clone(),
+		checks:       []Check{},
+		policies:     []Policy{},
+		block_worlds: []*datalog.World{},
+	}
+
+	for _, opt := range opts {
+		opt(a)
+	}
+
+	a.world = a.baseWorld.Clone()
+	a.symbols = a.baseSymbols.Clone()
+
+	return a, nil
+}
+
+func (v *authorizer) AddAuthorizer(a ParsedAuthorizer) {
+	v.AddBlock(a.Block)
+	for _, p := range a.Policies {
+		v.AddPolicy(p)
+	}
+}
+
+func (v *authorizer) AddBlock(block ParsedBlock) {
+	for _, f := range block.Facts {
+		v.AddFact(f)
+	}
+	for _, r := range block.Rules {
+		v.AddRule(r)
+	}
+	for _, c := range block.Checks {
+		v.AddCheck(c)
+	}
 }
 
 func (v *authorizer) AddFact(fact Fact) {
@@ -75,10 +112,6 @@ func (v *authorizer) AddPolicy(policy Policy) {
 }
 
 func (v *authorizer) Authorize() error {
-	debug := datalog.SymbolDebugger{
-		SymbolTable: v.symbols,
-	}
-
 	// if we load facts from the verifier before
 	// the token's fact and rules, we might get inconsistent symbols
 	// token ements should first be converted to builder elements
@@ -118,7 +151,7 @@ func (v *authorizer) Authorize() error {
 			}
 		}
 		if !successful {
-			debug = datalog.SymbolDebugger{
+			debug := datalog.SymbolDebugger{
 				SymbolTable: v.symbols,
 			}
 			errs = append(errs, fmt.Errorf("failed to verify check #%d: %s", i, debug.Check(c)))
@@ -141,7 +174,7 @@ func (v *authorizer) Authorize() error {
 			}
 		}
 		if !successful {
-			debug = datalog.SymbolDebugger{
+			debug := datalog.SymbolDebugger{
 				SymbolTable: v.symbols,
 			}
 			errs = append(errs, fmt.Errorf("failed to verify block 0 check #%d: %s", i, debug.Check(c)))
@@ -175,12 +208,14 @@ func (v *authorizer) Authorize() error {
 	v.world.ResetRules()
 
 	for i, block := range v.biscuit.blocks {
+		block_world := v.world.Clone()
+
 		for _, fact := range *block.facts {
 			f, err := fromDatalogFact(v.biscuit.symbols, fact)
 			if err != nil {
 				return fmt.Errorf("biscuit: verification failed: %s", err)
 			}
-			v.world.AddFact(f.convert(v.symbols))
+			block_world.AddFact(f.convert(v.symbols))
 		}
 
 		for _, rule := range block.rules {
@@ -188,10 +223,10 @@ func (v *authorizer) Authorize() error {
 			if err != nil {
 				return fmt.Errorf("biscuit: verification failed: %s", err)
 			}
-			v.world.AddRule(r.convert(v.symbols))
+			block_world.AddRule(r.convert(v.symbols))
 		}
 
-		if err := v.world.Run(v.symbols); err != nil {
+		if err := block_world.Run(v.symbols); err != nil {
 			return err
 		}
 
@@ -204,21 +239,23 @@ func (v *authorizer) Authorize() error {
 
 			successful := false
 			for _, query := range c.Queries {
-				res := v.world.QueryRule(query, v.symbols)
+				res := block_world.QueryRule(query, v.symbols)
+
 				if len(*res) != 0 {
 					successful = true
 					break
 				}
 			}
 			if !successful {
-				debug = datalog.SymbolDebugger{
+				debug := datalog.SymbolDebugger{
 					SymbolTable: v.symbols,
 				}
 				errs = append(errs, fmt.Errorf("failed to verify block #%d check #%d: %s", i+1, j, debug.Check(c)))
 			}
 		}
 
-		v.world.ResetRules()
+		block_world.ResetRules()
+		v.block_worlds = append(v.block_worlds, block_world)
 	}
 
 	if len(errs) > 0 {
@@ -284,21 +321,21 @@ func (v *authorizer) Reset() {
 	v.dirty = false
 }
 
-func (v *authorizer) LoadPolicies(verifierPolicies []byte) error {
-	pbPolicies := &pb.VerifierPolicies{}
-	if err := proto.Unmarshal(verifierPolicies, pbPolicies); err != nil {
+func (v *authorizer) LoadPolicies(authorizerPolicies []byte) error {
+	pbPolicies := &pb.AuthorizerPolicies{}
+	if err := proto.Unmarshal(authorizerPolicies, pbPolicies); err != nil {
 		return fmt.Errorf("verifier: failed to load policies: %w", err)
 	}
 
 	switch pbPolicies.GetVersion() {
-	case 2:
+	case 3:
 		return v.loadPoliciesV2(pbPolicies)
 	default:
 		return fmt.Errorf("verifier: unsupported policies version %d", pbPolicies.GetVersion())
 	}
 }
 
-func (v *authorizer) loadPoliciesV2(pbPolicies *pb.VerifierPolicies) error {
+func (v *authorizer) loadPoliciesV2(pbPolicies *pb.AuthorizerPolicies) error {
 	policySymbolTable := datalog.SymbolTable(pbPolicies.Symbols)
 	v.symbols = v.baseSymbols.Clone()
 	v.symbols.Extend(&policySymbolTable)
@@ -422,7 +459,7 @@ func (v *authorizer) SerializePolicies() ([]byte, error) {
 	}
 
 	version := MaxSchemaVersion
-	return proto.Marshal(&pb.VerifierPolicies{
+	return proto.Marshal(&pb.AuthorizerPolicies{
 		Symbols:  *v.symbols.Clone(),
 		Version:  proto.Uint32(version),
 		Facts:    protoFacts,

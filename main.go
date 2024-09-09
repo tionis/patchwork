@@ -8,8 +8,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/biscuit-auth/biscuit-go"
-	"github.com/biscuit-auth/biscuit-go/parser"
+	"github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/dusted-go/logging/prettylog"
 	"github.com/google/go-github/v63/github"
 	"github.com/gorilla/mux"
@@ -70,7 +70,7 @@ func main() {
 					{
 						Name:    "generate",
 						Aliases: []string{"g"},
-						Usage:   "generate a biscuit from a private key and settings for an authority block",
+						Usage:   "generate a biscuit from a private key and a file for an authority block",
 						Flags: []cli.Flag{
 							&cli.PathFlag{
 								Name:     "private-key",
@@ -78,20 +78,11 @@ func main() {
 								Usage:    "path to the private key",
 								Required: true,
 							},
-							&cli.StringSliceFlag{
-								Name:    "fact",
-								Aliases: []string{"f"},
-								Usage:   "fact to add to the biscuit",
-							},
-							&cli.StringSliceFlag{
-								Name:    "rule",
-								Aliases: []string{"r"},
-								Usage:   "rule to add to the biscuit",
-							},
-							&cli.StringSliceFlag{
-								Name:    "check",
-								Aliases: []string{"c"},
-								Usage:   "check to add to the biscuit",
+							&cli.PathFlag{
+								Name:     "authority-file",
+								Aliases:  []string{"a"},
+								Usage:    "path to a file containing the authority block",
+								Required: true,
 							},
 						},
 						Action: func(c *cli.Context) error {
@@ -104,42 +95,30 @@ func main() {
 							if err != nil {
 								return fmt.Errorf("failed to decode private key: %w")
 							}
+
+							// trim null bytes from the end of the private key
+							for i := len(privateKeyContents) - 1; i >= 0; i-- {
+								if privateKeyContents[i] != 0 {
+									privateKeyContents = privateKeyContents[:i+1]
+									break
+								}
+							}
+
 							privKey := ed25519.PrivateKey(privateKeyContents)
 
 							builder := biscuit.NewBuilder(privKey)
-							p := parser.New()
 
-							for _, fact := range c.StringSlice("fact") {
-								f, err := p.Fact(fact)
-								if err != nil {
-									return fmt.Errorf("failed to parse fact: %w", err)
-								}
-								err = builder.AddAuthorityFact(f)
-								if err != nil {
-									return fmt.Errorf("failed to add fact to biscuit: %w", err)
-								}
+							authorityFileContents, err := os.ReadFile(c.String("authority-file"))
+							if err != nil {
+								return fmt.Errorf("failed to read authority file: %w", err)
 							}
-
-							for _, rule := range c.StringSlice("rule") {
-								r, err := p.Rule(rule)
-								if err != nil {
-									return fmt.Errorf("failed to parse rule: %w", err)
-								}
-								err = builder.AddAuthorityRule(r)
-								if err != nil {
-									return fmt.Errorf("failed to add rule to biscuit: %w", err)
-								}
+							authorityBlock, err := parser.FromStringBlock(string(authorityFileContents))
+							if err != nil {
+								return fmt.Errorf("failed to parse authority block: %w", err)
 							}
-
-							for _, check := range c.StringSlice("check") {
-								c, err := p.Check(check)
-								if err != nil {
-									return fmt.Errorf("failed to parse check: %w", err)
-								}
-								err = builder.AddAuthorityCheck(c)
-								if err != nil {
-									return fmt.Errorf("failed to add check to biscuit: %w", err)
-								}
+							err = builder.AddBlock(authorityBlock)
+							if err != nil {
+								return fmt.Errorf("failed to add authority block: %w", err)
 							}
 
 							b, err := builder.Build()

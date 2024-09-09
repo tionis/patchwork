@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/biscuit-auth/biscuit-go/datalog"
-	"github.com/biscuit-auth/biscuit-go/pb"
+	"github.com/biscuit-auth/biscuit-go/v2/datalog"
+	"github.com/biscuit-auth/biscuit-go/v2/pb"
 
 	//"github.com/biscuit-auth/biscuit-go/sig"
 	"google.golang.org/protobuf/proto"
@@ -271,7 +271,7 @@ func (b *Biscuit) Seal(rng io.Reader) (*Biscuit, error) {
 // Checks the signature and creates an Authorizer
 // The Authorizer can then test the authorizaion policies and
 // accept or refuse the request
-func (b *Biscuit) Authorizer(root ed25519.PublicKey) (Authorizer, error) {
+func (b *Biscuit) Authorizer(root ed25519.PublicKey, opts ...AuthorizerOption) (Authorizer, error) {
 	currentKey := root
 
 	// for now we only support Ed25519
@@ -351,7 +351,7 @@ func (b *Biscuit) Authorizer(root ed25519.PublicKey) (Authorizer, error) {
 		return nil, errors.New("biscuit: cannot find proof")
 	}
 
-	return NewVerifier(b)
+	return NewVerifier(b, opts...)
 }
 
 func (b *Biscuit) Checks() [][]datalog.Check {
@@ -448,6 +448,13 @@ Biscuit {
 		b.authority.String(b.symbols),
 		blocks,
 	)
+}
+func (b *Biscuit) Code() []string {
+	blocks := make([]string, len(b.blocks))
+	for i, block := range b.blocks {
+		blocks[i] = block.Code(b.symbols)
+	}
+	return blocks
 }
 
 /*
