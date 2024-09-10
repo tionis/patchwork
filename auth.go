@@ -246,10 +246,10 @@ func (s *server) authenticateToken(owner *owner, tokenStr, path, reqType string,
 	}
 	tokenData, err := marshalledTokenData.Unmarshal()
 	now := time.Now()
-	if tokenData.ValidBefore.Valid && tokenData.ValidBefore.Time.After(now) {
+	if tokenData.ValidBefore.Valid && tokenData.ValidBefore.Time.Before(now) {
 		return false, "token is no longer valid", nil
 	}
-	if tokenData.ValidAfter.Valid && tokenData.ValidAfter.Time.Before(now) {
+	if tokenData.ValidAfter.Valid && tokenData.ValidAfter.Time.After(now) {
 		return false, "token is not yet valid", nil
 	}
 	keyAllowed, reason, err := s.isKeyAllowed(owner, signature.PublicKey, tokenData, path, isWriteOp)
