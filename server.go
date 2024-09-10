@@ -438,7 +438,7 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 		}
 	case http.MethodPost, http.MethodPut:
 		switch reqType {
-		case "pubsub": // TODO pubsub is broken since adding headers
+		case "pubsub":
 			finished := false
 			sentData := false
 			if unpersist {
@@ -474,13 +474,29 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 				stream.headers = headersToSet
 				s.logger.Debug("Sending data to pubsub consumers", "req-path", path)
 				if blockpub {
-					select {
-					case channel.data <- stream:
-						sentData = true
-						s.logger.Info("Connected to pubsub consumer", "req-path", path)
-					case <-r.Context().Done():
-						s.logger.Info("Producer cancelled", "req-path", path)
-						stream.done <- struct{}{}
+					if !sentData {
+						select {
+						case channel.data <- stream:
+							sentData = true
+							s.logger.Info("Connected to pubsub consumer", "req-path", path)
+						case <-r.Context().Done():
+							s.logger.Info("Producer cancelled", "req-path", path)
+							stream.done <- struct{}{}
+						}
+					} else {
+						select {
+						case channel.data <- stream:
+							sentData = true
+							s.logger.Info("Connected to pubsub consumer", "req-path", path)
+						case <-r.Context().Done():
+							s.logger.Info("Producer cancelled", "req-path", path)
+							stream.done <- struct{}{}
+						default:
+							s.logger.Info("No one connected to blocksub anymore", "req-path", path)
+							//s.logger.Debug("No one connected", "req-path", path)
+							close(stream.done)
+							finished = true
+						}
 					}
 				} else {
 					select {
