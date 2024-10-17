@@ -337,6 +337,15 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 			token = r.URL.Query().Get("token")
 		}
 		if token == "" {
+			user, password, ok := r.BasicAuth()
+			if ok {
+				if user != "" {
+					token = user
+				}
+				token += password
+			}
+		}
+		if token == "" {
 			token = r.URL.Query().Get("t")
 		}
 		if token == "" {
