@@ -13,7 +13,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/tionis/ssh-tools v0.0.0-20240730235320-30b7d96e8d09
 	github.com/urfave/cli/v2 v2.27.3
-	golang.org/x/crypto v0.25.0
+	golang.org/x/crypto v0.31.0
 )
 
 require (
@@ -23,6 +23,6 @@ require (
 	github.com/google/uuid v1.3.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
-	golang.org/x/sys v0.22.0 // indirect
+	golang.org/x/sys v0.28.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 )
