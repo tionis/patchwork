@@ -1,4 +1,6 @@
 # Patchwork
+> I don't use this anymore as [pico.sh pipe](https://github.com/picosh/pico) fulfills most of my use cases for now.
+> Also this still has some bugs with buffer handling so beware!
 
 Patchwork is simple communication backend to distribute data mainly meant for scripts and small applications.
 It's design is based [patchbay.pub's](https://patchbay.pub) with the addition of an authentication layer based
