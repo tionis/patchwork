@@ -14,88 +14,187 @@
   <h1>Patchwork</h1>
   <p>
     A simple communication backend for scripts and other small applications.
+    Patchwork enables IFTTT-type applications by providing infinite HTTP endpoints
+    that serve as a multi-process, multi-consumer (MPMC) queue.
   </p>
 
-  <h2>Usage</h2>
+  <h2>What does it do?</h2>
   <p>
-    Patchworks data model is based on
-    <a href="https://patchbay.pub">Patchbay.pub's</a> approach. The service
-    provides a nearly unlimited amount of virtual "channels" represented by a
-    path. Data POSTed to a channel can be received by clients doing GET
-    requests, the exact behaviour depends on the type (specified with the
-    "type" query parameter). The Mime content-type can also be specified with
-    the "mime" query parameter.
+    Patchwork provides infinite HTTP endpoints that can be used to implement powerful
+    serverless applications - including desktop notifications, SMS notifications,
+    job queues, web hosting, and file sharing. These applications are basically
+    just a few lines of bash that wrap a <code>curl</code> command.
   </p>
-  <p>The available types are:</p>
+
+  <h2>Basics</h2>
+  <p>
+    The philosophy behind this is that the main logic happens on the local machine
+    with small scripts. There is a server with an infinite number of virtual channels
+    that will relay messages between the publisher and the subscriber.
+  </p>
+  
+  <p>To subscribe to a channel you can simply make a <code>GET</code> request:</p>
+  <pre>curl https://patchwork.example.com/p/a61b1f42</pre>
+  
+  <p>The above will block until something is published to the channel <code>a61b1f42</code>. 
+  You can easily publish to a channel using a <code>POST</code> request:</p>
+  <pre>curl https://patchwork.example.com/p/a61b1f42 -d "hello, world"</pre>
+  
+  <p>The subscriber will immediately receive that data. If you reverse the order,
+  then the post will block until it is received.</p>
+
+  <h3>Pubsub mode</h3>
+  <p>
+    The default mode is a MPMC queue, where the first to connect are able to
+    publish/subscribe. But you can also specify publish-subscribe (pubsub) mode.
+    In pubsub mode, the publisher will become non-blocking and their data will be
+    transmitted to each connected subscriber:
+  </p>
+  <pre>curl https://patchwork.example.com/p/a61b1f42?pubsub=true -d "hello, world"</pre>
+
+  <h3>Publish with GET</h3>
+  <p>
+    You can also publish with a <code>GET</code> request by using the parameter
+    <code>body=X</code>, making it easier to write href links that can trigger hooks:
+  </p>
+  <pre>curl https://patchwork.example.com/p/a61b1f42?pubsub=true&body=hello,%20world</pre>
+
+  <h2>Namespaces</h2>
+  <p>The server is organized by namespaces with different access patterns:</p>
   <ul>
     <li>
-      <strong>fifo/queue</strong>: Each message is received by exactly one
-      receiver, if no listeners are active the server blocks until there is
-      one. This is the default mode.
-    </li>
-
-    <li>
-      <strong>pubsub</strong>: All receivers receive the published message, if
-      no listeners are active the server returns "HTTP 204 NO CONTENT".
+      <strong>/p/**</strong>: Public namespace - no authentication required.
+      Everyone can read and write. Perfect for testing and public communication channels.
     </li>
     <li>
-      <strong>blockpub/blocksub</strong>: Same behaviour as pubsub, but the
-      server blocks until there is at least one listener.
+      <strong>/h/**</strong>: Forward hooks - GET <code>/h</code> to obtain a new channel and secret,
+      then use the secret to POST data to that channel. Anyone can GET data from the channel.
+      Useful for webhooks and notifications where you want to control who can send.
+    </li>
+    <li>
+      <strong>/r/**</strong>: Reverse hooks - GET <code>/r</code> to obtain a new channel and secret,
+      then anyone can POST data to that channel. Use the secret to GET data from the channel.
+      Useful for collecting data from multiple sources where you want to control who can read.
+    </li>
+    <li>
+      <strong>/u/{username}/**</strong>: User namespace - controlled by ACL lists
+      (not implemented yet). Access is controlled by YAML ACL files stored in
+      Forgejo/Gitea repositories that specify which tokens can access which paths.
     </li>
   </ul>
 
-  <h2>Authentication and Authorization</h2>
+  <h3>ACL File Format</h3>
   <p>
-    The server is partionend by namespaces. Each namespace has different rules
-    for auth:
+    For user namespaces, access control is managed through YAML files stored in
+    Forgejo/Gitea repositories. Each user or organization can create a 
+    <code>.patchwork</code> repository containing an <code>auth.yaml</code> file
+    that defines permissions for different tokens:
   </p>
+  <pre>some_token_name:
+  POST: "projects/*/data"  # Can POST to any project's data endpoint
+  GET: "projects/myproject/**"  # Can GET from all paths under myproject
+
+restricted_token:
+  POST: ""  # Empty string means no POST access allowed
+  GET: "**"  # Can GET from all subpaths in this namespace
+
+webhook_token:
+  POST: "webhooks/*"  # Can POST to any webhook endpoint
+  GET: "status"  # Can only GET the status endpoint</pre>
+  <p>
+    Each token can have <code>POST</code> and <code>GET</code> permissions defined
+    with glob patterns. An empty string denies all access for that method, while
+    <code>**</code> allows access to all subpaths.
+  </p>
+  <p>
+    The patchwork server pulls these ACL files from the configured Forgejo/Gitea
+    instance (<code>{{.ForgejoURL}}</code>) as needed and caches them for {{.ACLTTL}}. A special 
+    <code>patchwork</code> user should be given read access to the 
+    <code>.patchwork</code> repositories.
+  </p>
+
+  <h2>Modes</h2>
+  <p>Each endpoint supports multiple modes:</p>
   <ul>
-    <li><strong>/p/**</strong>: No authentication required.</li>
-    <li>
-      <strong>/u/{github_user}/**</strong>: Token has to be signed by a ssh
-      key of the github user.
-    </li>
-    <li>
-      <strong>/k/{key_fingerprint}/**</strong>: Token has to be signed by the
-      ssh key with the given fingerprint (fingerprint is made url safe by
-      transforming + to - and / to _).
-    </li>
-    <li>
-      <strong>/w/{webcrypto_fingerprint}/**</strong>: Token has to be signed
-      by the webcrypto key with the given fingerprint.
-    </li>
-    <li>
-      <strong>/b/{biscuit_pubkey}/**</strong>: Token has to be a
-      <a href="https://biscuitsec.org">biscuit token</a> with the appropiate
-      root key according to the public key.
-      The public key is url safe base64 encoded.
-    </li>
-    <li>
-      <strong>/g/{gist_id}/**</strong>: Token has to be signed by an allowed
-      signer loaded from the gist
-    </li>
+    <li><strong>queue</strong>: Each message is received by exactly one receiver (default)</li>
+    <li><strong>pubsub</strong>: All receivers receive the published message</li>
+    <li><strong>req/res</strong>: Request/response pattern (not implemented yet)</li>
   </ul>
 
-  <h2>Token Format</h2>
-  <p>
-    Tokens are url-safe base64-encoded, gzipped json objects with two keys: "signature"
-    and "data". The "signature" is an openssh signature of the "data". The
-    "data" key is a json object with the following keys:
-  </p>
-  <pre>
-    {
-    "AllowedWritePaths": ["/some-path/*", "!/some-path/forbidden/*"],
-    "AllowedReadPaths": [],
-    "ValidBefore": -1,
-    "ValidAfter": -1,
-    }
-  </pre>
-  <p>
-    AllowedWritePaths and AllowedReadPaths are OpenSSH style pattern lists
-    (essentially a list of globs), while the ValidBefore and ValidAfter fields
-    specify a unix time after/before which the token is invalid. If it's -1,
-    there is no expiry.
-  </p>
+  <h2>Examples</h2>
+
+  <h3>File Sharing</h3>
+  <p>Sending a file:</p>
+  <pre>curl -X POST --data-binary "@test.txt" https://patchwork.example.com/p/test.txt</pre>
+  <p>Receiving a file:</p>
+  <pre>wget https://patchwork.example.com/p/test.txt</pre>
+
+  <h3>Desktop Notifications (Linux)</h3>
+  <pre>#!/bin/bash
+MAGIC="notify"
+URL="https://patchwork.example.com/p/notifications"
+
+while [ 1 ]
+do
+  X="$(curl $URL)"
+  if [[ $X =~ ^$MAGIC ]]; then
+    Y="$(echo "$X" | sed "s/$MAGIC*//")"
+    notify-send "$Y"
+  else
+    sleep 10
+  fi
+done</pre>
+
+  <h3>Job Queue</h3>
+  <p>Adding jobs to a queue:</p>
+  <pre>#!/bin/bash
+for filename in *.mp3
+do
+  curl https://patchwork.example.com/p/jobs -d $filename
+done</pre>
+
+  <p>Processing jobs from the queue:</p>
+  <pre>#!/bin/bash
+while true
+do
+  filename=$(curl -s https://patchwork.example.com/p/jobs)
+  if [ "$filename" != "Too Many Requests" ]
+  then
+    echo "Processing: $filename"
+    # Process the file here
+    ffmpeg -i "$filename" "$filename.ogg"
+  else
+    sleep 1
+  fi
+done</pre>
+
+  <h3>Forward Hook Example</h3>
+  <p>To use forward hooks, first obtain a channel and secret:</p>
+  <pre># Get a new channel and secret
+curl https://patchwork.example.com/h
+# Returns: {"channel":"abc123-def456-...","secret":"sha256hash..."}
+
+# Send notification (requires secret)
+curl https://patchwork.example.com/h/abc123-def456-...?secret=sha256hash... -d "Server is down!"
+
+# Anyone can listen for notifications
+curl https://patchwork.example.com/h/abc123-def456-...</pre>
+
+  <h3>Reverse Hook Example</h3>
+  <p>Similarly, for reverse hooks, obtain a channel and secret:</p>
+  <pre># Get a new channel and secret
+curl https://patchwork.example.com/r
+# Returns: {"channel":"xyz789-abc123-...","secret":"sha256hash..."}
+
+# Anyone can submit metrics
+curl https://patchwork.example.com/r/xyz789-abc123-... -d "cpu:85%"
+curl https://patchwork.example.com/r/xyz789-abc123-... -d "memory:67%"
+
+# Reading requires secret
+curl https://patchwork.example.com/r/xyz789-abc123-...?secret=sha256hash...</pre>
+
+  <p><strong>Note</strong>: The secrets are generated using HMAC-SHA256 with a server secret key and the channel name. 
+  Set the <code>SECRET_KEY</code> environment variable to ensure secrets persist across server restarts.</p>
 
   <h2>Tools</h2>
   <p>

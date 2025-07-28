@@ -1,4 +1,4 @@
-#!/bin/env bash
+#!/usr/bin/env bash
 #--------------------------------------------
 set -Eeuo pipefail
 if [[ -n "${DEBUG:-}" ]]; then
@@ -6,7 +6,7 @@ if [[ -n "${DEBUG:-}" ]]; then
 fi
 trap stack_trace ERR
 function stack_trace() {
-	echo -e "\nThe command '$BASH_COMMAND' triggerd a stacktrace:\nStack Trace:"
+	echo -e "\nThe command '$BASH_COMMAND' triggered a stacktrace:\nStack Trace:"
 	for ((i = 1; i < ${#FUNCNAME[@]}; i++)); do
 		echo "    ($i) ${FUNCNAME[$i]:-(top level)} ${BASH_SOURCE[$i]:-(no file)}:${BASH_LINENO[$((i - 1))]}"
 	done
@@ -107,126 +107,461 @@ patchwork() {
 
 ######################################### Globals ##########################################
 patchwork__server="${PATCHWORK_SERVER:-https://patch.tionis.dev}"
-patchwork__server_req="$patchwork__server/p/"
 
-######################################### Commands ##########################################
-patchwork::desc token "Create a new token"
-patchwork::token() {
-	declare allowedWritePaths allowedReadPaths key allowedReadPathsJSON allowedWritePathsJSON dataJSON validBefore validAfter
-	allowedReadPaths=()
-	allowedWritePaths=()
-	validBefore="$(date --date='1 hour' +%s)"
-	validAfter="$(date +%s)"
-	key=~/.ssh/id_ed25519
-	while [[ $# -gt 0 ]]; do
-		case "$1" in
-		--help)
-			echo "Usage: $(basename "$0") token [options]"
-			echo "Options:"
-			echo "  -k, --key <key> The key to sign the token with, defaults to ~/.ssh/id_ed25519"
-			echo "  -r, --read <path> Add a path to the allowed read paths, if not specified all paths are allowed"
-			echo "  -w, --write <path> Add a path to the allowed write paths, if not specified all paths are allowed"
-			echo "  -b, --before <time> The time until the token is valid, defaults to 1 hour from now, use 'inf' for infinite validity"
-			echo "  -a, --after <time> The time after which the token is valid, defaults to now, use 'inf' for infinite validity"
-			echo "  --no-read Disallow all read paths"
-			echo "  --no-write Disallow all write paths"
-			return 0
-			;;
-		--no-read)
-			allowedReadPathsJSON="[]"
-			;;
-		--no-write)
-			allowedWritePathsJSON="[]"
-			;;
-		-k | --key)
-			shift
-			key="$1"
-			;;
-		-r | --read)
-			shift
-			allowedReadPaths+=("$1")
-			;;
-		-w | --write)
-			shift
-			allowedWritePaths+=("$1")
-			;;
-		-b | --before)
-			shift
-			if [[ "$1" == "inf" ]]; then
-				validBefore="-1"
-			else
-				validBefore="$(date --date="$1" +%s)"
-			fi
-			;;
-		-a | --after)
-			shift
-			if [[ "$1" == "inf" ]]; then
-				validAfter="-1"
-			else
-				validAfter="$(date --date="$1" +%s)"
-			fi
-			;;
-		*)
-			error "Unknown option: $1"
-			;;
-		esac
-		shift
-	done
-	if [[ ! -f "$key" ]]; then
-		error "Key file not found: $key"
+# Generate a random UUID-like string
+patchwork::get_uuid() {
+	if command -v uuidgen >/dev/null 2>&1; then
+		uuidgen
+	else
+		# Fallback: generate a random hex string
+		printf "%08x-%04x-%04x-%04x-%012x\n" \
+			$((RANDOM * 65536 + RANDOM)) \
+			$((RANDOM)) \
+			$((RANDOM)) \
+			$((RANDOM)) \
+			$((RANDOM * 65536 + RANDOM)) \
+			$((RANDOM * 65536 + RANDOM))
 	fi
-	if [[ "${#allowedReadPaths[@]}" -eq 0 ]]; then
-		allowedReadPaths+=("*")
-	fi
-	if [[ "${#allowedWritePaths[@]}" -eq 0 ]]; then
-		allowedWritePaths+=("*")
-	fi
-	allowedReadPathsJSON="${allowedReadPathsJSON:-"$(printf '%s\n' "${allowedReadPaths[@]}" | jq -R . | jq -s .)"}"
-	allowedWritePathsJSON="${allowedWritePathsJSON:-"$(printf '%s\n' "${allowedWritePaths[@]}" | jq -R . | jq -s .)"}"
-	dataJSON="$(jq -cnS \
-		--argjson AllowedReadPaths "$allowedReadPathsJSON" \
-		--argjson AllowedWritePaths "$allowedWritePathsJSON" \
-		--argjson ValidBefore "$validBefore" \
-		--argjson ValidAfter "$validAfter" \
-		'{AllowedWritePaths: $AllowedWritePaths, AllowedReadPaths: $AllowedReadPaths, ValidBefore: $ValidBefore, ValidAfter: $ValidAfter}')"
-	echo "$dataJSON" |
-		ssh-keygen -Y sign -n patch.tionis.dev -f "$key" |
-		jq -cRn '{signature: ([inputs] | join("\n")), data: $data}' --arg data "$dataJSON" |
-		gzip |
-		base64 --wrap=0
 }
 
-patchwork::desc send "Send data via the patchwork server"
+######################################### Commands ##########################################
+patchwork::desc send "Send data to a channel"
+patchwork::alias send pub
+patchwork::alias send publish
 patchwork::send() {
+	local channel="" data="" mode="queue" namespace="p"
+	local secret="" body_param="" token=""
+	
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--help)
-			echo "Usage: $(basename "$0") send [options] <filename>"
+			echo "Usage: $(basename "$0") send [options] <channel> [data]"
+			echo ""
+			echo "Send data to a patchwork channel."
+			echo ""
+			echo "Arguments:"
+			echo "  channel           The channel name to send to"
+			echo "  data              Data to send (or read from stdin if '-' or not provided)"
+			echo ""
 			echo "Options:"
-			echo "  -i, --id <id> The id of the data to send, if not specified a random UUID will be generated"
+			echo "  -m, --mode <mode>     Mode: queue (default) or pubsub"
+			echo "  -n, --namespace <ns>  Namespace: p (default), h (forward hooks), r (reverse hooks), u (user)"
+			echo "  -s, --secret <secret> Secret for authenticated namespaces (h for sending, r for receiving)"
+			echo "  -t, --token <token>   Token for user namespaces (u)"
+			echo "  -g, --get             Use GET request with body parameter instead of POST"
+			echo "  -f, --file <file>     Read data from file"
+			echo ""
+			echo "Examples:"
+			echo "  patchwork send mychannel 'hello world'"
+			echo "  echo 'hello' | patchwork send mychannel"
+			echo "  patchwork send -m pubsub mychannel 'broadcast message'"
+			echo "  patchwork send -n h -s mysecret webhook-data 'notification'"
+			echo "  patchwork send -n u -t mytoken alice/projects/logs 'deploy completed'"
 			return 0
 			;;
-		-i | --id)
+		-m | --mode)
 			shift
-			id="$1"
+			mode="$1"
+			;;
+		-n | --namespace)
+			shift
+			namespace="$1"
+			;;
+		-s | --secret)
+			shift
+			secret="$1"
+			;;
+		-t | --token)
+			shift
+			token="$1"
+			;;
+		-g | --get)
+			body_param="true"
+			;;
+		-f | --file)
+			shift
+			if [[ "$1" == "-" ]]; then
+				data="$(cat)"
+			else
+				data="$(cat "$1")"
+			fi
+			;;
+		-*)
+			error "Unknown option: $1"
 			;;
 		*)
-			filename="$1"
+			if [[ -z "$channel" ]]; then
+				channel="$1"
+			elif [[ -z "$data" ]]; then
+				data="$1"
+			else
+				error "Too many arguments"
+			fi
 			;;
 		esac
 		shift
 	done
-	if [[ -z "${filename:-}" ]]; then
-		error "No filename specified"
+	
+	if [[ -z "$channel" ]]; then
+		error "Channel name required"
 	fi
-	id="${id:-$(patchwork:get_uuid)}"
-	info "Sending data to $patchwork__server_req/$id"
-	if [[ "$filename" == "-" ]]; then
-		curl -X POST --data-binary @- "$patchwork__server_req/$id"
+	
+	# Read from stdin if no data provided
+	if [[ -z "$data" ]]; then
+		data="$(cat)"
+	fi
+	
+	# Build URL
+	local url="$patchwork__server/$namespace/$channel"
+	local params=""
+	
+	# Add mode parameter if not default
+	if [[ "$mode" != "queue" ]]; then
+		params="${params:+$params&}$mode=true"
+	fi
+	
+	# Add secret parameter for authenticated namespaces
+	# For 'h' namespace, secret is required for sending
+	if [[ -n "$secret" && ("$namespace" == "h" || "$namespace" == "r") ]]; then
+		params="${params:+$params&}secret=$secret"
+	fi
+	
+	# Add token parameter for user namespaces
+	if [[ -n "$token" && "$namespace" == "u" ]]; then
+		params="${params:+$params&}token=$token"
+	fi
+	
+	# Handle GET request with body parameter
+	if [[ -n "$body_param" ]]; then
+		local encoded_data
+		encoded_data="$(printf '%s' "$data" | jq -sRr @uri)"
+		params="${params:+$params&}body=$encoded_data"
+		url="$url${params:+?$params}"
+		
+		info "Sending data via GET to: $url"
+		curl -s "$url"
 	else
-		curl -X POST --data-binary "@$filename" "$patchwork__server_req/$id"
+		url="$url${params:+?$params}"
+		
+		info "Sending data to: $url"
+		printf '%s' "$data" | curl -s -X POST --data-binary @- "$url"
 	fi
+}
 
+patchwork::desc receive "Receive data from a channel"
+patchwork::alias receive sub
+patchwork::alias receive subscribe
+patchwork::alias receive get
+patchwork::receive() {
+	local channel="" namespace="p" secret="" timeout="" token=""
+	
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--help)
+			echo "Usage: $(basename "$0") receive [options] <channel>"
+			echo ""
+			echo "Receive data from a patchwork channel."
+			echo ""
+			echo "Arguments:"
+			echo "  channel           The channel name to receive from"
+			echo ""
+			echo "Options:"
+			echo "  -n, --namespace <ns>  Namespace: p (default), h (forward hooks), r (reverse hooks), u (user)"
+			echo "  -s, --secret <secret> Secret for authenticated namespaces (r for reading)"
+			echo "  -t, --token <token>   Token for user namespaces (u)"
+			echo "  -T, --timeout <sec>   Timeout in seconds (default: no timeout)"
+			echo ""
+			echo "Examples:"
+			echo "  patchwork receive mychannel"
+			echo "  patchwork receive -n h webhook-data"
+			echo "  patchwork receive -n r -s mysecret collected-data"
+			echo "  patchwork receive -n u -t mytoken alice/projects/status"
+			return 0
+			;;
+		-n | --namespace)
+			shift
+			namespace="$1"
+			;;
+		-s | --secret)
+			shift
+			secret="$1"
+			;;
+		-t | --token)
+			shift
+			token="$1"
+			;;
+		-T | --timeout)
+			shift
+			timeout="$1"
+			;;
+		-*)
+			error "Unknown option: $1"
+			;;
+		*)
+			if [[ -z "$channel" ]]; then
+				channel="$1"
+			else
+				error "Too many arguments"
+			fi
+			;;
+		esac
+		shift
+	done
+	
+	if [[ -z "$channel" ]]; then
+		error "Channel name required"
+	fi
+	
+	# Build URL
+	local url="$patchwork__server/$namespace/$channel"
+	local params=""
+	
+	# Add secret parameter for authenticated namespaces
+	# For 'r' namespace, secret is required for reading
+	if [[ -n "$secret" && "$namespace" == "r" ]]; then
+		params="${params:+$params&}secret=$secret"
+	fi
+	
+	# Add token parameter for user namespaces
+	if [[ -n "$token" && "$namespace" == "u" ]]; then
+		params="${params:+$params&}token=$token"
+	fi
+	
+	url="$url${params:+?$params}"
+	
+	info "Receiving data from: $url"
+	
+	if [[ -n "$timeout" ]]; then
+		curl -s --max-time "$timeout" "$url"
+	else
+		curl -s "$url"
+	fi
+}
+
+patchwork::desc listen "Listen for notifications with a magic prefix"
+patchwork::listen() {
+	local channel="" namespace="p" secret="" magic="notify" sleep_time=1 token=""
+	
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--help)
+			echo "Usage: $(basename "$0") listen [options] <channel>"
+			echo ""
+			echo "Listen for notifications on a channel with a magic prefix."
+			echo "Useful for desktop notifications and webhooks."
+			echo ""
+			echo "Arguments:"
+			echo "  channel           The channel name to listen to"
+			echo ""
+			echo "Options:"
+			echo "  -n, --namespace <ns>  Namespace: p (default), h (forward hooks), r (reverse hooks), u (user)"
+			echo "  -s, --secret <secret> Secret for authenticated namespaces (r for reading)"
+			echo "  -t, --token <token>   Token for user namespaces (u)"
+			echo "  -m, --magic <prefix>  Magic prefix to look for (default: 'notify')"
+			echo "  --sleep <seconds>     Sleep time between failed requests (default: 1)"
+			echo ""
+			echo "Examples:"
+			echo "  patchwork listen notifications"
+			echo "  patchwork listen -m 'alert' mychannel"
+			echo "  patchwork listen -n u -t mytoken alice/alerts"
+			return 0
+			;;
+		-n | --namespace)
+			shift
+			namespace="$1"
+			;;
+		-s | --secret)
+			shift
+			secret="$1"
+			;;
+		-t | --token)
+			shift
+			token="$1"
+			;;
+		-m | --magic)
+			shift
+			magic="$1"
+			;;
+		--sleep)
+			shift
+			sleep_time="$1"
+			;;
+		-*)
+			error "Unknown option: $1"
+			;;
+		*)
+			if [[ -z "$channel" ]]; then
+				channel="$1"
+			else
+				error "Too many arguments"
+			fi
+			;;
+		esac
+		shift
+	done
+	
+	if [[ -z "$channel" ]]; then
+		error "Channel name required"
+	fi
+	
+	# Build URL
+	local url="$patchwork__server/$namespace/$channel"
+	local params=""
+	
+	# Add secret parameter for authenticated namespaces
+	if [[ -n "$secret" && "$namespace" == "r" ]]; then
+		params="${params:+$params&}secret=$secret"
+	fi
+	
+	# Add token parameter for user namespaces
+	if [[ -n "$token" && "$namespace" == "u" ]]; then
+		params="${params:+$params&}token=$token"
+	fi
+	
+	url="$url${params:+?$params}"
+	
+	info "Listening for '$magic' prefixed messages on: $url"
+	
+	while true; do
+		local response
+		response="$(curl -s "$url" || echo "")"
+		
+		if [[ "$response" =~ ^$magic ]]; then
+			local message="${response#$magic}"
+			echo "$message"
+			# Optionally trigger desktop notification if notify-send is available
+			if command -v notify-send >/dev/null 2>&1; then
+				notify-send "$message" 2>/dev/null || true
+			fi
+		else
+			sleep "$sleep_time"
+		fi
+	done
+}
+
+patchwork::desc share "Share a file via patchwork"
+patchwork::share() {
+	local file="" channel="" namespace="p"
+	
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--help)
+			echo "Usage: $(basename "$0") share [options] <file> [channel]"
+			echo ""
+			echo "Share a file via patchwork. If no channel is specified, uses the filename."
+			echo ""
+			echo "Arguments:"
+			echo "  file              File to share"
+			echo "  channel           Channel name (defaults to filename)"
+			echo ""
+			echo "Options:"
+			echo "  -n, --namespace <ns>  Namespace: p (default), h (forward hooks), r (reverse hooks)"
+			echo ""
+			echo "Examples:"
+			echo "  patchwork share document.pdf"
+			echo "  patchwork share image.jpg my-image"
+			return 0
+			;;
+		-n | --namespace)
+			shift
+			namespace="$1"
+			;;
+		-*)
+			error "Unknown option: $1"
+			;;
+		*)
+			if [[ -z "$file" ]]; then
+				file="$1"
+			elif [[ -z "$channel" ]]; then
+				channel="$1"
+			else
+				error "Too many arguments"
+			fi
+			;;
+		esac
+		shift
+	done
+	
+	if [[ -z "$file" ]]; then
+		error "File path required"
+	fi
+	
+	if [[ ! -f "$file" ]]; then
+		error "File not found: $file"
+	fi
+	
+	# Use filename as channel if not specified
+	if [[ -z "$channel" ]]; then
+		channel="$(basename "$file")"
+	fi
+	
+	local url="$patchwork__server/$namespace/$channel"
+	
+	info "Sharing file '$file' as '$channel' at: $url"
+	success "Others can download with: curl '$url' > '$channel'"
+	
+	curl -s -X POST --data-binary "@$file" "$url"
+}
+
+patchwork::desc download "Download a file via patchwork"
+patchwork::download() {
+	local channel="" namespace="p" output=""
+	
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--help)
+			echo "Usage: $(basename "$0") download [options] <channel> [output]"
+			echo ""
+			echo "Download a file via patchwork."
+			echo ""
+			echo "Arguments:"
+			echo "  channel           Channel name to download from"
+			echo "  output            Output filename (defaults to channel name)"
+			echo ""
+			echo "Options:"
+			echo "  -n, --namespace <ns>  Namespace: p (default), h (forward hooks), r (reverse hooks)"
+			echo ""
+			echo "Examples:"
+			echo "  patchwork download document.pdf"
+			echo "  patchwork download my-image downloaded-image.jpg"
+			return 0
+			;;
+		-n | --namespace)
+			shift
+			namespace="$1"
+			;;
+		-*)
+			error "Unknown option: $1"
+			;;
+		*)
+			if [[ -z "$channel" ]]; then
+				channel="$1"
+			elif [[ -z "$output" ]]; then
+				output="$1"
+			else
+				error "Too many arguments"
+			fi
+			;;
+		esac
+		shift
+	done
+	
+	if [[ -z "$channel" ]]; then
+		error "Channel name required"
+	fi
+	
+	# Use channel name as output filename if not specified
+	if [[ -z "$output" ]]; then
+		output="$channel"
+	fi
+	
+	local url="$patchwork__server/$namespace/$channel"
+	
+	info "Downloading from: $url"
+	info "Saving as: $output"
+	
+	curl -s "$url" > "$output"
+	success "Downloaded '$channel' to '$output'"
 }
 
 # Run main if not sourced

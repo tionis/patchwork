@@ -1,14 +1,26 @@
 # Plan
-## Features
-- patchbay.pub style handling of paths
-    - `$base_url/u/:github_username/...` -> auth by github user
-    - `$base_url/s/:ssh_fingerprint/...` -> auth by ssh key
-    - `$base_url/p/...` -> public access
-    - `$github_username.$base_url/...` -> auth by github user
-    - `$ssh_fingerprint.$base_url/...` -> auth by ssh key
-    - `public.$base_url/...` -> public access
-    - `p.$base_url/...` -> public access
-    - `pub.$base_url/...` -> public access
-- some way to listen host more complex api via patchwork, ideas:
-    - sish style using an ssh-tunnel and some custom subdomain or something similar
-    - via some api that uses websockets/sse and some json encoded data layer to handle this -> more dynamic
+- complete rework and simplification, not cryptography based authentication anymore.
+  - most access should work without authentication (aggressive logging for abuse management)
+- I've been thinking of tying the rest of the authentication to my forgejo instance, using cached ACL-Lists.
+  - There should also be a webhook integration to realize instant updates
+  - The repos containing the ACL-Lists should also be accessible by the patchwork user.
+
+## Paths
+### /p/**
+This is the public (no auth) namespace where everyone can read and write
+
+### /h/**
+These are "forward" hooks, you need a secret to push data, but getting data is free for all
+
+### /r/**
+These are "reverse" hooks, everyone can push data, but you need a secret to get data
+
+### /u/{username}/**
+This is the namespace for specific users, not implemented for now.
+Here all paths are controlled by glob patterns and tokens specified in the ACL List for this namespace.
+
+## Modes
+Each endpoint supports multiple modes:
+- pubsub - only active listeners receive
+- queue
+- req/res - not implemented at the moment
