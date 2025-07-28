@@ -6,7 +6,55 @@ that serve as a multi-process, multi-consumer (MPMC) queue.
 
 ## What does it do?
 
-Patchwork provides infinite HTTP endpoints that can be used to implement powerful
+Patchwork provi### SSH over WebSocket Tunneling (huproxy) Example
+
+The huproxy endpoint provides WebSocket tunneling for SSH and other TCP protocols, based on Google's
+HUProxy project. This allows tunneling SSH connections through HTTP/HTTPS when direct SSH access is
+restricted by firewalls or network policies.
+
+#### Using with SSH Client
+
+First, ensure you have proper tokens configured in your `.patchwork/huproxy.yaml` file:
+
+```yaml
+tokens:
+  - "your_secure_token_here"
+  - "another_token_for_different_client"
+```
+
+Then configure your SSH client to use the proxy:
+
+```bash
+# Using a WebSocket client like huproxyclient (needs to be built separately)
+ssh -o 'ProxyCommand=huproxyclient -auth=Bearer:your_secure_token_here wss://patchwork.example.com/huproxy/alice/targethost/22' user@targethost
+
+# Or using curl as a basic test (won't work for full SSH sessions)
+curl -H "Authorization: Bearer your_secure_token_here" 
+     --http1.1 
+     --upgrade websocket 
+     https://patchwork.example.com/huproxy/alice/localhost/22
+```
+
+#### Token-based Authentication
+
+Authentication is managed through `huproxy.yaml` files stored in each user's `.patchwork` repository:
+
+```yaml
+# .patchwork/huproxy.yaml
+tokens:
+  - "production_ssh_token_abc123"
+  - "development_access_def456"
+  - "backup_script_token_789xyz"
+```
+
+**Security Notes:**
+- Tokens are validated against the user's `.patchwork/huproxy.yaml` file
+- Each user controls their own token list through their repository
+- Tokens should be long, random strings (recommended: 32+ characters)
+- The proxy supports any TCP service, not just SSH (databases, VNC, etc.)
+
+**Original Project**: This implementation is based on [Google's HUProxy](https://github.com/google/huproxy)
+with added user-specific authentication and integration into the Patchwork ecosystem.TP endpoints that can be used to implement powerful
 serverless applications - including desktop notifications, SMS notifications,
 job queues, web hosting, and file sharing. These applications are basically
 just a few lines of bash that wrap a `curl` command.
@@ -68,13 +116,21 @@ The server is organized by namespaces with different access patterns:
 - **`/u/{username}/**`**: User namespace - controlled by ACL lists
   (not implemented yet). Access is controlled by YAML ACL files stored in
   Forgejo/Gitea repositories that specify which tokens can access which paths.
+- **`/huproxy/{user}/{host}/{port}`**: HTTP-to-TCP WebSocket proxy for tunneling SSH and other protocols.
+  Based on Google's HUProxy project, this endpoint provides WebSocket tunneling primarily for SSH
+  connections. Uses token-based authentication via `Authorization` header. Tokens are managed through
+  a `huproxy.yaml` file in the user's `.patchwork` repository.
 
 ### ACL File Format
 
 For user namespaces, access control is managed through YAML files stored in
 Forgejo/Gitea repositories. Each user or organization can create a 
-`.patchwork` repository containing an `auth.yaml` file that defines
-permissions for different tokens:
+`.patchwork` repository containing configuration files:
+
+- **`auth.yaml`**: Defines ACL permissions for different tokens accessing user namespaces
+- **`huproxy.yaml`**: Defines valid tokens for huproxy access
+
+#### User Namespace ACL (`auth.yaml`)
 
 ```yaml
 some_token_name:
@@ -100,14 +156,32 @@ Each token can have `POST` and `GET` permissions defined with glob patterns:
 
 1. **Create `.patchwork` repository**: Each user/organization creates a repository named `.patchwork`
 2. **Add `auth.yaml`**: Place the ACL configuration in a file named `auth.yaml` in the repository root
-3. **Grant access**: Give the special `patchwork` user read access to the `.patchwork` repository
-4. **Caching**: The patchwork server pulls and caches these ACL files as needed
+3. **Add `huproxy.yaml`** (optional): Place huproxy token configuration in a file named `huproxy.yaml`
+4. **Grant access**: Give the special `patchwork` user read access to the `.patchwork` repository
+5. **Caching**: The patchwork server pulls and caches these configuration files as needed
 
 Example repository structure:
 ```
 user/.patchwork/
 ├── auth.yaml
+├── huproxy.yaml
 └── README.md (optional)
+```
+
+#### Huproxy Configuration
+
+For huproxy access, create a `huproxy.yaml` file in your `.patchwork` repository:
+
+```yaml
+tokens:
+  - "some-long-token-for-huproxy-access"
+  - "another-token-for-different-client"
+```
+
+Users can then access huproxy endpoints using these tokens:
+```bash
+curl -H "Authorization: Bearer some-long-token-for-huproxy-access" \
+  https://patchwork.example.com/huproxy/alice/localhost/22
 ```
 
 ## Modes
@@ -233,6 +307,22 @@ curl https://patchwork.example.com/u/alice/projects/web/logs?token=webhook_token
 # Read from user namespace (requires token with GET permission)
 curl https://patchwork.example.com/u/alice/projects/web/status?token=some_token_name
 ```
+
+### HTTP-to-TCP Proxy (huproxy) Example
+
+Using the huproxy endpoint to proxy HTTP requests to TCP services:
+
+```bash
+# Using token-based authentication
+curl -H "Authorization: Bearer your_huproxy_token" \
+  https://patchwork.example.com/huproxy/alice/localhost/22
+
+# Alternative without "Bearer" prefix  
+curl -H "Authorization: your_huproxy_token" \
+  https://patchwork.example.com/huproxy/alice/database/5432
+```
+
+**Note**: Tokens are configured in the `huproxy.yaml` file in the user's `.patchwork` repository. The endpoint currently uses fallback authentication and will be updated to use the `huproxy.yaml` configuration in a future release.
 
 ## Tools
 

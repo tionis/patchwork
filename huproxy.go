@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -21,32 +22,48 @@ var (
 
 func (s *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
+	user := vars["user"]
 	host := vars["host"]
 	port := vars["port"]
 	address := net.JoinHostPort(host, port)
+	
+	// Extract authentication token
 	authToken := r.Header.Get("Authorization")
+	if authToken == "" {
+		http.Error(w, "Unauthorized: Missing Authorization header", http.StatusUnauthorized)
+		return
+	}
+	
+	// Remove "Bearer " prefix if present
+	if strings.HasPrefix(authToken, "Bearer ") {
+		authToken = strings.TrimPrefix(authToken, "Bearer ")
+	}
+	
 	clientIPStr := r.Header.Get("X-Forwarded-For")
 	if clientIPStr == "" {
 		clientIPStr = r.RemoteAddr
 	}
 	clientIP := net.ParseIP(clientIPStr)
-	if authToken == "" {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	
+	// Authenticate token against user's huproxy.yaml file
+	// TODO: Implement token validation against {user}/.patchwork/huproxy.yaml
+	// For now, use the existing authenticateToken method as fallback
+	allowed, reason, err := s.authenticateToken(&owner{
+		name: user,
+		typ:  1,
+	}, authToken, address, "huproxy", true, clientIP)
+	if err != nil {
+		s.logger.Error("Authentication error", "error", err, "user", user)
+		http.Error(w, "Internal Server Error: "+reason, http.StatusInternalServerError)
 		return
-	} else {
-		allowed, reason, err := s.authenticateToken(&owner{
-			name: "tionis",
-			typ:  1,
-		}, authToken, address, "huproxy", true, clientIP)
-		if err != nil {
-			http.Error(w, "Internal Server Error: "+reason, http.StatusInternalServerError)
-			return
-		}
-		if !allowed {
-			http.Error(w, "Forbidden: "+reason, http.StatusForbidden)
-			return
-		}
 	}
+	if !allowed {
+		s.logger.Debug("Authentication failed", "user", user, "reason", reason)
+		http.Error(w, "Forbidden: "+reason, http.StatusForbidden)
+		return
+	}
+	
+	s.logger.Debug("Huproxy authentication successful", "user", user, "target", address)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 

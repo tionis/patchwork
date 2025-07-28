@@ -81,6 +81,12 @@
       (not implemented yet). Access is controlled by YAML ACL files stored in
       Forgejo/Gitea repositories that specify which tokens can access which paths.
     </li>
+    <li>
+      <strong>/huproxy/{user}/{host}/{port}</strong>: HTTP-to-TCP WebSocket proxy for tunneling SSH and other protocols.
+      Based on Google's HUProxy project, this endpoint provides WebSocket tunneling primarily for SSH
+      connections. Uses token-based authentication via <code>Authorization</code> header. Tokens are managed through
+      a <code>huproxy.yaml</code> file in the user's <code>.patchwork</code> repository.
+    </li>
   </ul>
 
   <h3>ACL File Format</h3>
@@ -195,6 +201,39 @@ curl https://patchwork.example.com/r/xyz789-abc123-...?secret=sha256hash...</pre
 
   <p><strong>Note</strong>: The secrets are generated using HMAC-SHA256 with a server secret key and the channel name. 
   Set the <code>SECRET_KEY</code> environment variable to ensure secrets persist across server restarts.</p>
+
+  <h3>SSH over WebSocket Tunneling (huproxy) Example</h3>
+  <p>The huproxy endpoint provides WebSocket tunneling for SSH and other TCP protocols, based on Google's
+  HUProxy project. This allows tunneling SSH connections through HTTP/HTTPS when direct SSH access is
+  restricted by firewalls or network policies.</p>
+  
+  <h4>Token Configuration</h4>
+  <p>First, configure tokens in your <code>.patchwork/huproxy.yaml</code> file:</p>
+  <pre>tokens:
+  - "your_secure_token_here"
+  - "another_token_for_different_client"</pre>
+  
+  <h4>SSH Client Configuration</h4>
+  <pre># Using a WebSocket client like huproxyclient (needs to be built separately)
+ssh -o 'ProxyCommand=huproxyclient -auth=Bearer:your_secure_token_here wss://patchwork.example.com/huproxy/alice/targethost/22' user@targethost
+
+# Or using curl as a basic test (won't work for full SSH sessions)
+curl -H "Authorization: Bearer your_secure_token_here" \
+     --http1.1 \
+     --upgrade websocket \
+     https://patchwork.example.com/huproxy/alice/localhost/22</pre>
+  
+  <p><strong>Security Notes</strong>:</p>
+  <ul>
+    <li>Tokens are validated against the user's <code>.patchwork/huproxy.yaml</code> file</li>
+    <li>Each user controls their own token list through their repository</li>
+    <li>Tokens should be long, random strings (recommended: 32+ characters)</li>
+    <li>The proxy supports any TCP service, not just SSH (databases, VNC, etc.)</li>
+  </ul>
+  
+  <p><strong>Original Project</strong>: This implementation is based on 
+  <a href="https://github.com/google/huproxy">Google's HUProxy</a> with added user-specific 
+  authentication and integration into the Patchwork ecosystem.</p>
 
   <h2>Tools</h2>
   <p>

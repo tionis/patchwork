@@ -590,7 +590,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		}
 	})
 
-	router.HandleFunc("/huproxy/{host}/{port}", server.huproxyHandler)
+	router.HandleFunc("/huproxy/{user}/{host}/{port}", server.huproxyHandler)
 	router.HandleFunc("/p/{path:.*}", server.publicHandler)
 	router.HandleFunc("/h", server.forwardHookRootHandler)
 	router.HandleFunc("/h/{path:.*}", server.forwardHookHandler)
