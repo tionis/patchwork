@@ -6,16 +6,16 @@ import (
 	"time"
 )
 
-func TestACLCache(t *testing.T) {
+func TestAuthCache(t *testing.T) {
 	// Create a test logger
 	logger := slog.Default()
 
-	// Create ACL cache with test configuration
-	cache := NewACLCache("https://forge.tionis.dev", "test-token", 5*time.Minute, logger)
+	// Create auth cache with test configuration
+	cache := NewAuthCache("https://forge.tionis.dev", "test-token", 5*time.Minute, logger)
 
 	// Test that cache is properly initialized
 	if cache == nil {
-		t.Fatal("ACL cache should not be nil")
+		t.Fatal("Auth cache should not be nil")
 	}
 
 	if cache.forgejoURL != "https://forge.tionis.dev" {
@@ -32,19 +32,29 @@ func TestACLCache(t *testing.T) {
 }
 
 func TestTokenInfo(t *testing.T) {
-	// Test TokenInfo structure
+	// Test TokenInfo structure with new format
 	tokenInfo := TokenInfo{
-		IsAdmin:     true,
-		Permissions: []string{"read", "write", "admin"},
-		ExpiresAt:   nil, // No expiration
+		IsAdmin:   true,
+		GET:       []string{"*"},
+		POST:      []string{"/api/*", "/data/*"},
+		HuProxy:   []string{"*.example.com:*", "localhost:8080"},
+		ExpiresAt: nil, // No expiration
 	}
 
 	if !tokenInfo.IsAdmin {
 		t.Error("Expected token to be admin")
 	}
 
-	if len(tokenInfo.Permissions) != 3 {
-		t.Errorf("Expected 3 permissions, got %d", len(tokenInfo.Permissions))
+	if len(tokenInfo.GET) != 1 {
+		t.Errorf("Expected 1 GET pattern, got %d", len(tokenInfo.GET))
+	}
+
+	if len(tokenInfo.POST) != 2 {
+		t.Errorf("Expected 2 POST patterns, got %d", len(tokenInfo.POST))
+	}
+
+	if len(tokenInfo.HuProxy) != 2 {
+		t.Errorf("Expected 2 HuProxy patterns, got %d", len(tokenInfo.HuProxy))
 	}
 
 	// Test with expiration
@@ -60,40 +70,45 @@ func TestTokenInfo(t *testing.T) {
 	}
 }
 
-func TestUserACL(t *testing.T) {
-	// Test UserACL structure
-	acl := UserACL{
+func TestUserAuth(t *testing.T) {
+	// Test UserAuth structure with new format
+	auth := UserAuth{
 		Tokens: map[string]TokenInfo{
 			"token1": {
-				IsAdmin:     false,
-				Permissions: []string{"read"},
+				IsAdmin: false,
+				GET:     []string{"/public/*"},
+				POST:    []string{"/api/data"},
 			},
 			"admin_token": {
-				IsAdmin:     true,
-				Permissions: []string{"read", "write", "admin"},
+				IsAdmin: true,
+				GET:     []string{"*"},
+				POST:    []string{"*"},
+				PUT:     []string{"*"},
+				DELETE:  []string{"*"},
 			},
-		},
-		HuProxy: map[string]TokenInfo{
 			"huproxy_token": {
-				IsAdmin:     false,
-				Permissions: []string{"tunnel"},
+				IsAdmin: false,
+				HuProxy: []string{"*.example.com:*", "localhost:8080"},
 			},
 		},
 		UpdatedAt: time.Now(),
 	}
 
-	if len(acl.Tokens) != 2 {
-		t.Errorf("Expected 2 tokens, got %d", len(acl.Tokens))
-	}
-
-	if len(acl.HuProxy) != 1 {
-		t.Errorf("Expected 1 huproxy token, got %d", len(acl.HuProxy))
+	if len(auth.Tokens) != 3 {
+		t.Errorf("Expected 3 tokens, got %d", len(auth.Tokens))
 	}
 
 	// Test token lookup
-	if token, exists := acl.Tokens["admin_token"]; !exists {
+	if token, exists := auth.Tokens["admin_token"]; !exists {
 		t.Error("Admin token should exist")
 	} else if !token.IsAdmin {
 		t.Error("Admin token should have admin privileges")
+	}
+
+	// Test HuProxy token
+	if token, exists := auth.Tokens["huproxy_token"]; !exists {
+		t.Error("HuProxy token should exist")
+	} else if len(token.HuProxy) != 2 {
+		t.Errorf("Expected 2 HuProxy patterns, got %d", len(token.HuProxy))
 	}
 }

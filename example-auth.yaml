@@ -1,27 +1,34 @@
-# Example auth.yaml structure for user repositories
-# This file should be stored in .patchwork/auth.yaml in each user's repository
+# Example auth.yaml configuration file
+# This file should be placed in your .patchwork repository at the root level
+# Glob patterns follow OpenSSH pattern matching rules
 
 tokens:
-  # Regular access tokens for patchwork channels
-  "user_token_123": 
+  "some-long-token": 
     is_admin: false
-    permissions: ["read", "write"]
+    huproxy:
+      - "*" # allows all host:port combinations
+    GET:
+      - "a list"
+      - "of glob" 
+      - "patterns"
+    POST:
+      - "some-other-path"
+  "some-other-read-only-token":
+    GET:
+      - "*"
+  "admin-token-example":
+    is_admin: true
+    GET:
+      - "*"
+    POST:
+      - "*"
+    PUT:
+      - "*"
+    DELETE:
+      - "*"
     expires_at: 2025-12-31T23:59:59Z
-  
-  # Admin token with elevated privileges
-  "admin_token_456":
-    is_admin: true
-    permissions: ["read", "write", "admin"]
-    # No expiration date means token doesn't expire
-
-huproxy:
-  # HuProxy tokens for SSH/TCP tunneling
-  "huproxy_token_789":
-    is_admin: false
-    permissions: ["tunnel"]
-    expires_at: 2026-01-31T23:59:59Z
-  
-  # Admin huproxy token
-  "huproxy_admin_abc":
-    is_admin: true
-    permissions: ["tunnel", "admin"]
+  "huproxy-only-token":
+    huproxy:
+      - "*.example.com:*"
+      - "127.0.0.1:8080"
+      - "localhost:3000"

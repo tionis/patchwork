@@ -61,13 +61,11 @@ func (s *server) huproxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	clientIPParsed := net.ParseIP(clientIPStr)
 
-	// Authenticate token against user's huproxy.yaml file
-	// TODO: Implement token validation against {user}/.patchwork/huproxy.yaml
-	// For now, use the existing authenticateToken method as fallback
+	// Authenticate token against user's auth.yaml file for huproxy permissions
 	allowed, reason, err := s.authenticateToken(&owner{
 		name: user,
 		typ:  1,
-	}, authToken, address, "huproxy", true, clientIPParsed)
+	}, authToken, address, "CONNECT", true, clientIPParsed)
 	if err != nil {
 		s.logger.Error("HUProxy authentication error",
 			"error", err,

@@ -72,7 +72,7 @@ type server struct {
 	forgejoToken    string
 	aclTTL          time.Duration
 	secretKey       []byte
-	aclCache        *ACLCache
+	authCache       *AuthCache
 }
 
 // Configuration template data for rendering index.html
@@ -83,21 +83,25 @@ type ConfigData struct {
 
 // TokenInfo represents information about a token from auth.yaml
 type TokenInfo struct {
-	IsAdmin     bool       `yaml:"is_admin"`
-	Permissions []string   `yaml:"permissions"`
-	ExpiresAt   *time.Time `yaml:"expires_at,omitempty"`
+	IsAdmin   bool       `yaml:"is_admin"`
+	HuProxy   []string   `yaml:"huproxy,omitempty"`
+	GET       []string   `yaml:"GET,omitempty"`
+	POST      []string   `yaml:"POST,omitempty"`
+	PUT       []string   `yaml:"PUT,omitempty"`
+	DELETE    []string   `yaml:"DELETE,omitempty"`
+	PATCH     []string   `yaml:"PATCH,omitempty"`
+	ExpiresAt *time.Time `yaml:"expires_at,omitempty"`
 }
 
-// UserACL represents the ACL configuration for a user
-type UserACL struct {
+// UserAuth represents the auth.yaml configuration for a user
+type UserAuth struct {
 	Tokens    map[string]TokenInfo `yaml:"tokens"`
-	HuProxy   map[string]TokenInfo `yaml:"huproxy"`
 	UpdatedAt time.Time            `yaml:"-"`
 }
 
-// ACLCache represents cached ACL data with expiration
-type ACLCache struct {
-	data         map[string]*UserACL
+// AuthCache represents cached auth data with expiration
+type AuthCache struct {
+	data         map[string]*UserAuth
 	mutex        sync.RWMutex
 	ttl          time.Duration
 	forgejoURL   string
@@ -168,8 +172,14 @@ func (s *server) authenticateToken(owner *owner, token, path, reqType string, is
 		return false, "no token provided", nil
 	}
 
-	// Use ACL cache to validate token
-	valid, tokenInfo, err := s.aclCache.validateToken(owner.name, token, reqType, isHuProxy)
+	// For HuProxy, pass the path as the operation to check against patterns
+	operation := reqType
+	if isHuProxy {
+		operation = path // HuProxy checks against host:port patterns
+	}
+
+	// Use auth cache to validate token
+	valid, tokenInfo, err := s.authCache.validateToken(owner.name, token, operation, isHuProxy)
 	if err != nil {
 		s.logger.Error("Token validation error", "username", owner.name, "error", err, "is_huproxy", isHuProxy)
 		return false, "validation error", err
@@ -182,6 +192,7 @@ func (s *server) authenticateToken(owner *owner, token, path, reqType string, is
 	s.logger.Info("Token authenticated",
 		"username", owner.name,
 		"path", path,
+		"operation", operation,
 		"is_admin", tokenInfo.IsAdmin,
 		"is_huproxy", isHuProxy,
 		"client_ip", clientIP.String())
@@ -212,10 +223,10 @@ func (s *server) verifySecret(namespace, channel, providedSecret string) bool {
 	return hmac.Equal([]byte(expectedSecret), []byte(providedSecret))
 }
 
-// NewACLCache creates a new ACL cache instance
-func NewACLCache(forgejoURL, forgejoToken string, ttl time.Duration, logger *slog.Logger) *ACLCache {
-	return &ACLCache{
-		data:         make(map[string]*UserACL),
+// NewAuthCache creates a new auth cache instance
+func NewAuthCache(forgejoURL, forgejoToken string, ttl time.Duration, logger *slog.Logger) *AuthCache {
+	return &AuthCache{
+		data:         make(map[string]*UserAuth),
 		mutex:        sync.RWMutex{},
 		ttl:          ttl,
 		forgejoURL:   forgejoURL,
@@ -224,8 +235,8 @@ func NewACLCache(forgejoURL, forgejoToken string, ttl time.Duration, logger *slo
 	}
 }
 
-// fetchUserACL fetches ACL data from Forgejo for a specific user
-func (cache *ACLCache) fetchUserACL(username string) (*UserACL, error) {
+// fetchUserAuth fetches auth.yaml data from Forgejo for a specific user
+func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 	// Construct the API URL for the auth.yaml file
 	apiURL := fmt.Sprintf("%s/api/v1/repos/%s/.patchwork/media/auth.yaml", cache.forgejoURL, url.QueryEscape(username))
 
@@ -240,15 +251,14 @@ func (cache *ACLCache) fetchUserACL(username string) (*UserACL, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch ACL: %w", err)
+		return nil, fmt.Errorf("failed to fetch auth: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		// Return empty ACL if file doesn't exist
-		return &UserACL{
+		// Return empty auth if file doesn't exist
+		return &UserAuth{
 			Tokens:    make(map[string]TokenInfo),
-			HuProxy:   make(map[string]TokenInfo),
 			UpdatedAt: time.Now(),
 		}, nil
 	}
@@ -262,71 +272,64 @@ func (cache *ACLCache) fetchUserACL(username string) (*UserACL, error) {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	var acl UserACL
-	if err := yaml.Unmarshal(body, &acl); err != nil {
+	var auth UserAuth
+	if err := yaml.Unmarshal(body, &auth); err != nil {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
-	acl.UpdatedAt = time.Now()
-	cache.logger.Info("Fetched ACL from Forgejo", "username", username, "tokens", len(acl.Tokens), "huproxy", len(acl.HuProxy))
+	auth.UpdatedAt = time.Now()
+	cache.logger.Info("Fetched auth from Forgejo", "username", username, "tokens", len(auth.Tokens))
 
-	return &acl, nil
+	return &auth, nil
 }
 
-// GetUserACL retrieves ACL data for a user, using cache if available and not expired
-func (cache *ACLCache) GetUserACL(username string) (*UserACL, error) {
+// GetUserAuth retrieves auth data for a user, using cache if available and not expired
+func (cache *AuthCache) GetUserAuth(username string) (*UserAuth, error) {
 	cache.mutex.RLock()
-	acl, exists := cache.data[username]
+	auth, exists := cache.data[username]
 	cache.mutex.RUnlock()
 
 	// Check if cached data is still valid
-	if exists && time.Since(acl.UpdatedAt) < cache.ttl {
-		return acl, nil
+	if exists && time.Since(auth.UpdatedAt) < cache.ttl {
+		return auth, nil
 	}
 
 	// Fetch fresh data
-	freshACL, err := cache.fetchUserACL(username)
+	freshAuth, err := cache.fetchUserAuth(username)
 	if err != nil {
-		cache.logger.Error("Failed to fetch ACL", "username", username, "error", err)
+		cache.logger.Error("Failed to fetch auth", "username", username, "error", err)
 		// Return cached data if available, even if expired
 		if exists {
-			cache.logger.Warn("Using expired ACL data", "username", username)
-			return acl, nil
+			cache.logger.Warn("Using expired auth data", "username", username)
+			return auth, nil
 		}
 		return nil, err
 	}
 
 	// Update cache
 	cache.mutex.Lock()
-	cache.data[username] = freshACL
+	cache.data[username] = freshAuth
 	cache.mutex.Unlock()
 
-	return freshACL, nil
+	return freshAuth, nil
 }
 
-// InvalidateUser removes a user's ACL data from the cache
-func (cache *ACLCache) InvalidateUser(username string) {
+// InvalidateUser removes a user's auth data from the cache
+func (cache *AuthCache) InvalidateUser(username string) {
 	cache.mutex.Lock()
 	delete(cache.data, username)
 	cache.mutex.Unlock()
-	cache.logger.Info("Invalidated ACL cache", "username", username)
+	cache.logger.Info("Invalidated auth cache", "username", username)
 }
 
 // validateToken checks if a token is valid for a user and operation
-func (cache *ACLCache) validateToken(username, token, operation string, isHuProxy bool) (bool, *TokenInfo, error) {
-	acl, err := cache.GetUserACL(username)
+func (cache *AuthCache) validateToken(username, token, operation string, isHuProxy bool) (bool, *TokenInfo, error) {
+	auth, err := cache.GetUserAuth(username)
 	if err != nil {
 		return false, nil, err
 	}
 
-	var tokenMap map[string]TokenInfo
-	if isHuProxy {
-		tokenMap = acl.HuProxy
-	} else {
-		tokenMap = acl.Tokens
-	}
-
-	tokenInfo, exists := tokenMap[token]
+	tokenInfo, exists := auth.Tokens[token]
 	if !exists {
 		return false, nil, nil
 	}
@@ -336,13 +339,58 @@ func (cache *ACLCache) validateToken(username, token, operation string, isHuProx
 		return false, nil, nil
 	}
 
-	// Check permissions (for now, we'll implement a simple allow-all for valid tokens)
-	// In the future, this could check specific permissions against the operation
+	// For HuProxy requests, check if token has huproxy permissions
+	if isHuProxy {
+		if len(tokenInfo.HuProxy) == 0 {
+			return false, nil, nil
+		}
+		// TODO: Implement OpenSSH-style glob pattern matching for huproxy patterns
+		return cache.checkGlobPatterns(tokenInfo.HuProxy, operation), &tokenInfo, nil
+	}
 
-	return true, &tokenInfo, nil
+	// For regular HTTP requests, check method-specific permissions
+	var patterns []string
+	switch strings.ToUpper(operation) {
+	case "GET":
+		patterns = tokenInfo.GET
+	case "POST":
+		patterns = tokenInfo.POST
+	case "PUT":
+		patterns = tokenInfo.PUT
+	case "DELETE":
+		patterns = tokenInfo.DELETE
+	case "PATCH":
+		patterns = tokenInfo.PATCH
+	case "ADMIN":
+		// Admin operations require is_admin flag
+		return tokenInfo.IsAdmin, &tokenInfo, nil
+	default:
+		return false, nil, nil
+	}
+
+	if len(patterns) == 0 {
+		return false, nil, nil
+	}
+
+	// TODO: Implement OpenSSH-style glob pattern matching for operation patterns
+	return cache.checkGlobPatterns(patterns, operation), &tokenInfo, nil
 }
 
-// HookResponse represents the response structure for hook endpoint requests
+// checkGlobPatterns is a placeholder for OpenSSH-style glob pattern matching
+// TODO: Implement proper glob pattern matching following OpenSSH pattern rules
+func (cache *AuthCache) checkGlobPatterns(patterns []string, target string) bool {
+	for _, pattern := range patterns {
+		if pattern == "*" {
+			return true // wildcard allows everything
+		}
+		// TODO: Implement proper OpenSSH glob pattern matching
+		// For now, simple string comparison as placeholder
+		if pattern == target {
+			return true
+		}
+	}
+	return false
+} // HookResponse represents the response structure for hook endpoint requests
 type HookResponse struct {
 	Channel string `json:"channel"`
 	Secret  string `json:"secret"`
@@ -392,7 +440,7 @@ func (s *server) userAdminHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate token and check admin status
-	valid, tokenInfo, err := s.aclCache.validateToken(username, token, "admin", false)
+	valid, tokenInfo, err := s.authCache.validateToken(username, token, "admin", false)
 	if err != nil {
 		s.logger.Error("Admin token validation error", "username", username, "error", err)
 		http.Error(w, "Token validation error", http.StatusInternalServerError)
@@ -408,7 +456,7 @@ func (s *server) userAdminHandler(w http.ResponseWriter, r *http.Request) {
 	// Handle administrative endpoints
 	switch adminPath {
 	case "invalidate_cache":
-		s.aclCache.InvalidateUser(username)
+		s.authCache.InvalidateUser(username)
 		s.logger.Info("Cache invalidated via admin endpoint", "username", username, "client_ip", getClientIP(r))
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status": "cache invalidated"}`))
@@ -920,8 +968,8 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		return nil
 	}
 
-	// Initialize ACL cache
-	aclCache := NewACLCache(forgejoURL, forgejoToken, aclTTL, logger.WithGroup("acl"))
+	// Initialize auth cache
+	authCache := NewAuthCache(forgejoURL, forgejoToken, aclTTL, logger.WithGroup("auth"))
 
 	server := &server{
 		logger:          logger,
@@ -934,7 +982,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		forgejoToken:    forgejoToken,
 		aclTTL:          aclTTL,
 		secretKey:       secretKey,
-		aclCache:        aclCache,
+		authCache:       authCache,
 	}
 
 	router := mux.NewRouter()

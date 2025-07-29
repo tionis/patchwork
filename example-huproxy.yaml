@@ -1,0 +1,28 @@
+# Example huproxy.yaml structure for user repositories
+# This file should be stored in .patchwork/huproxy.yaml in each user's repository
+# This is a dedicated configuration file for HuProxy SSH/TCP tunneling
+
+tokens:
+  # Regular HuProxy tunneling token
+  "huproxy_tunnel_123": 
+    is_admin: false
+    permissions: ["tunnel"]
+    expires_at: 2025-12-31T23:59:59Z
+  
+  # Admin HuProxy token with elevated privileges
+  "huproxy_admin_456":
+    is_admin: true
+    permissions: ["tunnel", "admin"]
+    # No expiration date means token doesn't expire
+  
+  # Development tunnel token
+  "dev_tunnel_789":
+    is_admin: false
+    permissions: ["tunnel", "development"]
+    expires_at: 2025-06-30T23:59:59Z
+  
+  # Production tunnel token
+  "prod_tunnel_abc":
+    is_admin: false
+    permissions: ["tunnel", "production"]
+    expires_at: 2026-01-31T23:59:59Z

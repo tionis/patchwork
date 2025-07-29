@@ -1,15 +1,15 @@
 #!/bin/bash
 
-# Example usage of patchwork authentication system
+# Example usage of patchwork authentication system with new token format
 # This script demonstrates different authentication methods
 
 PATCHWORK_URL="${PATCHWORK_URL:-http://localhost:8080}"
 USERNAME="alice"
-TOKEN="user_token_123"
-ADMIN_TOKEN="admin_token_456"
-HUPROXY_TOKEN="huproxy_token_789"
+TOKEN="some-long-token"           # Has GET/POST permissions
+ADMIN_TOKEN="admin-token-example" # Has admin privileges  
+HUPROXY_TOKEN="huproxy-only-token" # Has huproxy permissions
 
-echo "=== Patchwork Authentication Examples ==="
+echo "=== Patchwork Authentication Examples (New Format) ==="
 echo "Using server: $PATCHWORK_URL"
 echo
 
@@ -18,15 +18,15 @@ echo "1. Public namespace access (no authentication required):"
 echo "curl -X POST \"$PATCHWORK_URL/p/test-channel\" -d \"Hello from public channel\""
 echo
 
-# Example 2: User namespace with Authorization header
-echo "2. User namespace with Authorization header:"
-echo "# Producer (send data)"
+# Example 2: User namespace with Authorization header (method-specific permissions)
+echo "2. User namespace with method-specific permissions:"
+echo "# Producer (send data) - requires POST permission"
 echo "curl -X POST \"$PATCHWORK_URL/u/$USERNAME/my-channel\" \\"
 echo "  -H \"Authorization: Bearer $TOKEN\" \\"
 echo "  -H \"Content-Type: text/plain\" \\"
 echo "  -d \"Hello from authenticated channel\""
 echo
-echo "# Consumer (receive data)"
+echo "# Consumer (receive data) - requires GET permission"
 echo "curl -X GET \"$PATCHWORK_URL/u/$USERNAME/my-channel\" \\"
 echo "  -H \"Authorization: Bearer $TOKEN\""
 echo
@@ -103,7 +103,7 @@ echo
 echo "=== Notes ==="
 echo "- Tokens must be configured in $USERNAME/.patchwork/auth.yaml in Forgejo"
 echo "- Admin tokens require 'is_admin: true' in the token configuration"
-echo "- HuProxy tokens are separate from regular channel tokens"
+echo "- Regular and HuProxy tokens are in the same auth.yaml file"
 echo "- Cache invalidation helps with immediate token updates"
 echo "- Public channels (/p/*) don't require authentication"
 echo "- Hook channels (/h/*, /r/*) use secret-based authentication"
