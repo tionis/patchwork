@@ -35,9 +35,9 @@ func TestTokenInfo(t *testing.T) {
 	// Test TokenInfo structure with new format
 	tokenInfo := TokenInfo{
 		IsAdmin:   true,
-		GET:       []string{"*"},
-		POST:      []string{"/api/*", "/data/*"},
-		HuProxy:   []string{"*.example.com:*", "localhost:8080"},
+		GET:       mustParsePatterns([]string{"*"}),
+		POST:      mustParsePatterns([]string{"/api/*", "/data/*"}),
+		HuProxy:   mustParsePatterns([]string{"*.example.com:*", "localhost:8080"}),
 		ExpiresAt: nil, // No expiration
 	}
 
@@ -76,19 +76,19 @@ func TestUserAuth(t *testing.T) {
 		Tokens: map[string]TokenInfo{
 			"token1": {
 				IsAdmin: false,
-				GET:     []string{"/public/*"},
-				POST:    []string{"/api/data"},
+				GET:     mustParsePatterns([]string{"/public/*"}),
+				POST:    mustParsePatterns([]string{"/api/data"}),
 			},
 			"admin_token": {
 				IsAdmin: true,
-				GET:     []string{"*"},
-				POST:    []string{"*"},
-				PUT:     []string{"*"},
-				DELETE:  []string{"*"},
+				GET:     mustParsePatterns([]string{"*"}),
+				POST:    mustParsePatterns([]string{"*"}),
+				PUT:     mustParsePatterns([]string{"*"}),
+				DELETE:  mustParsePatterns([]string{"*"}),
 			},
 			"huproxy_token": {
 				IsAdmin: false,
-				HuProxy: []string{"*.example.com:*", "localhost:8080"},
+				HuProxy: mustParsePatterns([]string{"*.example.com:*", "localhost:8080"}),
 			},
 		},
 		UpdatedAt: time.Now(),

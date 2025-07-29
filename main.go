@@ -27,6 +27,7 @@ import (
 
 	"github.com/dusted-go/logging/prettylog"
 	"github.com/gorilla/mux"
+	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
 )
@@ -68,14 +69,126 @@ type ConfigData struct {
 
 // TokenInfo represents information about a token from auth.yaml
 type TokenInfo struct {
-	IsAdmin   bool       `yaml:"is_admin"`
-	HuProxy   []string   `yaml:"huproxy,omitempty"`
-	GET       []string   `yaml:"GET,omitempty"`
-	POST      []string   `yaml:"POST,omitempty"`
-	PUT       []string   `yaml:"PUT,omitempty"`
-	DELETE    []string   `yaml:"DELETE,omitempty"`
-	PATCH     []string   `yaml:"PATCH,omitempty"`
-	ExpiresAt *time.Time `yaml:"expires_at,omitempty"`
+	IsAdmin   bool               `yaml:"is_admin"`
+	HuProxy   []*sshUtil.Pattern `yaml:"huproxy,omitempty"`
+	GET       []*sshUtil.Pattern `yaml:"GET,omitempty"`
+	POST      []*sshUtil.Pattern `yaml:"POST,omitempty"`
+	PUT       []*sshUtil.Pattern `yaml:"PUT,omitempty"`
+	DELETE    []*sshUtil.Pattern `yaml:"DELETE,omitempty"`
+	PATCH     []*sshUtil.Pattern `yaml:"PATCH,omitempty"`
+	ExpiresAt *time.Time         `yaml:"expires_at,omitempty"`
+}
+
+// MarshalYAML implements custom YAML marshaling for TokenInfo
+func (t TokenInfo) MarshalYAML() (interface{}, error) {
+	// Create a temporary struct with string slices for patterns
+	type TokenInfoYAML struct {
+		IsAdmin   bool       `yaml:"is_admin"`
+		HuProxy   []string   `yaml:"huproxy,omitempty"`
+		GET       []string   `yaml:"GET,omitempty"`
+		POST      []string   `yaml:"POST,omitempty"`
+		PUT       []string   `yaml:"PUT,omitempty"`
+		DELETE    []string   `yaml:"DELETE,omitempty"`
+		PATCH     []string   `yaml:"PATCH,omitempty"`
+		ExpiresAt *time.Time `yaml:"expires_at,omitempty"`
+	}
+
+	// Convert sshUtil.Pattern slices to string slices
+	result := TokenInfoYAML{
+		IsAdmin:   t.IsAdmin,
+		ExpiresAt: t.ExpiresAt,
+	}
+
+	for _, pattern := range t.HuProxy {
+		result.HuProxy = append(result.HuProxy, pattern.String())
+	}
+	for _, pattern := range t.GET {
+		result.GET = append(result.GET, pattern.String())
+	}
+	for _, pattern := range t.POST {
+		result.POST = append(result.POST, pattern.String())
+	}
+	for _, pattern := range t.PUT {
+		result.PUT = append(result.PUT, pattern.String())
+	}
+	for _, pattern := range t.DELETE {
+		result.DELETE = append(result.DELETE, pattern.String())
+	}
+	for _, pattern := range t.PATCH {
+		result.PATCH = append(result.PATCH, pattern.String())
+	}
+
+	return result, nil
+}
+
+// UnmarshalYAML implements custom YAML unmarshaling for TokenInfo
+func (t *TokenInfo) UnmarshalYAML(node *yaml.Node) error {
+	// Create a temporary struct with string slices for patterns
+	type TokenInfoYAML struct {
+		IsAdmin   bool       `yaml:"is_admin"`
+		HuProxy   []string   `yaml:"huproxy,omitempty"`
+		GET       []string   `yaml:"GET,omitempty"`
+		POST      []string   `yaml:"POST,omitempty"`
+		PUT       []string   `yaml:"PUT,omitempty"`
+		DELETE    []string   `yaml:"DELETE,omitempty"`
+		PATCH     []string   `yaml:"PATCH,omitempty"`
+		ExpiresAt *time.Time `yaml:"expires_at,omitempty"`
+	}
+
+	var temp TokenInfoYAML
+	if err := node.Decode(&temp); err != nil {
+		return err
+	}
+
+	// Convert string slices to sshUtil.Pattern slices
+	t.IsAdmin = temp.IsAdmin
+	t.ExpiresAt = temp.ExpiresAt
+
+	// Convert strings to patterns using sshUtil.NewPattern
+	for _, str := range temp.HuProxy {
+		pattern, err := sshUtil.NewPattern(str)
+		if err != nil {
+			return fmt.Errorf("invalid huproxy pattern %q: %w", str, err)
+		}
+		t.HuProxy = append(t.HuProxy, pattern)
+	}
+	for _, str := range temp.GET {
+		pattern, err := sshUtil.NewPattern(str)
+		if err != nil {
+			return fmt.Errorf("invalid GET pattern %q: %w", str, err)
+		}
+		t.GET = append(t.GET, pattern)
+	}
+	for _, str := range temp.POST {
+		pattern, err := sshUtil.NewPattern(str)
+		if err != nil {
+			return fmt.Errorf("invalid POST pattern %q: %w", str, err)
+		}
+		t.POST = append(t.POST, pattern)
+	}
+	for _, str := range temp.PUT {
+		pattern, err := sshUtil.NewPattern(str)
+		if err != nil {
+			return fmt.Errorf("invalid PUT pattern %q: %w", str, err)
+		}
+		t.PUT = append(t.PUT, pattern)
+	}
+	for _, str := range temp.DELETE {
+		pattern, err := sshUtil.NewPattern(str)
+		if err != nil {
+			return fmt.Errorf("invalid DELETE pattern %q: %w", str, err)
+		}
+		t.DELETE = append(t.DELETE, pattern)
+	}
+	for _, str := range temp.PATCH {
+		pattern, err := sshUtil.NewPattern(str)
+		if err != nil {
+			return fmt.Errorf("invalid PATCH pattern %q: %w", str, err)
+		}
+		t.PATCH = append(t.PATCH, pattern)
+	}
+
+	return nil
 }
 
 // UserAuth represents the auth.yaml configuration for a user
@@ -333,11 +446,11 @@ func (cache *AuthCache) validateToken(username, token, method, path string, isHu
 		if len(tokenInfo.HuProxy) == 0 {
 			return false, nil, nil
 		}
-		return cache.checkGlobPatterns(tokenInfo.HuProxy, path), &tokenInfo, nil
+		return sshUtil.MatchPatternList(tokenInfo.HuProxy, path), &tokenInfo, nil
 	}
 
 	// For regular HTTP requests, check method-specific permissions
-	var patterns []string
+	var patterns []*sshUtil.Pattern
 	switch strings.ToUpper(method) {
 	case "GET":
 		patterns = tokenInfo.GET
@@ -360,49 +473,10 @@ func (cache *AuthCache) validateToken(username, token, method, path string, isHu
 		return false, nil, nil
 	}
 
-	return cache.checkGlobPatterns(patterns, path), &tokenInfo, nil
-} // checkGlobPatterns is a placeholder for OpenSSH-style glob pattern matching
-// TODO: Implement proper glob pattern matching following OpenSSH pattern rules
-func (cache *AuthCache) checkGlobPatterns(patterns []string, target string) bool {
-	for _, pattern := range patterns {
-		if pattern == "*" {
-			return true // wildcard allows everything
-		}
-		// TODO: Implement proper OpenSSH glob pattern matching
-		// For now, simple string comparison and basic wildcard matching as placeholder
-		if pattern == target {
-			return true
-		}
-		// Basic wildcard matching for paths like "/api/*"
-		if strings.HasSuffix(pattern, "*") {
-			prefix := strings.TrimSuffix(pattern, "*")
-			if strings.HasPrefix(target, prefix) {
-				return true
-			}
-		}
-		// Basic wildcard matching for domains like "*.example.com:*"
-		if strings.Contains(pattern, "*") {
-			// Very basic pattern matching - replace * with regex-like matching
-			if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") {
-				middle := strings.Trim(pattern, "*")
-				if strings.Contains(target, middle) {
-					return true
-				}
-			} else if strings.HasPrefix(pattern, "*") {
-				suffix := strings.TrimPrefix(pattern, "*")
-				if strings.HasSuffix(target, suffix) {
-					return true
-				}
-			} else if strings.HasSuffix(pattern, "*") {
-				prefix := strings.TrimSuffix(pattern, "*")
-				if strings.HasPrefix(target, prefix) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-} // HookResponse represents the response structure for hook endpoint requests
+	return sshUtil.MatchPatternList(patterns, path), &tokenInfo, nil
+}
+
+// HookResponse represents the response structure for hook endpoint requests
 type HookResponse struct {
 	Channel string `json:"channel"`
 	Secret  string `json:"secret"`

@@ -13,7 +13,21 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	sshUtil "github.com/tionis/ssh-tools/util"
 )
+
+// mustParsePatterns converts a slice of strings to a slice of sshUtil.Pattern for testing
+func mustParsePatterns(patterns []string) []*sshUtil.Pattern {
+	var result []*sshUtil.Pattern
+	for _, p := range patterns {
+		pattern, err := sshUtil.NewPattern(p)
+		if err != nil {
+			panic("failed to parse pattern in test: " + err.Error())
+		}
+		result = append(result, pattern)
+	}
+	return result
+}
 
 // Helper function to create a test server
 func createTestServer() *server {
@@ -29,23 +43,23 @@ func createTestServer() *server {
 		Tokens: map[string]TokenInfo{
 			"valid-token": {
 				IsAdmin: false,
-				GET:     []string{"*"},
-				POST:    []string{"/api/*", "/data/*"},
-				PUT:     []string{"/files/*"},
-				DELETE:  []string{"/temp/*"},
+				GET:     mustParsePatterns([]string{"*"}),
+				POST:    mustParsePatterns([]string{"/api/*", "/data/*"}),
+				PUT:     mustParsePatterns([]string{"/files/*"}),
+				DELETE:  mustParsePatterns([]string{"/temp/*"}),
 			},
 			"admin-token": {
 				IsAdmin: true,
-				GET:     []string{"*"},
-				POST:    []string{"*"},
-				PUT:     []string{"*"},
-				DELETE:  []string{"*"},
+				GET:     mustParsePatterns([]string{"*"}),
+				POST:    mustParsePatterns([]string{"*"}),
+				PUT:     mustParsePatterns([]string{"*"}),
+				DELETE:  mustParsePatterns([]string{"*"}),
 			},
 			"huproxy-token": {
-				HuProxy: []string{"*.example.com:*", "localhost:*"},
+				HuProxy: mustParsePatterns([]string{"*.example.com:*", "localhost:*"}),
 			},
 			"expired-token": {
-				GET:       []string{"*"},
+				GET:       mustParsePatterns([]string{"*"}),
 				ExpiresAt: func() *time.Time { t := time.Now().Add(-1 * time.Hour); return &t }(),
 			},
 		},
