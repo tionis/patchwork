@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/tionis/patchwork/internal/types"
+	sshUtil "github.com/tionis/ssh-tools/util"
 )
 
 // AuthenticateToken provides authentication for tokens using ACL cache

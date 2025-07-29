@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/tionis/patchwork/internal/auth"
 	"github.com/tionis/patchwork/internal/types"
+	sshUtil "github.com/tionis/ssh-tools/util"
 )
 
 // mustParsePatterns converts a slice of strings to a slice of sshUtil.Pattern for testing
@@ -85,14 +85,14 @@ func createTestServer() *types.Server {
 	}
 
 	return &types.Server{
-		Logger:        logger,
-		Channels:      make(map[string]*types.PatchChannel),
-		Ctx:           context.Background(),
-		ForgejoURL:    "https://test.forgejo.dev",
-		ForgejoToken:  "test-token",
-		AclTTL:        5 * time.Minute,
-		SecretKey:     secretKey,
-		AuthCache:     authCache,
+		Logger:       logger,
+		Channels:     make(map[string]*types.PatchChannel),
+		Ctx:          context.Background(),
+		ForgejoURL:   "https://test.forgejo.dev",
+		ForgejoToken: "test-token",
+		AclTTL:       5 * time.Minute,
+		SecretKey:    secretKey,
+		AuthCache:    authCache,
 	}
 }
 

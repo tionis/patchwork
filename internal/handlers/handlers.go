@@ -168,7 +168,7 @@ func ForwardHookHandler(s *types.Server) http.HandlerFunc {
 	}
 }
 
-// ReverseHookRootHandler handles reverse hook root requests  
+// ReverseHookRootHandler handles reverse hook root requests
 func ReverseHookRootHandler(s *types.Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)

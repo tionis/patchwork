@@ -30,7 +30,7 @@ import (
 	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
-	
+
 	"github.com/tionis/patchwork/internal/huproxy"
 )
 
@@ -68,8 +68,8 @@ func (s *server) AuthenticateToken(username string, token, path, reqType string,
 	return s.authenticateToken(username, token, path, reqType, isHuProxy, clientIP)
 }
 
-// GetLogger implements the ServerInterface for huproxy  
-func (s *server) GetLogger() interface{ 
+// GetLogger implements the ServerInterface for huproxy
+func (s *server) GetLogger() interface {
 	Info(msg string, args ...interface{})
 	Error(msg string, args ...interface{})
 } {

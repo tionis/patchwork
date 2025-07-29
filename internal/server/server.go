@@ -87,7 +87,7 @@ func HandlePatch(s *types.Server, w http.ResponseWriter, r *http.Request, namesp
 func HandleChannelRead(s *types.Server, w http.ResponseWriter, r *http.Request, channelPath string) {
 	// Implementation for reading from channel
 	s.Logger.Info("Channel read", "channel", channelPath)
-	
+
 	// For now, return a simple response
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
@@ -98,7 +98,7 @@ func HandleChannelRead(s *types.Server, w http.ResponseWriter, r *http.Request, 
 func HandleChannelWrite(s *types.Server, w http.ResponseWriter, r *http.Request, channelPath string) {
 	// Implementation for writing to channel
 	s.Logger.Info("Channel write", "channel", channelPath, "content_length", r.ContentLength)
-	
+
 	// Read the request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -107,9 +107,9 @@ func HandleChannelWrite(s *types.Server, w http.ResponseWriter, r *http.Request,
 		return
 	}
 	defer r.Body.Close()
-	
+
 	s.Logger.Info("Data written to channel", "channel", channelPath, "data_size", len(body))
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status": "written", "channel": "` + channelPath + `"}`))
@@ -119,11 +119,11 @@ func HandleChannelWrite(s *types.Server, w http.ResponseWriter, r *http.Request,
 func HandleChannelDelete(s *types.Server, w http.ResponseWriter, r *http.Request, channelPath string) {
 	// Implementation for deleting channel
 	s.Logger.Info("Channel delete", "channel", channelPath)
-	
+
 	s.ChannelsMutex.Lock()
 	delete(s.Channels, channelPath)
 	s.ChannelsMutex.Unlock()
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status": "deleted", "channel": "` + channelPath + `"}`))
@@ -132,7 +132,7 @@ func HandleChannelDelete(s *types.Server, w http.ResponseWriter, r *http.Request
 // HandleWebSocket handles WebSocket connections for pub/sub
 func HandleWebSocket(s *types.Server, w http.ResponseWriter, r *http.Request, channelPath string) {
 	s.Logger.Info("WebSocket connection", "channel", channelPath)
-	
+
 	// For now, just return an error since WebSocket implementation would be complex
 	http.Error(w, "WebSocket not implemented yet", http.StatusNotImplemented)
 }
@@ -145,10 +145,10 @@ func HealthCheck(url string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return http.ErrBodyNotAllowed
 	}
-	
+
 	return nil
 }

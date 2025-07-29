@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/tionis/patchwork/internal/types"
+	sshUtil "github.com/tionis/ssh-tools/util"
 )
 
 // mustParsePatterns converts a slice of strings to a slice of sshUtil.Pattern for testing

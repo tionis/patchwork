@@ -45,7 +45,7 @@ func File2WS(ctx context.Context, cancel func(), src io.Reader, dst *websocket.C
 // This handler expects a server interface that provides authentication and logging
 type ServerInterface interface {
 	AuthenticateToken(username string, token, path, reqType string, isHuProxy bool, clientIP net.IP) (bool, string, error)
-	GetLogger() interface{ 
+	GetLogger() interface {
 		Info(msg string, args ...interface{})
 		Error(msg string, args ...interface{})
 	}
