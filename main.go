@@ -47,32 +47,17 @@ type stream struct {
 	headers map[string]string
 }
 
-// res represents a response for request-response communication
-type res struct {
-	httpCode int
-	reader   io.ReadCloser
-	done     chan struct{}
-}
-
-// owner represents the owner of a namespace with authentication info
-type owner struct {
-	name string
-	typ  int // 0 -> public key, 1 -> GitHub username, 2 -> Gist ID, 3 -> Webcrypto key, 4 -> Biscuit key
-}
-
 // server contains the main server state and configuration
 type server struct {
-	logger          *slog.Logger
-	channels        map[string]*patchChannel
-	channelsMutex   sync.RWMutex
-	reqResponses    map[string]chan res
-	reqResponsesMux sync.RWMutex
-	ctx             context.Context
-	forgejoURL      string
-	forgejoToken    string
-	aclTTL          time.Duration
-	secretKey       []byte
-	authCache       *AuthCache
+	logger        *slog.Logger
+	channels      map[string]*patchChannel
+	channelsMutex sync.RWMutex
+	ctx           context.Context
+	forgejoURL    string
+	forgejoToken  string
+	aclTTL        time.Duration
+	secretKey     []byte
+	authCache     *AuthCache
 }
 
 // Configuration template data for rendering index.html
@@ -162,8 +147,8 @@ func (s *server) statusHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // authenticateToken provides authentication for tokens using ACL cache
-func (s *server) authenticateToken(owner *owner, token, path, reqType string, isHuProxy bool, clientIP net.IP) (bool, string, error) {
-	if owner == nil {
+func (s *server) authenticateToken(username string, token, path, reqType string, isHuProxy bool, clientIP net.IP) (bool, string, error) {
+	if username == "" {
 		// Public namespace, no authentication required
 		return true, "public", nil
 	}
@@ -179,9 +164,9 @@ func (s *server) authenticateToken(owner *owner, token, path, reqType string, is
 	}
 
 	// Use auth cache to validate token
-	valid, tokenInfo, err := s.authCache.validateToken(owner.name, token, operation, isHuProxy)
+	valid, tokenInfo, err := s.authCache.validateToken(username, token, operation, isHuProxy)
 	if err != nil {
-		s.logger.Error("Token validation error", "username", owner.name, "error", err, "is_huproxy", isHuProxy)
+		s.logger.Error("Token validation error", "username", username, "error", err, "is_huproxy", isHuProxy)
 		return false, "validation error", err
 	}
 
@@ -190,7 +175,7 @@ func (s *server) authenticateToken(owner *owner, token, path, reqType string, is
 	}
 
 	s.logger.Info("Token authenticated",
-		"username", owner.name,
+		"username", username,
 		"path", path,
 		"operation", operation,
 		"is_admin", tokenInfo.IsAdmin,
@@ -344,7 +329,6 @@ func (cache *AuthCache) validateToken(username, token, operation string, isHuPro
 		if len(tokenInfo.HuProxy) == 0 {
 			return false, nil, nil
 		}
-		// TODO: Implement OpenSSH-style glob pattern matching for huproxy patterns
 		return cache.checkGlobPatterns(tokenInfo.HuProxy, operation), &tokenInfo, nil
 	}
 
@@ -372,7 +356,6 @@ func (cache *AuthCache) validateToken(username, token, operation string, isHuPro
 		return false, nil, nil
 	}
 
-	// TODO: Implement OpenSSH-style glob pattern matching for operation patterns
 	return cache.checkGlobPatterns(patterns, operation), &tokenInfo, nil
 }
 
@@ -401,7 +384,7 @@ func (s *server) publicHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	path := vars["path"]
 	s.logRequest(r, "Public namespace access")
-	s.handlePatch(w, r, "p", nil, path)
+	s.handlePatch(w, r, "p", "", path)
 }
 
 func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
@@ -410,7 +393,7 @@ func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
 	path := vars["path"]
 	s.logRequest(r, "User namespace access")
 	s.logger.Info("User namespace details", "username", username, "path", path)
-	s.handlePatch(w, r, "u/"+username, &owner{name: username, typ: 1}, path)
+	s.handlePatch(w, r, "u/"+username, username, path)
 }
 
 func (s *server) userAdminHandler(w http.ResponseWriter, r *http.Request) {
@@ -526,7 +509,7 @@ func (s *server) forwardHookHandler(w http.ResponseWriter, r *http.Request) {
 		s.logger.Info("Forward hook POST authorized", "channel", path, "client_ip", getClientIP(r))
 	}
 
-	s.handlePatch(w, r, "h", nil, path)
+	s.handlePatch(w, r, "h", "", path)
 }
 
 func (s *server) reverseHookRootHandler(w http.ResponseWriter, r *http.Request) {
@@ -570,7 +553,8 @@ func (s *server) reverseHookHandler(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("Reverse hook details", "channel", path, "method", r.Method)
 
 	// For reverse hooks, check secret on GET but allow anyone to POST
-	if r.Method == "GET" {
+	switch r.Method {
+	case "GET":
 		secret := r.URL.Query().Get("secret")
 		if secret == "" {
 			s.logger.Info("Reverse hook GET denied - missing secret", "channel", path, "client_ip", getClientIP(r))
@@ -586,15 +570,15 @@ func (s *server) reverseHookHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.logger.Info("Reverse hook GET authorized", "channel", path, "client_ip", getClientIP(r))
-	} else if r.Method == "POST" {
+	case "POST":
 		s.logger.Info("Reverse hook POST access", "channel", path, "client_ip", getClientIP(r))
 	}
 
-	s.handlePatch(w, r, "r", nil, path)
+	s.handlePatch(w, r, "r", "", path)
 }
 
 // handlePatch implements the core duct-like channel communication logic
-func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace string, owner *owner, path string) {
+func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace string, username string, path string) {
 	// Normalize path
 	path = "/" + strings.TrimPrefix(path, "/")
 	channelPath := namespace + path
@@ -609,7 +593,7 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 		"pubsub", r.URL.Query().Get("pubsub"))
 
 	// Authenticate for user namespaces
-	if owner != nil {
+	if username != "" {
 		// Get Authorization header or token from query parameter
 		token := r.Header.Get("Authorization")
 		if token == "" {
@@ -629,20 +613,20 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 			clientIPParsed = net.IPv4(127, 0, 0, 1)
 		}
 
-		allowed, reason, err := s.authenticateToken(owner, token, path, r.Method, false, clientIPParsed)
+		allowed, reason, err := s.authenticateToken(username, token, path, r.Method, false, clientIPParsed)
 		if err != nil {
-			s.logger.Error("Authentication error", "error", err, "username", owner.name, "path", path)
+			s.logger.Error("Authentication error", "error", err, "username", username, "path", path)
 			http.Error(w, "Authentication error", http.StatusInternalServerError)
 			return
 		}
 
 		if !allowed {
-			s.logger.Info("Access denied", "username", owner.name, "path", path, "reason", reason, "client_ip", getClientIP(r))
+			s.logger.Info("Access denied", "username", username, "path", path, "reason", reason, "client_ip", getClientIP(r))
 			http.Error(w, "Access denied: "+reason, http.StatusUnauthorized)
 			return
 		}
 
-		s.logger.Info("Access granted", "username", owner.name, "path", path, "reason", reason, "client_ip", getClientIP(r))
+		s.logger.Info("Access granted", "username", username, "path", path, "reason", reason, "client_ip", getClientIP(r))
 	}
 
 	// Get or create channel
@@ -972,17 +956,15 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	authCache := NewAuthCache(forgejoURL, forgejoToken, aclTTL, logger.WithGroup("auth"))
 
 	server := &server{
-		logger:          logger,
-		channels:        make(map[string]*patchChannel),
-		channelsMutex:   sync.RWMutex{},
-		reqResponses:    make(map[string]chan res),
-		reqResponsesMux: sync.RWMutex{},
-		ctx:             ctx,
-		forgejoURL:      forgejoURL,
-		forgejoToken:    forgejoToken,
-		aclTTL:          aclTTL,
-		secretKey:       secretKey,
-		authCache:       authCache,
+		logger:        logger,
+		channels:      make(map[string]*patchChannel),
+		channelsMutex: sync.RWMutex{},
+		ctx:           ctx,
+		forgejoURL:    forgejoURL,
+		forgejoToken:  forgejoToken,
+		aclTTL:        aclTTL,
+		secretKey:     secretKey,
+		authCache:     authCache,
 	}
 
 	router := mux.NewRouter()
