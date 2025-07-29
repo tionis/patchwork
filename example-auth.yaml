@@ -1,0 +1,27 @@
+# Example auth.yaml structure for user repositories
+# This file should be stored in .patchwork/auth.yaml in each user's repository
+
+tokens:
+  # Regular access tokens for patchwork channels
+  "user_token_123": 
+    is_admin: false
+    permissions: ["read", "write"]
+    expires_at: 2025-12-31T23:59:59Z
+  
+  # Admin token with elevated privileges
+  "admin_token_456":
+    is_admin: true
+    permissions: ["read", "write", "admin"]
+    # No expiration date means token doesn't expire
+
+huproxy:
+  # HuProxy tokens for SSH/TCP tunneling
+  "huproxy_token_789":
+    is_admin: false
+    permissions: ["tunnel"]
+    expires_at: 2026-01-31T23:59:59Z
+  
+  # Admin huproxy token
+  "huproxy_admin_abc":
+    is_admin: true
+    permissions: ["tunnel", "admin"]

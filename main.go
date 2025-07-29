@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"github.com/dusted-go/logging/prettylog"
 	"github.com/gorilla/mux"
 	"github.com/urfave/cli/v2"
+	"gopkg.in/yaml.v3"
 )
 
 //go:embed assets/*
@@ -67,14 +69,40 @@ type server struct {
 	reqResponsesMux sync.RWMutex
 	ctx             context.Context
 	forgejoURL      string
+	forgejoToken    string
 	aclTTL          time.Duration
 	secretKey       []byte
+	aclCache        *ACLCache
 }
 
 // Configuration template data for rendering index.html
 type ConfigData struct {
 	ForgejoURL string
 	ACLTTL     time.Duration
+}
+
+// TokenInfo represents information about a token from auth.yaml
+type TokenInfo struct {
+	IsAdmin     bool     `yaml:"is_admin"`
+	Permissions []string `yaml:"permissions"`
+	ExpiresAt   *time.Time `yaml:"expires_at,omitempty"`
+}
+
+// UserACL represents the ACL configuration for a user
+type UserACL struct {
+	Tokens    map[string]TokenInfo `yaml:"tokens"`
+	HuProxy   map[string]TokenInfo `yaml:"huproxy"`
+	UpdatedAt time.Time            `yaml:"-"`
+}
+
+// ACLCache represents cached ACL data with expiration
+type ACLCache struct {
+	data      map[string]*UserACL
+	mutex     sync.RWMutex
+	ttl       time.Duration
+	forgejoURL string
+	forgejoToken string
+	logger    *slog.Logger
 }
 
 // getClientIP extracts the real client IP from reverse proxy headers
@@ -129,11 +157,36 @@ func (s *server) statusHandler(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "OK!\n")
 }
 
-// authenticateToken provides authentication for tokens (placeholder implementation)
-func (s *server) authenticateToken(owner *owner, token, path, reqType string, isWriteOp bool, clientIP net.IP) (bool, string, error) {
-	// For now, just allow all requests
-	// In a real implementation, this would validate tokens against ACLs
-	return true, "allowed", nil
+// authenticateToken provides authentication for tokens using ACL cache
+func (s *server) authenticateToken(owner *owner, token, path, reqType string, isHuProxy bool, clientIP net.IP) (bool, string, error) {
+	if owner == nil {
+		// Public namespace, no authentication required
+		return true, "public", nil
+	}
+	
+	if token == "" {
+		return false, "no token provided", nil
+	}
+	
+	// Use ACL cache to validate token
+	valid, tokenInfo, err := s.aclCache.validateToken(owner.name, token, reqType, isHuProxy)
+	if err != nil {
+		s.logger.Error("Token validation error", "username", owner.name, "error", err, "is_huproxy", isHuProxy)
+		return false, "validation error", err
+	}
+	
+	if !valid {
+		return false, "invalid token", nil
+	}
+	
+	s.logger.Info("Token authenticated", 
+		"username", owner.name, 
+		"path", path, 
+		"is_admin", tokenInfo.IsAdmin,
+		"is_huproxy", isHuProxy,
+		"client_ip", clientIP.String())
+	
+	return true, "authenticated", nil
 }
 
 // generateUUID generates a simple UUID-like string using crypto/rand
@@ -147,16 +200,146 @@ func generateUUID() (string, error) {
 }
 
 // computeSecret generates an HMAC-SHA256 secret for a given channel
-func (s *server) computeSecret(channel string) string {
+func (s *server) computeSecret(namespace, channel string) string {
 	h := hmac.New(sha256.New, s.secretKey)
-	h.Write([]byte(channel))
+	h.Write([]byte(fmt.Sprintf("%s:%s", namespace, channel)))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
 // verifySecret verifies if the provided secret matches the expected secret for a channel
-func (s *server) verifySecret(channel, providedSecret string) bool {
-	expectedSecret := s.computeSecret(channel)
+func (s *server) verifySecret(namespace, channel, providedSecret string) bool {
+	expectedSecret := s.computeSecret(namespace, channel)
 	return hmac.Equal([]byte(expectedSecret), []byte(providedSecret))
+}
+
+// NewACLCache creates a new ACL cache instance
+func NewACLCache(forgejoURL, forgejoToken string, ttl time.Duration, logger *slog.Logger) *ACLCache {
+	return &ACLCache{
+		data:         make(map[string]*UserACL),
+		mutex:        sync.RWMutex{},
+		ttl:          ttl,
+		forgejoURL:   forgejoURL,
+		forgejoToken: forgejoToken,
+		logger:       logger,
+	}
+}
+
+// fetchUserACL fetches ACL data from Forgejo for a specific user
+func (cache *ACLCache) fetchUserACL(username string) (*UserACL, error) {
+	// Construct the API URL for the auth.yaml file
+	apiURL := fmt.Sprintf("%s/api/v1/repos/%s/.patchwork/media/auth.yaml", cache.forgejoURL, url.QueryEscape(username))
+	
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("Authorization", "token "+cache.forgejoToken)
+	
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch ACL: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode == http.StatusNotFound {
+		// Return empty ACL if file doesn't exist
+		return &UserACL{
+			Tokens:    make(map[string]TokenInfo),
+			HuProxy:   make(map[string]TokenInfo),
+			UpdatedAt: time.Now(),
+		}, nil
+	}
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	
+	var acl UserACL
+	if err := yaml.Unmarshal(body, &acl); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	}
+	
+	acl.UpdatedAt = time.Now()
+	cache.logger.Info("Fetched ACL from Forgejo", "username", username, "tokens", len(acl.Tokens), "huproxy", len(acl.HuProxy))
+	
+	return &acl, nil
+}
+
+// GetUserACL retrieves ACL data for a user, using cache if available and not expired
+func (cache *ACLCache) GetUserACL(username string) (*UserACL, error) {
+	cache.mutex.RLock()
+	acl, exists := cache.data[username]
+	cache.mutex.RUnlock()
+	
+	// Check if cached data is still valid
+	if exists && time.Since(acl.UpdatedAt) < cache.ttl {
+		return acl, nil
+	}
+	
+	// Fetch fresh data
+	freshACL, err := cache.fetchUserACL(username)
+	if err != nil {
+		cache.logger.Error("Failed to fetch ACL", "username", username, "error", err)
+		// Return cached data if available, even if expired
+		if exists {
+			cache.logger.Warn("Using expired ACL data", "username", username)
+			return acl, nil
+		}
+		return nil, err
+	}
+	
+	// Update cache
+	cache.mutex.Lock()
+	cache.data[username] = freshACL
+	cache.mutex.Unlock()
+	
+	return freshACL, nil
+}
+
+// InvalidateUser removes a user's ACL data from the cache
+func (cache *ACLCache) InvalidateUser(username string) {
+	cache.mutex.Lock()
+	delete(cache.data, username)
+	cache.mutex.Unlock()
+	cache.logger.Info("Invalidated ACL cache", "username", username)
+}
+
+// validateToken checks if a token is valid for a user and operation
+func (cache *ACLCache) validateToken(username, token, operation string, isHuProxy bool) (bool, *TokenInfo, error) {
+	acl, err := cache.GetUserACL(username)
+	if err != nil {
+		return false, nil, err
+	}
+	
+	var tokenMap map[string]TokenInfo
+	if isHuProxy {
+		tokenMap = acl.HuProxy
+	} else {
+		tokenMap = acl.Tokens
+	}
+	
+	tokenInfo, exists := tokenMap[token]
+	if !exists {
+		return false, nil, nil
+	}
+	
+	// Check if token is expired
+	if tokenInfo.ExpiresAt != nil && time.Now().After(*tokenInfo.ExpiresAt) {
+		return false, nil, nil
+	}
+	
+	// Check permissions (for now, we'll implement a simple allow-all for valid tokens)
+	// In the future, this could check specific permissions against the operation
+	
+	return true, &tokenInfo, nil
 }
 
 // HookResponse represents the response structure for hook endpoint requests
@@ -182,6 +365,60 @@ func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
 	s.handlePatch(w, r, "u/"+username, &owner{name: username, typ: 1}, path)
 }
 
+func (s *server) userAdminHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	username := vars["username"]
+	adminPath := vars["adminPath"]
+	
+	s.logRequest(r, "User administrative namespace access")
+	s.logger.Info("User admin namespace details", "username", username, "admin_path", adminPath)
+	
+	// Get Authorization header
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		s.logger.Info("Admin access denied - no authorization header", "username", username, "admin_path", adminPath)
+		http.Error(w, "Authorization required", http.StatusUnauthorized)
+		return
+	}
+	
+	// Extract token from Authorization header (expecting "Bearer <token>" or "token <token>")
+	var token string
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	} else if strings.HasPrefix(authHeader, "token ") {
+		token = strings.TrimPrefix(authHeader, "token ")
+	} else {
+		token = authHeader // Direct token
+	}
+	
+	// Validate token and check admin status
+	valid, tokenInfo, err := s.aclCache.validateToken(username, token, "admin", false)
+	if err != nil {
+		s.logger.Error("Admin token validation error", "username", username, "error", err)
+		http.Error(w, "Token validation error", http.StatusInternalServerError)
+		return
+	}
+	
+	if !valid || !tokenInfo.IsAdmin {
+		s.logger.Info("Admin access denied - invalid or non-admin token", "username", username, "admin_path", adminPath)
+		http.Error(w, "Admin access denied", http.StatusForbidden)
+		return
+	}
+	
+	// Handle administrative endpoints
+	switch adminPath {
+	case "invalidate_cache":
+		s.aclCache.InvalidateUser(username)
+		s.logger.Info("Cache invalidated via admin endpoint", "username", username, "client_ip", getClientIP(r))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "cache invalidated"}`))
+		
+	default:
+		s.logger.Info("Unknown admin endpoint", "username", username, "admin_path", adminPath)
+		http.Error(w, "Unknown administrative endpoint", http.StatusNotFound)
+	}
+}
+
 func (s *server) forwardHookRootHandler(w http.ResponseWriter, r *http.Request) {
 	s.logRequest(r, "Forward hook root request")
 	if r.Method == "GET" {
@@ -194,7 +431,7 @@ func (s *server) forwardHookRootHandler(w http.ResponseWriter, r *http.Request) 
 		}
 
 		channel := uuid
-		secret := s.computeSecret(channel)
+		secret := s.computeSecret("h", channel)
 
 		s.logger.Info("Forward hook channel created",
 			"channel", channel,
@@ -232,7 +469,7 @@ func (s *server) forwardHookHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Verify the secret matches the channel
-		if !s.verifySecret(path, secret) {
+		if !s.verifySecret("h", path, secret) {
 			s.logger.Info("Forward hook POST denied - invalid secret", "channel", path, "client_ip", getClientIP(r))
 			http.Error(w, "Invalid secret", http.StatusUnauthorized)
 			return
@@ -256,7 +493,7 @@ func (s *server) reverseHookRootHandler(w http.ResponseWriter, r *http.Request) 
 		}
 
 		channel := uuid
-		secret := s.computeSecret(channel)
+		secret := s.computeSecret("r", channel)
 
 		s.logger.Info("Reverse hook channel created",
 			"channel", channel,
@@ -294,7 +531,7 @@ func (s *server) reverseHookHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Verify the secret matches the channel
-		if !s.verifySecret(path, secret) {
+		if !s.verifySecret("r", path, secret) {
 			s.logger.Info("Reverse hook GET denied - invalid secret", "channel", path, "client_ip", getClientIP(r))
 			http.Error(w, "Invalid secret", http.StatusUnauthorized)
 			return
@@ -322,6 +559,43 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 		"client_ip", getClientIP(r),
 		"content_length", r.ContentLength,
 		"pubsub", r.URL.Query().Get("pubsub"))
+
+	// Authenticate for user namespaces
+	if owner != nil {
+		// Get Authorization header or token from query parameter
+		token := r.Header.Get("Authorization")
+		if token == "" {
+			token = r.URL.Query().Get("token")
+		}
+		
+		// Handle different Authorization header formats
+		if strings.HasPrefix(token, "Bearer ") {
+			token = strings.TrimPrefix(token, "Bearer ")
+		} else if strings.HasPrefix(token, "token ") {
+			token = strings.TrimPrefix(token, "token ")
+		}
+		
+		clientIPParsed := net.ParseIP(getClientIP(r))
+		if clientIPParsed == nil {
+			// Fallback if IP parsing fails
+			clientIPParsed = net.IPv4(127, 0, 0, 1)
+		}
+		
+		allowed, reason, err := s.authenticateToken(owner, token, path, r.Method, false, clientIPParsed)
+		if err != nil {
+			s.logger.Error("Authentication error", "error", err, "username", owner.name, "path", path)
+			http.Error(w, "Authentication error", http.StatusInternalServerError)
+			return
+		}
+		
+		if !allowed {
+			s.logger.Info("Access denied", "username", owner.name, "path", path, "reason", reason, "client_ip", getClientIP(r))
+			http.Error(w, "Access denied: "+reason, http.StatusUnauthorized)
+			return
+		}
+		
+		s.logger.Info("Access granted", "username", owner.name, "path", path, "reason", reason, "client_ip", getClientIP(r))
+	}
 
 	// Get or create channel
 	s.channelsMutex.Lock()
@@ -639,6 +913,16 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		return nil
 	}
 
+	// Read Forgejo token for API access
+	forgejoToken := os.Getenv("FORGEJO_TOKEN")
+	if forgejoToken == "" {
+		logger.Error("No FORGEJO_TOKEN provided, aborting server start")
+		return nil
+	}
+
+	// Initialize ACL cache
+	aclCache := NewACLCache(forgejoURL, forgejoToken, aclTTL, logger.WithGroup("acl"))
+
 	server := &server{
 		logger:          logger,
 		channels:        make(map[string]*patchChannel),
@@ -647,8 +931,10 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		reqResponsesMux: sync.RWMutex{},
 		ctx:             ctx,
 		forgejoURL:      forgejoURL,
+		forgejoToken:    forgejoToken,
 		aclTTL:          aclTTL,
 		secretKey:       secretKey,
+		aclCache:        aclCache,
 	}
 
 	router := mux.NewRouter()
@@ -663,6 +949,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	router.HandleFunc("/apple-touch-icon.png", serveFile(logger, "assets/apple-touch-icon.png", "image/png"))
 	router.HandleFunc("/favicon-16x16.png", serveFile(logger, "assets/favicon-16x16.png", "image/png"))
 	router.HandleFunc("/favicon-32x32.png", serveFile(logger, "assets/favicon-32x32.png", "image/png"))
+	router.HandleFunc("/static/water.css", serveFile(logger, "assets/static/water.css", "text/css"))
 
 	router.HandleFunc("/static/{path:.*}", func(w http.ResponseWriter, r *http.Request) {
 		path := mux.Vars(r)["path"]
@@ -720,6 +1007,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	router.HandleFunc("/h/{path:.*}", server.forwardHookHandler)
 	router.HandleFunc("/r", server.reverseHookRootHandler)
 	router.HandleFunc("/r/{path:.*}", server.reverseHookHandler)
+	router.HandleFunc("/u/{username}/_/{adminPath:.*}", server.userAdminHandler)
 	router.HandleFunc("/u/{username}/{path:.*}", server.userHandler)
 
 	router.HandleFunc("/healthz", server.statusHandler)

@@ -4,6 +4,20 @@ A simple communication backend for scripts and other small applications.
 Patchwork enables IFTTT-type applications by providing infinite HTTP endpoints
 that serve as a multi-process, multi-consumer (MPMC) queue.
 
+## Features
+
+- **Channel-based Communication**: HTTP endpoints that act as communication channels
+- **Multiple Namespaces**: Public (`/p`), hooks (`/h`, `/r`), user (`/u/{username}`) namespaces
+- **WebSocket Tunneling**: SSH/TCP tunneling via HuProxy integration
+- **Token-based Authentication**: Forgejo-integrated ACL system with caching
+- **Administrative API**: Cache invalidation and user management endpoints
+
+## Authentication
+
+Patchwork uses a Forgejo-integrated authentication system. Each user maintains an `auth.yaml` file in their `.patchwork` repository to define access tokens and permissions.
+
+See [AUTHENTICATION.md](AUTHENTICATION.md) for detailed configuration and usage information.
+
 ## What does it do?
 
 Patchwork provi### SSH over WebSocket Tunneling (huproxy) Example
