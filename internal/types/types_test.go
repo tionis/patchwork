@@ -1,11 +1,25 @@
-package main
+package types
 
 import (
 	"testing"
 	"time"
 
+	sshUtil "github.com/tionis/ssh-tools/util"
 	"gopkg.in/yaml.v3"
 )
+
+// mustParsePatterns converts a slice of strings to a slice of sshUtil.Pattern for testing
+func mustParsePatterns(patterns []string) []*sshUtil.Pattern {
+	var result []*sshUtil.Pattern
+	for _, p := range patterns {
+		pattern, err := sshUtil.NewPattern(p)
+		if err != nil {
+			panic("failed to parse pattern in test: " + err.Error())
+		}
+		result = append(result, pattern)
+	}
+	return result
+}
 
 func TestTokenInfoYAMLMarshalUnmarshal(t *testing.T) {
 	// Create a TokenInfo with various patterns

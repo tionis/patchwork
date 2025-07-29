@@ -30,6 +30,8 @@ import (
 	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
+	
+	"github.com/tionis/patchwork/internal/huproxy"
 )
 
 //go:embed assets/*
@@ -59,6 +61,19 @@ type server struct {
 	aclTTL        time.Duration
 	secretKey     []byte
 	authCache     *AuthCache
+}
+
+// AuthenticateToken implements the ServerInterface for huproxy
+func (s *server) AuthenticateToken(username string, token, path, reqType string, isHuProxy bool, clientIP net.IP) (bool, string, error) {
+	return s.authenticateToken(username, token, path, reqType, isHuProxy, clientIP)
+}
+
+// GetLogger implements the ServerInterface for huproxy  
+func (s *server) GetLogger() interface{ 
+	Info(msg string, args ...interface{})
+	Error(msg string, args ...interface{})
+} {
+	return s.logger
 }
 
 // Configuration template data for rendering index.html
@@ -1177,7 +1192,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		}
 	})
 
-	router.HandleFunc("/huproxy/{user}/{host}/{port}", server.huproxyHandler)
+	router.HandleFunc("/huproxy/{user}/{host}/{port}", huproxy.HuproxyHandler(server))
 	router.HandleFunc("/p/{path:.*}", server.publicHandler)
 	router.HandleFunc("/h", server.forwardHookRootHandler)
 	router.HandleFunc("/h/{path:.*}", server.forwardHookHandler)
