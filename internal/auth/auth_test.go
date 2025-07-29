@@ -1,7 +1,12 @@
 package auth
 
 import (
+	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -249,5 +254,425 @@ func TestValidateToken(t *testing.T) {
 				t.Errorf("Expected %v, got %v for %s", tt.expected, valid, tt.name)
 			}
 		})
+	}
+}
+
+// TestAuthenticateToken tests the main authentication function
+func TestAuthenticateToken(t *testing.T) {
+	logger := slog.Default()
+
+	// Create test auth cache - use a mock server to avoid real network calls
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound) // Default to not found
+	}))
+	defer mockServer.Close()
+
+	cache := NewAuthCache(mockServer.URL, "test-token", 5*time.Minute, logger)
+	
+	// Add test user auth data directly to cache to avoid network calls
+	testUserAuth := &types.UserAuth{
+		Tokens: map[string]types.TokenInfo{
+			"valid-token": {
+				IsAdmin: false,
+				GET:     mustParsePatterns([]string{"*"}),
+				POST:    mustParsePatterns([]string{"/api/*"}),
+			},
+			"admin-token": {
+				IsAdmin: true,
+				GET:     mustParsePatterns([]string{"*"}),
+				POST:    mustParsePatterns([]string{"*"}),
+				PUT:     mustParsePatterns([]string{"*"}),
+				DELETE:  mustParsePatterns([]string{"*"}),
+			},
+		},
+		UpdatedAt: time.Now(),
+	}
+	cache.Data["testuser"] = testUserAuth
+
+	tests := []struct {
+		name        string
+		username    string
+		token       string
+		path        string
+		reqType     string
+		isHuProxy   bool
+		clientIP    net.IP
+		expectValid bool
+		expectReason string
+	}{
+		{
+			name:         "Public namespace - no authentication required",
+			username:     "",
+			token:        "",
+			path:         "/test",
+			reqType:      "GET",
+			isHuProxy:    false,
+			clientIP:     net.ParseIP("192.168.1.1"),
+			expectValid:  true,
+			expectReason: "public",
+		},
+		{
+			name:         "Valid token for GET request",
+			username:     "testuser",
+			token:        "valid-token",
+			path:         "/test",
+			reqType:      "GET",
+			isHuProxy:    false,
+			clientIP:     net.ParseIP("192.168.1.1"),
+			expectValid:  true,
+			expectReason: "authenticated",
+		},
+		{
+			name:         "Valid token for POST to allowed path",
+			username:     "testuser",
+			token:        "valid-token",
+			path:         "/api/test",
+			reqType:      "POST",
+			isHuProxy:    false,
+			clientIP:     net.ParseIP("192.168.1.1"),
+			expectValid:  true,
+			expectReason: "authenticated",
+		},
+		{
+			name:         "Valid token for POST to disallowed path",
+			username:     "testuser",
+			token:        "valid-token",
+			path:         "/data/test",
+			reqType:      "POST",
+			isHuProxy:    false,
+			clientIP:     net.ParseIP("192.168.1.1"),
+			expectValid:  false,
+			expectReason: "invalid token",
+		},
+		{
+			name:         "Admin token has access to everything",
+			username:     "testuser",
+			token:        "admin-token",
+			path:         "/any/path",
+			reqType:      "DELETE",
+			isHuProxy:    false,
+			clientIP:     net.ParseIP("192.168.1.1"),
+			expectValid:  true,
+			expectReason: "authenticated",
+		},
+		{
+			name:         "No token provided",
+			username:     "testuser",
+			token:        "",
+			path:         "/test",
+			reqType:      "GET",
+			isHuProxy:    false,
+			clientIP:     net.ParseIP("192.168.1.1"),
+			expectValid:  false,
+			expectReason: "no token provided",
+		},
+		{
+			name:         "Invalid token",
+			username:     "testuser",
+			token:        "invalid-token",
+			path:         "/test",
+			reqType:      "GET",
+			isHuProxy:    false,
+			clientIP:     net.ParseIP("192.168.1.1"),
+			expectValid:  false,
+			expectReason: "invalid token",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			valid, reason, err := AuthenticateToken(cache, tt.username, tt.token, tt.path, tt.reqType, tt.isHuProxy, tt.clientIP, logger)
+			
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			
+			if valid != tt.expectValid {
+				t.Errorf("Expected valid=%v, got %v", tt.expectValid, valid)
+			}
+			
+			if reason != tt.expectReason {
+				t.Errorf("Expected reason=%q, got %q", tt.expectReason, reason)
+			}
+		})
+	}
+}
+
+// TestAuthenticateTokenUserNotFound tests handling of users not in cache
+func TestAuthenticateTokenUserNotFound(t *testing.T) {
+	logger := slog.Default()
+
+	// Create mock server that returns 404 for auth file
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer mockServer.Close()
+
+	cache := NewAuthCache(mockServer.URL, "test-token", 5*time.Minute, logger)
+
+	// Test with user that doesn't exist - should fetch from server and return empty auth
+	valid, reason, err := AuthenticateToken(cache, "nonexistent", "some-token", "/test", "GET", false, net.ParseIP("192.168.1.1"), logger)
+	
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	
+	if valid {
+		t.Errorf("Expected authentication to fail for nonexistent user")
+	}
+	
+	if reason != "invalid token" {
+		t.Errorf("Expected reason 'invalid token', got '%s'", reason)
+	}
+}
+
+// TestFetchUserAuthWithMockServer tests the FetchUserAuth function with a mock Forgejo server
+func TestFetchUserAuthWithMockServer(t *testing.T) {
+	logger := slog.Default()
+
+	// Test cases for different server responses
+	tests := []struct {
+		name           string
+		username       string
+		serverResponse string
+		statusCode     int
+		expectError    bool
+		expectTokens   int
+	}{
+		{
+			name:     "Valid auth file",
+			username: "testuser",
+			serverResponse: `tokens:
+  valid-token:
+    is_admin: false
+    GET:
+      - "*"
+    POST:
+      - "/api/*"
+  admin-token:
+    is_admin: true
+    GET:
+      - "*"
+    POST:
+      - "*"`,
+			statusCode:   http.StatusOK,
+			expectError:  false,
+			expectTokens: 2,
+		},
+		{
+			name:           "Auth file not found",
+			username:       "noauth",
+			serverResponse: "",
+			statusCode:     http.StatusNotFound,
+			expectError:    false,
+			expectTokens:   0,
+		},
+		{
+			name:           "Server error",
+			username:       "error",
+			serverResponse: "Internal Server Error",
+			statusCode:     http.StatusInternalServerError,
+			expectError:    true,
+			expectTokens:   0,
+		},
+		{
+			name:     "Invalid YAML",
+			username: "invalid",
+			serverResponse: `tokens:
+  invalid-token:
+    invalid yaml: [`,
+			statusCode:  http.StatusOK,
+			expectError: true,
+			expectTokens: 0,
+		},
+		{
+			name:     "Empty auth file",
+			username: "empty",
+			serverResponse: `tokens: {}`,
+			statusCode:   http.StatusOK,
+			expectError:  false,
+			expectTokens: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create mock server
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Verify the request
+				expectedPath := fmt.Sprintf("/api/v1/repos/%s/.patchwork/media/auth.yaml", tt.username)
+				if r.URL.Path != expectedPath {
+					t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
+				}
+
+				// Check authorization header
+				auth := r.Header.Get("Authorization")
+				if auth != "token test-token" {
+					t.Errorf("Expected Authorization 'token test-token', got '%s'", auth)
+				}
+
+				// Check accept header
+				accept := r.Header.Get("Accept")
+				if accept != "application/octet-stream" {
+					t.Errorf("Expected Accept 'application/octet-stream', got '%s'", accept)
+				}
+
+				w.WriteHeader(tt.statusCode)
+				w.Write([]byte(tt.serverResponse))
+			}))
+			defer server.Close()
+
+			// Create auth cache with mock server URL
+			cache := NewAuthCache(server.URL, "test-token", 5*time.Minute, logger)
+
+			// Test FetchUserAuth
+			userAuth, err := FetchUserAuth(cache, tt.username)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+
+				if userAuth == nil {
+					t.Fatal("Expected userAuth, got nil")
+				}
+
+				if len(userAuth.Tokens) != tt.expectTokens {
+					t.Errorf("Expected %d tokens, got %d", tt.expectTokens, len(userAuth.Tokens))
+				}
+			}
+		})
+	}
+}
+
+// TestGetUserAuthWithCaching tests the GetUserAuth function with caching logic
+func TestGetUserAuthWithCaching(t *testing.T) {
+	logger := slog.Default()
+
+	// Create mock server that counts requests
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`tokens:
+  test-token:
+    is_admin: false
+    GET:
+      - "*"`))
+	}))
+	defer server.Close()
+
+	cache := NewAuthCache(server.URL, "test-token", 1*time.Second, logger)
+
+	// First request should fetch from server
+	userAuth1, err := GetUserAuth(cache, "testuser")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if userAuth1 == nil {
+		t.Fatal("Expected userAuth, got nil")
+	}
+	if requestCount != 1 {
+		t.Errorf("Expected 1 request, got %d", requestCount)
+	}
+
+	// Second request should use cache
+	userAuth2, err := GetUserAuth(cache, "testuser")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if userAuth2 == nil {
+		t.Fatal("Expected userAuth, got nil")
+	}
+	if requestCount != 1 {
+		t.Errorf("Expected still 1 request (cached), got %d", requestCount)
+	}
+
+	// Wait for cache to expire
+	time.Sleep(1100 * time.Millisecond)
+
+	// Third request should fetch from server again
+	userAuth3, err := GetUserAuth(cache, "testuser")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if userAuth3 == nil {
+		t.Fatal("Expected userAuth, got nil")
+	}
+	if requestCount != 2 {
+		t.Errorf("Expected 2 requests (cache expired), got %d", requestCount)
+	}
+}
+
+// TestGetUserAuthNetworkError tests network failure scenarios
+func TestGetUserAuthNetworkError(t *testing.T) {
+	logger := slog.Default()
+
+	// Create cache with invalid URL to simulate network error
+	cache := NewAuthCache("http://invalid-url-that-does-not-exist.local", "test-token", 5*time.Minute, logger)
+
+	userAuth, err := GetUserAuth(cache, "testuser")
+	
+	// Should return error for network failure
+	if err == nil {
+		t.Error("Expected network error, got nil")
+	}
+	
+	if userAuth != nil {
+		t.Error("Expected nil userAuth on network error")
+	}
+
+	// Error message should contain network-related information
+	if err != nil && !strings.Contains(err.Error(), "failed to fetch auth") {
+		t.Errorf("Expected network error message, got: %v", err)
+	}
+}
+
+// TestAuthenticateTokenWithExpiredCache tests authentication with expired cache
+func TestAuthenticateTokenWithExpiredCache(t *testing.T) {
+	logger := slog.Default()
+
+	// Create mock server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`tokens:
+  fresh-token:
+    is_admin: false
+    GET:
+      - "*"`))
+	}))
+	defer server.Close()
+
+	cache := NewAuthCache(server.URL, "test-token", 100*time.Millisecond, logger)
+
+	// Add expired data to cache
+	expiredAuth := &types.UserAuth{
+		Tokens: map[string]types.TokenInfo{
+			"old-token": {
+				IsAdmin: false,
+				GET:     mustParsePatterns([]string{"*"}),
+			},
+		},
+		UpdatedAt: time.Now().Add(-1 * time.Hour), // Very old
+	}
+	cache.Data["testuser"] = expiredAuth
+
+	// Authentication should fetch fresh data and succeed with new token
+	valid, reason, err := AuthenticateToken(cache, "testuser", "fresh-token", "/test", "GET", false, net.ParseIP("192.168.1.1"), logger)
+	
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	
+	if !valid {
+		t.Errorf("Expected authentication to succeed with fresh token, got valid=%v, reason=%s", valid, reason)
+	}
+	
+	if reason != "authenticated" {
+		t.Errorf("Expected reason 'authenticated', got '%s'", reason)
 	}
 }
