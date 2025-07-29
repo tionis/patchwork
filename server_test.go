@@ -19,10 +19,10 @@ import (
 func createTestServer() *server {
 	logger := slog.Default()
 	secretKey := []byte("test-secret-key-for-testing-purposes")
-	
+
 	// Create a real AuthCache but we'll replace it with mock data
 	authCache := NewAuthCache("https://test.forgejo.dev", "test-token", 5*time.Minute, logger)
-	
+
 	// Override the cache data with test data to avoid actual HTTP requests
 	// Set UpdatedAt to current time to ensure cache doesn't expire during tests
 	testUserAuth := &UserAuth{
@@ -51,20 +51,20 @@ func createTestServer() *server {
 		},
 		UpdatedAt: time.Now(), // Ensure this is very recent
 	}
-	
+
 	authCache.data = map[string]*UserAuth{
 		"testuser": testUserAuth,
 	}
-	
+
 	return &server{
-		logger:        logger,
-		channels:      make(map[string]*patchChannel),
-		ctx:           context.Background(),
-		forgejoURL:    "https://test.forgejo.dev",
-		forgejoToken:  "test-token",
-		aclTTL:        5 * time.Minute,
-		secretKey:     secretKey,
-		authCache:     authCache,
+		logger:       logger,
+		channels:     make(map[string]*patchChannel),
+		ctx:          context.Background(),
+		forgejoURL:   "https://test.forgejo.dev",
+		forgejoToken: "test-token",
+		aclTTL:       5 * time.Minute,
+		secretKey:    secretKey,
+		authCache:    authCache,
 	}
 }
 
@@ -77,12 +77,12 @@ func TestPublicNamespaceAccess(t *testing.T) {
 	// Test POST request to public namespace (should succeed without hanging)
 	req := httptest.NewRequest("POST", "/p/test-channel", strings.NewReader("test data"))
 	req.Header.Set("Content-Type", "text/plain")
-	
+
 	// Use a context with timeout to prevent hanging
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	req = req.WithContext(ctx)
-	
+
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -155,12 +155,12 @@ func TestUserNamespaceAuthentication(t *testing.T) {
 			if tt.token != "" {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
-			
+
 			// Add timeout to prevent hanging
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
 			req = req.WithContext(ctx)
-			
+
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -211,7 +211,7 @@ func TestAdminEndpoints(t *testing.T) {
 			server := createTestServer()
 			router := mux.NewRouter()
 			router.HandleFunc("/u/{username}/_/{adminPath:.*}", server.userAdminHandler)
-			
+
 			req := httptest.NewRequest("POST", tt.path, nil)
 			if tt.token != "" {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
@@ -288,12 +288,12 @@ func TestHookEndpoints(t *testing.T) {
 		// Now POST to the channel with the secret
 		postURL := fmt.Sprintf("/h/%s?secret=%s", response.Channel, response.Secret)
 		req = httptest.NewRequest("POST", postURL, strings.NewReader("test data"))
-		
+
 		// Add timeout to prevent hanging
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 		req = req.WithContext(ctx)
-		
+
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -325,63 +325,63 @@ func TestChannelCommunication(t *testing.T) {
 func TestAuthenticationOnly(t *testing.T) {
 	server := createTestServer()
 	clientIP := net.ParseIP("192.168.1.1")
-	
+
 	tests := []struct {
-		name     string
-		username string
-		token    string
-		path     string
-		method   string
+		name      string
+		username  string
+		token     string
+		path      string
+		method    string
 		isHuProxy bool
-		expected bool
+		expected  bool
 	}{
 		{
-			name:     "Valid GET token",
-			username: "testuser", 
-			token:    "valid-token",
-			path:     "/test",
-			method:   "GET",
+			name:      "Valid GET token",
+			username:  "testuser",
+			token:     "valid-token",
+			path:      "/test",
+			method:    "GET",
 			isHuProxy: false,
-			expected: true,
+			expected:  true,
 		},
 		{
-			name:     "Valid POST token",
-			username: "testuser",
-			token:    "valid-token", 
-			path:     "/api/test",
-			method:   "POST",
+			name:      "Valid POST token",
+			username:  "testuser",
+			token:     "valid-token",
+			path:      "/api/test",
+			method:    "POST",
 			isHuProxy: false,
-			expected: true,
+			expected:  true,
 		},
 		{
-			name:     "Invalid token",
-			username: "testuser",
-			token:    "invalid-token",
-			path:     "/test", 
-			method:   "GET",
+			name:      "Invalid token",
+			username:  "testuser",
+			token:     "invalid-token",
+			path:      "/test",
+			method:    "GET",
 			isHuProxy: false,
-			expected: false,
+			expected:  false,
 		},
 		{
-			name:     "Valid HuProxy token",
-			username: "testuser",
-			token:    "huproxy-token",
-			path:     "localhost:8080",
-			method:   "CONNECT",
+			name:      "Valid HuProxy token",
+			username:  "testuser",
+			token:     "huproxy-token",
+			path:      "localhost:8080",
+			method:    "CONNECT",
 			isHuProxy: true,
-			expected: true,
+			expected:  true,
 		},
 		{
-			name:     "Admin token",
-			username: "testuser",
-			token:    "admin-token", 
-			path:     "/admin",
-			method:   "ADMIN",
+			name:      "Admin token",
+			username:  "testuser",
+			token:     "admin-token",
+			path:      "/admin",
+			method:    "ADMIN",
 			isHuProxy: false,
-			expected: true,
+			expected:  true,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			allowed, _, err := server.authenticateToken(tt.username, tt.token, tt.path, tt.method, tt.isHuProxy, clientIP)
@@ -445,7 +445,7 @@ func TestAuthenticationHelpers(t *testing.T) {
 
 	// Test token authentication
 	clientIP := net.ParseIP("192.168.1.1")
-	
+
 	// Valid token
 	allowed, reason, err := server.authenticateToken("testuser", "valid-token", "/test", "GET", false, clientIP)
 	if err != nil {

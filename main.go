@@ -317,17 +317,17 @@ func (cache *AuthCache) validateToken(username, token, method, path string, isHu
 	if err != nil {
 		return false, nil, err
 	}
-	
+
 	tokenInfo, exists := auth.Tokens[token]
 	if !exists {
 		return false, nil, nil
 	}
-	
+
 	// Check if token is expired
 	if tokenInfo.ExpiresAt != nil && time.Now().After(*tokenInfo.ExpiresAt) {
 		return false, nil, nil
 	}
-	
+
 	// For HuProxy requests, check if token has huproxy permissions
 	if isHuProxy {
 		if len(tokenInfo.HuProxy) == 0 {
@@ -335,7 +335,7 @@ func (cache *AuthCache) validateToken(username, token, method, path string, isHu
 		}
 		return cache.checkGlobPatterns(tokenInfo.HuProxy, path), &tokenInfo, nil
 	}
-	
+
 	// For regular HTTP requests, check method-specific permissions
 	var patterns []string
 	switch strings.ToUpper(method) {
@@ -361,7 +361,7 @@ func (cache *AuthCache) validateToken(username, token, method, path string, isHu
 	}
 
 	return cache.checkGlobPatterns(patterns, path), &tokenInfo, nil
-}// checkGlobPatterns is a placeholder for OpenSSH-style glob pattern matching
+} // checkGlobPatterns is a placeholder for OpenSSH-style glob pattern matching
 // TODO: Implement proper glob pattern matching following OpenSSH pattern rules
 func (cache *AuthCache) checkGlobPatterns(patterns []string, target string) bool {
 	for _, pattern := range patterns {
@@ -373,7 +373,7 @@ func (cache *AuthCache) checkGlobPatterns(patterns []string, target string) bool
 		if pattern == target {
 			return true
 		}
-		// Basic wildcard matching for paths like "/api/*" 
+		// Basic wildcard matching for paths like "/api/*"
 		if strings.HasSuffix(pattern, "*") {
 			prefix := strings.TrimSuffix(pattern, "*")
 			if strings.HasPrefix(target, prefix) {
