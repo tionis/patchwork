@@ -88,19 +88,19 @@ func getClientIP(r *http.Request) string {
 		}
 		return strings.TrimSpace(xff)
 	}
-	
+
 	// Check X-Real-IP header (nginx)
 	xri := r.Header.Get("X-Real-IP")
 	if xri != "" {
 		return strings.TrimSpace(xri)
 	}
-	
+
 	// Check CF-Connecting-IP header (Cloudflare)
 	cfip := r.Header.Get("CF-Connecting-IP")
 	if cfip != "" {
 		return strings.TrimSpace(cfip)
 	}
-	
+
 	// Fall back to RemoteAddr
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -112,7 +112,7 @@ func getClientIP(r *http.Request) string {
 // logRequest logs HTTP request details at info level
 func (s *server) logRequest(r *http.Request, message string) {
 	clientIP := getClientIP(r)
-	s.logger.Info(message, 
+	s.logger.Info(message,
 		"method", r.Method,
 		"path", r.URL.Path,
 		"query", r.URL.RawQuery,
@@ -196,8 +196,8 @@ func (s *server) forwardHookRootHandler(w http.ResponseWriter, r *http.Request) 
 		channel := uuid
 		secret := s.computeSecret(channel)
 
-		s.logger.Info("Forward hook channel created", 
-			"channel", channel, 
+		s.logger.Info("Forward hook channel created",
+			"channel", channel,
 			"client_ip", getClientIP(r))
 
 		response := HookResponse{
@@ -237,7 +237,7 @@ func (s *server) forwardHookHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid secret", http.StatusUnauthorized)
 			return
 		}
-		
+
 		s.logger.Info("Forward hook POST authorized", "channel", path, "client_ip", getClientIP(r))
 	}
 
@@ -258,8 +258,8 @@ func (s *server) reverseHookRootHandler(w http.ResponseWriter, r *http.Request) 
 		channel := uuid
 		secret := s.computeSecret(channel)
 
-		s.logger.Info("Reverse hook channel created", 
-			"channel", channel, 
+		s.logger.Info("Reverse hook channel created",
+			"channel", channel,
 			"client_ip", getClientIP(r))
 
 		response := HookResponse{
@@ -299,7 +299,7 @@ func (s *server) reverseHookHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid secret", http.StatusUnauthorized)
 			return
 		}
-		
+
 		s.logger.Info("Reverse hook GET authorized", "channel", path, "client_ip", getClientIP(r))
 	} else if r.Method == "POST" {
 		s.logger.Info("Reverse hook POST access", "channel", path, "client_ip", getClientIP(r))
@@ -314,7 +314,7 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 	path = "/" + strings.TrimPrefix(path, "/")
 	channelPath := namespace + path
 
-	s.logger.Info("Channel access", 
+	s.logger.Info("Channel access",
 		"namespace", namespace,
 		"path", path,
 		"channel_path", channelPath,
@@ -352,8 +352,8 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 		s.logger.Info("Waiting for data on channel", "channel_path", channelPath, "client_ip", getClientIP(r))
 		select {
 		case stream := <-channel.data:
-			s.logger.Info("Delivering data to consumer", 
-				"channel_path", channelPath, 
+			s.logger.Info("Delivering data to consumer",
+				"channel_path", channelPath,
 				"client_ip", getClientIP(r),
 				"content_type", stream.headers["Content-Type"])
 
@@ -373,19 +373,19 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 			}
 
 		case <-r.Context().Done():
-			s.logger.Info("Consumer request canceled", 
-				"channel_path", channelPath, 
+			s.logger.Info("Consumer request canceled",
+				"channel_path", channelPath,
 				"client_ip", getClientIP(r))
 		}
 
 	case "POST", "PUT":
 		// Producer: send data
-		s.logger.Info("Producing data to channel", 
-			"channel_path", channelPath, 
+		s.logger.Info("Producing data to channel",
+			"channel_path", channelPath,
 			"client_ip", getClientIP(r),
 			"content_type", r.Header.Get("Content-Type"),
 			"pubsub", pubsub)
-		
+
 		var buf []byte
 		var err error
 
@@ -488,8 +488,7 @@ func main() {
 				},
 				Action: func(c *cli.Context) error {
 					port := c.Int("port")
-					startServer(port)
-					return nil
+					return startServer(port)
 				},
 			},
 		},
@@ -500,7 +499,7 @@ func main() {
 	}
 }
 
-func startServer(port int) {
+func startServer(port int) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -535,6 +534,10 @@ func startServer(port int) {
 	signal.Notify(c, os.Interrupt)
 
 	srv := getHTTPServer(logger.WithGroup("http"), ctx, port)
+	if srv == nil {
+		logger.Error("Failed to create HTTP server, aborting")
+		return errors.New("failed to create HTTP server")
+	}
 	go func() {
 		err := srv.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -564,6 +567,7 @@ func startServer(port int) {
 	logger.Info("Starting shutdown of remaining contexts")
 	<-ctx.Done()
 	logger.Info("Patchwork stopped")
+	return nil
 }
 
 func serveFile(logger *slog.Logger, path string, contentType string) http.HandlerFunc {
@@ -575,7 +579,7 @@ func serveFile(logger *slog.Logger, path string, contentType string) http.Handle
 			"file_path", path,
 			"client_ip", clientIP,
 			"user_agent", r.Header.Get("User-Agent"))
-			
+
 		p, err := assets.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -593,8 +597,8 @@ func serveFile(logger *slog.Logger, path string, contentType string) http.Handle
 			logger.Error("Error writing file", "error", err, "file_path", path)
 			return
 		}
-		logger.Info("Static file served successfully", 
-			"file_path", path, 
+		logger.Info("Static file served successfully",
+			"file_path", path,
 			"client_ip", clientIP,
 			"content_type", contentType,
 			"size_bytes", len(p))
@@ -617,7 +621,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	// Read configuration from environment variables
 	forgejoURL := os.Getenv("FORGEJO_URL")
 	if forgejoURL == "" {
-		forgejoURL = "https://git.example.com" // default value
+		forgejoURL = "https://forge.tionis.dev" // default value
 	}
 
 	aclTTLStr := os.Getenv("ACL_TTL")
@@ -628,16 +632,11 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		}
 	}
 
-	// Read or generate server secret key
+	// Read server secret key
 	secretKey := []byte(os.Getenv("SECRET_KEY"))
 	if len(secretKey) == 0 {
-		// Generate a random secret key if none provided
-		secretKey = make([]byte, 32)
-		if _, err := rand.Read(secretKey); err != nil {
-			logger.Error("Failed to generate secret key", "error", err)
-			panic("Failed to generate secret key")
-		}
-		logger.Warn("Using randomly generated secret key - hooks will not persist across restarts")
+		logger.Error("No SECRET_KEY provided, aborting server start")
+		return nil
 	}
 
 	server := &server{
@@ -668,14 +667,14 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	router.HandleFunc("/static/{path:.*}", func(w http.ResponseWriter, r *http.Request) {
 		path := mux.Vars(r)["path"]
 		clientIP := getClientIP(r)
-		
+
 		logger.Info("Static asset request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"asset_path", path,
 			"client_ip", clientIP,
 			"user_agent", r.Header.Get("User-Agent"))
-		
+
 		p, err := assets.ReadFile("assets/" + path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
