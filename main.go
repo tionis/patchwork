@@ -158,13 +158,17 @@ func (s *server) authenticateToken(username string, token, path, reqType string,
 	}
 
 	// For HuProxy, pass the path as the operation to check against patterns
-	operation := reqType
-	if isHuProxy {
-		operation = path // HuProxy checks against host:port patterns
+	// For regular HTTP requests, pass the path for pattern matching
+	operation := path
+	if !isHuProxy {
+		// For regular HTTP requests, we need both the method and path
+		// The method determines which patterns to check, the path is what gets matched
+		// So we pass the HTTP method as the operation type and path for pattern matching
+		operation = path
 	}
 
 	// Use auth cache to validate token
-	valid, tokenInfo, err := s.authCache.validateToken(username, token, operation, isHuProxy)
+	valid, tokenInfo, err := s.authCache.validateToken(username, token, reqType, operation, isHuProxy)
 	if err != nil {
 		s.logger.Error("Token validation error", "username", username, "error", err, "is_huproxy", isHuProxy)
 		return false, "validation error", err
@@ -308,33 +312,33 @@ func (cache *AuthCache) InvalidateUser(username string) {
 }
 
 // validateToken checks if a token is valid for a user and operation
-func (cache *AuthCache) validateToken(username, token, operation string, isHuProxy bool) (bool, *TokenInfo, error) {
+func (cache *AuthCache) validateToken(username, token, method, path string, isHuProxy bool) (bool, *TokenInfo, error) {
 	auth, err := cache.GetUserAuth(username)
 	if err != nil {
 		return false, nil, err
 	}
-
+	
 	tokenInfo, exists := auth.Tokens[token]
 	if !exists {
 		return false, nil, nil
 	}
-
+	
 	// Check if token is expired
 	if tokenInfo.ExpiresAt != nil && time.Now().After(*tokenInfo.ExpiresAt) {
 		return false, nil, nil
 	}
-
+	
 	// For HuProxy requests, check if token has huproxy permissions
 	if isHuProxy {
 		if len(tokenInfo.HuProxy) == 0 {
 			return false, nil, nil
 		}
-		return cache.checkGlobPatterns(tokenInfo.HuProxy, operation), &tokenInfo, nil
+		return cache.checkGlobPatterns(tokenInfo.HuProxy, path), &tokenInfo, nil
 	}
-
+	
 	// For regular HTTP requests, check method-specific permissions
 	var patterns []string
-	switch strings.ToUpper(operation) {
+	switch strings.ToUpper(method) {
 	case "GET":
 		patterns = tokenInfo.GET
 	case "POST":
@@ -356,10 +360,8 @@ func (cache *AuthCache) validateToken(username, token, operation string, isHuPro
 		return false, nil, nil
 	}
 
-	return cache.checkGlobPatterns(patterns, operation), &tokenInfo, nil
-}
-
-// checkGlobPatterns is a placeholder for OpenSSH-style glob pattern matching
+	return cache.checkGlobPatterns(patterns, path), &tokenInfo, nil
+}// checkGlobPatterns is a placeholder for OpenSSH-style glob pattern matching
 // TODO: Implement proper glob pattern matching following OpenSSH pattern rules
 func (cache *AuthCache) checkGlobPatterns(patterns []string, target string) bool {
 	for _, pattern := range patterns {
@@ -367,9 +369,36 @@ func (cache *AuthCache) checkGlobPatterns(patterns []string, target string) bool
 			return true // wildcard allows everything
 		}
 		// TODO: Implement proper OpenSSH glob pattern matching
-		// For now, simple string comparison as placeholder
+		// For now, simple string comparison and basic wildcard matching as placeholder
 		if pattern == target {
 			return true
+		}
+		// Basic wildcard matching for paths like "/api/*" 
+		if strings.HasSuffix(pattern, "*") {
+			prefix := strings.TrimSuffix(pattern, "*")
+			if strings.HasPrefix(target, prefix) {
+				return true
+			}
+		}
+		// Basic wildcard matching for domains like "*.example.com:*"
+		if strings.Contains(pattern, "*") {
+			// Very basic pattern matching - replace * with regex-like matching
+			if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") {
+				middle := strings.Trim(pattern, "*")
+				if strings.Contains(target, middle) {
+					return true
+				}
+			} else if strings.HasPrefix(pattern, "*") {
+				suffix := strings.TrimPrefix(pattern, "*")
+				if strings.HasSuffix(target, suffix) {
+					return true
+				}
+			} else if strings.HasSuffix(pattern, "*") {
+				prefix := strings.TrimSuffix(pattern, "*")
+				if strings.HasPrefix(target, prefix) {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -423,7 +452,7 @@ func (s *server) userAdminHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate token and check admin status
-	valid, tokenInfo, err := s.authCache.validateToken(username, token, "admin", false)
+	valid, tokenInfo, err := s.authCache.validateToken(username, token, "ADMIN", adminPath, false)
 	if err != nil {
 		s.logger.Error("Admin token validation error", "username", username, "error", err)
 		http.Error(w, "Token validation error", http.StatusInternalServerError)
