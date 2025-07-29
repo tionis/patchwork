@@ -34,11 +34,11 @@
   </p>
   
   <p>To subscribe to a channel you can simply make a <code>GET</code> request:</p>
-  <pre>curl https://patchwork.example.com/p/a61b1f42</pre>
+  <pre>curl {{.BaseURL}}/p/a61b1f42</pre>
   
   <p>The above will block until something is published to the channel <code>a61b1f42</code>. 
   You can easily publish to a channel using a <code>POST</code> request:</p>
-  <pre>curl https://patchwork.example.com/p/a61b1f42 -d "hello, world"</pre>
+  <pre>curl {{.BaseURL}}/p/a61b1f42 -d "hello, world"</pre>
   
   <p>The subscriber will immediately receive that data. If you reverse the order,
   then the post will block until it is received.</p>
@@ -50,14 +50,14 @@
     In pubsub mode, the publisher will become non-blocking and their data will be
     transmitted to each connected subscriber:
   </p>
-  <pre>curl https://patchwork.example.com/p/a61b1f42?pubsub=true -d "hello, world"</pre>
+  <pre>curl {{.BaseURL}}/p/a61b1f42?pubsub=true -d "hello, world"</pre>
 
   <h3>Publish with GET</h3>
   <p>
     You can also publish with a <code>GET</code> request by using the parameter
     <code>body=X</code>, making it easier to write href links that can trigger hooks:
   </p>
-  <pre>curl https://patchwork.example.com/p/a61b1f42?pubsub=true&body=hello,%20world</pre>
+  <pre>curl {{.BaseURL}}/p/a61b1f42?pubsub=true&body=hello,%20world</pre>
 
   <h2>Namespaces</h2>
   <p>The server is organized by namespaces with different access patterns:</p>
@@ -131,14 +131,14 @@ webhook_token:
 
   <h3>File Sharing</h3>
   <p>Sending a file:</p>
-  <pre>curl -X POST --data-binary "@test.txt" https://patchwork.example.com/p/test.txt</pre>
+  <pre>curl -X POST --data-binary "@test.txt" {{.BaseURL}}/p/test.txt</pre>
   <p>Receiving a file:</p>
-  <pre>wget https://patchwork.example.com/p/test.txt</pre>
+  <pre>wget {{.BaseURL}}/p/test.txt</pre>
 
   <h3>Desktop Notifications (Linux)</h3>
   <pre>#!/bin/bash
 MAGIC="notify"
-URL="https://patchwork.example.com/p/notifications"
+URL="{{.BaseURL}}/p/notifications"
 
 while [ 1 ]
 do
@@ -156,14 +156,14 @@ done</pre>
   <pre>#!/bin/bash
 for filename in *.mp3
 do
-  curl https://patchwork.example.com/p/jobs -d $filename
+  curl {{.BaseURL}}/p/jobs -d $filename
 done</pre>
 
   <p>Processing jobs from the queue:</p>
   <pre>#!/bin/bash
 while true
 do
-  filename=$(curl -s https://patchwork.example.com/p/jobs)
+  filename=$(curl -s {{.BaseURL}}/p/jobs)
   if [ "$filename" != "Too Many Requests" ]
   then
     echo "Processing: $filename"
@@ -177,27 +177,27 @@ done</pre>
   <h3>Forward Hook Example</h3>
   <p>To use forward hooks, first obtain a channel and secret:</p>
   <pre># Get a new channel and secret
-curl https://patchwork.example.com/h
+curl {{.BaseURL}}/h
 # Returns: {"channel":"abc123-def456-...","secret":"sha256hash..."}
 
 # Send notification (requires secret)
-curl https://patchwork.example.com/h/abc123-def456-...?secret=sha256hash... -d "Server is down!"
+curl {{.BaseURL}}/h/abc123-def456-...?secret=sha256hash... -d "Server is down!"
 
 # Anyone can listen for notifications
-curl https://patchwork.example.com/h/abc123-def456-...</pre>
+curl {{.BaseURL}}/h/abc123-def456-...</pre>
 
   <h3>Reverse Hook Example</h3>
   <p>Similarly, for reverse hooks, obtain a channel and secret:</p>
   <pre># Get a new channel and secret
-curl https://patchwork.example.com/r
+curl {{.BaseURL}}/r
 # Returns: {"channel":"xyz789-abc123-...","secret":"sha256hash..."}
 
 # Anyone can submit metrics
-curl https://patchwork.example.com/r/xyz789-abc123-... -d "cpu:85%"
-curl https://patchwork.example.com/r/xyz789-abc123-... -d "memory:67%"
+curl {{.BaseURL}}/r/xyz789-abc123-... -d "cpu:85%"
+curl {{.BaseURL}}/r/xyz789-abc123-... -d "memory:67%"
 
 # Reading requires secret
-curl https://patchwork.example.com/r/xyz789-abc123-...?secret=sha256hash...</pre>
+curl {{.BaseURL}}/r/xyz789-abc123-...?secret=sha256hash...</pre>
 
   <p><strong>Note</strong>: The secrets are generated using HMAC-SHA256 with a server secret key and the channel name. 
   Set the <code>SECRET_KEY</code> environment variable to ensure secrets persist across server restarts.</p>
@@ -215,13 +215,13 @@ curl https://patchwork.example.com/r/xyz789-abc123-...?secret=sha256hash...</pre
   
   <h4>SSH Client Configuration</h4>
   <pre># Using a WebSocket client like huproxyclient (needs to be built separately)
-ssh -o 'ProxyCommand=huproxyclient -auth=Bearer:your_secure_token_here wss://patchwork.example.com/huproxy/alice/targethost/22' user@targethost
+ssh -o 'ProxyCommand=huproxyclient -auth=Bearer:your_secure_token_here {{.WebSocketURL}}/huproxy/alice/targethost/22' user@targethost
 
 # Or using curl as a basic test (won't work for full SSH sessions)
 curl -H "Authorization: Bearer your_secure_token_here" \
      --http1.1 \
      --upgrade websocket \
-     https://patchwork.example.com/huproxy/alice/localhost/22</pre>
+     {{.BaseURL}}/huproxy/alice/localhost/22</pre>
   
   <p><strong>Security Notes</strong>:</p>
   <ul>
