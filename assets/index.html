@@ -89,35 +89,46 @@
     </li>
   </ul>
 
-  <h3>ACL File Format</h3>
+  <h3>User Namespaces</h3>
   <p>
-    For user namespaces, access control is managed through YAML files stored in
-    Forgejo/Gitea repositories. Each user or organization can create a 
-    <code>.patchwork</code> repository containing an <code>auth.yaml</code> file
-    that defines permissions for different tokens:
+    For user namespaces (<code>/u/{username}/</code>), access is controlled by tokens
+    that you configure in your own <code>.patchwork</code> repository. Create a 
+    <code>.patchwork</code> repository in your account and add an <code>auth.yaml</code> 
+    file to define which tokens can access which paths.
   </p>
-  <pre>some_token_name:
-  POST: "projects/*/data"  # Can POST to any project's data endpoint
-  GET: "projects/myproject/**"  # Can GET from all paths under myproject
-
-restricted_token:
-  POST: ""  # Empty string means no POST access allowed
-  GET: "**"  # Can GET from all subpaths in this namespace
-
-webhook_token:
-  POST: "webhooks/*"  # Can POST to any webhook endpoint
-  GET: "status"  # Can only GET the status endpoint</pre>
+  
+  <h4>auth.yaml Format</h4>
+  <p>Create an <code>auth.yaml</code> file in your <code>.patchwork</code> repository:</p>
+  <pre>tokens:
+  "my_app_token":
+    is_admin: false
+    POST: 
+      - "projects/*/logs"    # Can POST to any project's logs
+      - "webhooks/*"         # Can POST to webhook endpoints
+    GET: 
+      - "projects/myapp/**"  # Can GET from all myapp paths
+      
+  "readonly_token":
+    is_admin: false
+    POST: []               # No POST access
+    GET: 
+      - "**"               # Can GET from all paths
+      
+  "admin_token":
+    is_admin: true
+    POST: ["**"]
+    GET: ["**"]</pre>
+  
   <p>
-    Each token can have <code>POST</code> and <code>GET</code> permissions defined
-    with glob patterns. An empty string denies all access for that method, while
-    <code>**</code> allows access to all subpaths.
+    Use OpenSSH-style glob patterns to control access: <code>**</code> matches everything, 
+    <code>*</code> matches one level, empty array <code>[]</code> denies access.
+    These follow the same pattern matching rules as OpenSSH configuration files.
   </p>
+  
   <p>
-    The patchwork server pulls these ACL files from the configured Forgejo/Gitea
-    instance (<code>{{.ForgejoURL}}</code>) as needed and caches them for {{.ACLTTL}}. A special 
-    <code>patchwork</code> user should be given read access to the 
-    <code>.patchwork</code> repositories.
+    Example token usage:
   </p>
+  <pre>curl {{.BaseURL}}/u/alice/projects/logs?token=my_app_token -d "Deploy completed"</pre>
 
   <h2>Modes</h2>
   <p>Each endpoint supports multiple modes:</p>
@@ -202,38 +213,27 @@ curl {{.BaseURL}}/r/xyz789-abc123-...?secret=sha256hash...</pre>
   <p><strong>Note</strong>: The secrets are generated using HMAC-SHA256 with a server secret key and the channel name. 
   Set the <code>SECRET_KEY</code> environment variable to ensure secrets persist across server restarts.</p>
 
-  <h3>SSH over WebSocket Tunneling (huproxy) Example</h3>
-  <p>The huproxy endpoint provides WebSocket tunneling for SSH and other TCP protocols, based on Google's
-  HUProxy project. This allows tunneling SSH connections through HTTP/HTTPS when direct SSH access is
-  restricted by firewalls or network policies.</p>
+  <h3>SSH over WebSocket Tunneling</h3>
+  <p>The huproxy endpoint allows you to tunnel SSH and other TCP protocols through HTTP/HTTPS,
+  useful when direct connections are blocked by firewalls.</p>
   
-  <h4>Token Configuration</h4>
-  <p>First, configure tokens in your <code>.patchwork/huproxy.yaml</code> file:</p>
+  <h4>Setup</h4>
+  <p>Configure your tokens in your <code>.patchwork/auth.yaml</code> file:</p>
   <pre>tokens:
-  - "your_secure_token_here"
-  - "another_token_for_different_client"</pre>
+  your_secure_token:
+    huproxy:
+      - "*"  # Allow all hosts and ports
+      - "*.example.com:*"  # Or restrict to specific patterns</pre>
   
-  <h4>SSH Client Configuration</h4>
-  <pre># Using a WebSocket client like huproxyclient (needs to be built separately)
-ssh -o 'ProxyCommand=huproxyclient -auth=Bearer:your_secure_token_here {{.WebSocketURL}}/huproxy/alice/targethost/22' user@targethost
+  <h4>Usage</h4>
+  <pre># Using with SSH and a WebSocket client
+ssh -o 'ProxyCommand=huproxyclient -auth=Bearer:your_token {{.WebSocketURL}}/huproxy/alice/targethost/22' user@targethost
 
-# Or using curl as a basic test (won't work for full SSH sessions)
-curl -H "Authorization: Bearer your_secure_token_here" \
+# Testing connectivity
+curl -H "Authorization: Bearer your_token" \
      --http1.1 \
      --upgrade websocket \
      {{.BaseURL}}/huproxy/alice/localhost/22</pre>
-  
-  <p><strong>Security Notes</strong>:</p>
-  <ul>
-    <li>Tokens are validated against the user's <code>.patchwork/huproxy.yaml</code> file</li>
-    <li>Each user controls their own token list through their repository</li>
-    <li>Tokens should be long, random strings (recommended: 32+ characters)</li>
-    <li>The proxy supports any TCP service, not just SSH (databases, VNC, etc.)</li>
-  </ul>
-  
-  <p><strong>Original Project</strong>: This implementation is based on 
-  <a href="https://github.com/google/huproxy">Google's HUProxy</a> with added user-specific 
-  authentication and integration into the Patchwork ecosystem.</p>
 
   <h2>Tools</h2>
   <p>

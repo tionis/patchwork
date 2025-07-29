@@ -886,17 +886,17 @@ func healthCheck(url string) error {
 	client := &http.Client{
 		Timeout: time.Second * 5,
 	}
-	
+
 	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("health check failed: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("health check failed: received status %d", resp.StatusCode)
 	}
-	
+
 	return nil
 }
 
@@ -1207,7 +1207,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		}
 		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
 		wsURL := fmt.Sprintf("%s://%s", wsScheme, r.Host)
-		
+
 		data := ConfigData{
 			ForgejoURL:   server.forgejoURL,
 			ACLTTL:       server.aclTTL,

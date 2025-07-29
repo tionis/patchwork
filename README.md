@@ -12,42 +12,330 @@ that serve as a multi-process, multi-consumer (MPMC) queue.
 - **Token-based Authentication**: Forgejo-integrated ACL system with caching
 - **Administrative API**: Cache invalidation and user management endpoints
 
+## What does it do?
+
+Patchwork provides infinite HTTP endpoints that can be used to implement powerful
+serverless applications - including desktop notifications, SMS notifications,
+job queues, web hosting, and file sharing. These applications are basically
+just a few lines of bash that wrap a `curl` command.
+
+The philosophy behind this is that the main logic happens on the local machine
+with small scripts. There is a server with an infinite number of virtual channels
+that will relay messages between the publisher and the subscriber.
+
+## Quick Start
+
+### Basic Usage
+
+To subscribe to a channel you can simply make a `GET` request:
+```bash
+curl https://patchwork.example.com/p/a61b1f42
+```
+
+The above will block until something is published to the channel `a61b1f42`. 
+You can easily publish to a channel using a `POST` request:
+```bash
+curl https://patchwork.example.com/p/a61b1f42 -d "hello, world"
+```
+
+The subscriber will immediately receive that data. If you reverse the order,
+then the post will block until it is received.
+
+### Pubsub mode
+
+The default mode is a MPMC queue, where the first to connect are able to
+publish/subscribe. But you can also specify publish-subscribe (pubsub) mode.
+In pubsub mode, the publisher will become non-blocking and their data will be
+transmitted to each connected subscriber:
+
+```bash
+curl https://patchwork.example.com/p/a61b1f42?pubsub=true -d "hello, world"
+```
+
+### Publish with GET
+
+You can also publish with a `GET` request by using the parameter
+`body=X`, making it easier to write href links that can trigger hooks:
+
+```bash
+curl https://patchwork.example.com/p/a61b1f42?pubsub=true&body=hello,%20world
+```
+
+## Namespaces
+
+The server is organized by namespaces with different access patterns:
+
+- **`/p/**`**: Public namespace - no authentication required.
+  Everyone can read and write. Perfect for testing and public communication channels.
+- **`/h/**`**: Forward hooks - GET `/h` to obtain a new channel and secret,
+  then use the secret to POST data to that channel. Anyone can GET data from the channel.
+  Useful for webhooks and notifications where you want to control who can send.
+- **`/r/**`**: Reverse hooks - GET `/r` to obtain a new channel and secret,
+  then anyone can POST data to that channel. Use the secret to GET data from the channel.
+  Useful for collecting data from multiple sources where you want to control who can read.
+- **`/u/{username}/**`**: User namespace - controlled by ACL lists.
+  Access is controlled by YAML ACL files stored in Forgejo/Gitea repositories 
+  that specify which tokens can access which paths.
+- **`/huproxy/{user}/{host}/{port}`**: HTTP-to-TCP WebSocket proxy for tunneling 
+  SSH and other protocols. Based on Google's HUProxy project, this endpoint provides 
+  WebSocket tunneling primarily for SSH connections. Uses token-based authentication 
+  via `Authorization` header.
+
 ## Authentication
 
 Patchwork uses a Forgejo-integrated authentication system. Each user maintains an `auth.yaml` file in their `.patchwork` repository to define access tokens and permissions.
 
-See [AUTHENTICATION.md](AUTHENTICATION.md) for detailed configuration and usage information.
+### User Namespace ACL (`auth.yaml`)
 
-## What does it do?
-
-Patchwork provi### SSH over WebSocket Tunneling (huproxy) Example
-
-The huproxy endpoint provides WebSocket tunneling for SSH and other TCP protocols, based on Google's
-HUProxy project. This allows tunneling SSH connections through HTTP/HTTPS when direct SSH access is
-restricted by firewalls or network policies.
-
-#### Using with SSH Client
-
-First, ensure you have proper tokens configured in your `.patchwork/auth.yaml` file:
+For user namespaces (`/u/{username}/`), create a `.patchwork` repository with an `auth.yaml` file:
 
 ```yaml
 tokens:
-  "your_secure_token_here":
+  "some_token_name":
+    is_admin: false
+    POST: 
+      - "projects/*/data"  # Can POST to any project's data endpoint
+    GET: 
+      - "projects/myproject/**"  # Can GET from all paths under myproject
+
+  "restricted_token":
+    is_admin: false
+    POST: []  # No POST access
+    GET: 
+      - "**"  # Can GET from all subpaths in this namespace
+
+  "webhook_token":
+    is_admin: false
+    POST: 
+      - "webhooks/*"  # Can POST to any webhook endpoint
+    GET: 
+      - "status"  # Can only GET the status endpoint
+
+  "admin_token":
+    is_admin: true
+    POST: 
+      - "**"
+    GET: 
+      - "**"
+```
+
+Each token can have `POST` and `GET` permissions defined with glob patterns:
+- Empty array (`[]`) denies all access for that method
+- `**` allows access to all subpaths
+- Specific glob patterns like `projects/*/data` allow fine-grained control
+- Admin tokens (`is_admin: true`) have access to administrative endpoints
+
+### HuProxy Configuration
+
+For HuProxy access, configure tokens in the `huproxy` field of your `.patchwork/auth.yaml` file:
+
+```yaml
+tokens:
+  "ssh_access_token":
+    is_admin: false
     huproxy:
       - "*"  # allows all host:port combinations
-  "another_token_for_different_client":
+  "restricted_huproxy_token":
+    is_admin: false
     huproxy:
       - "*.example.com:*"
       - "localhost:*"
 ```
 
-Then configure your SSH client to use the proxy:
+### Repository Setup
+
+1. **Create `.patchwork` repository**: Each user/organization creates a repository named `.patchwork`
+2. **Add `auth.yaml`**: Place the ACL and HuProxy configuration in a file named `auth.yaml` in the repository root
+3. **Grant access**: Give the special `patchwork` user read access to the `.patchwork` repository
+4. **Caching**: The patchwork server pulls and caches these configuration files as needed
+
+Example repository structure:
+```
+user/.patchwork/
+├── auth.yaml
+└── README.md (optional)
+```
+
+## Examples
+
+### File Sharing
+
+Sending a file:
+```bash
+curl -X POST --data-binary "@test.txt" https://patchwork.example.com/p/test.txt
+```
+
+Receiving a file:
+```bash
+wget https://patchwork.example.com/p/test.txt
+```
+
+### Desktop Notifications (Linux)
 
 ```bash
-# Using a WebSocket client like huproxyclient (needs to be built separately)
-ssh -o 'ProxyCommand=huproxyclient -auth=Bearer:your_secure_token_here wss://patchwork.example.com/huproxy/alice/targethost/22' user@targethost
+#!/bin/bash
+MAGIC="notify"
+URL="https://patchwork.example.com/p/notifications"
 
-# Or using curl as a basic test (won't work for full SSH sessions)
+while [ 1 ]
+do
+  X="$(curl $URL)"
+  if [[ $X =~ ^$MAGIC ]]; then
+    Y="$(echo "$X" | sed "s/$MAGIC*//")"
+    notify-send "$Y"
+  else
+    sleep 10
+  fi
+done
+```
+
+### Job Queue
+
+Adding jobs to a queue:
+```bash
+#!/bin/bash
+for filename in *.mp3
+do
+  curl https://patchwork.example.com/p/jobs -d $filename
+done
+```
+
+Processing jobs from the queue:
+```bash
+#!/bin/bash
+while true
+do
+  filename=$(curl -s https://patchwork.example.com/p/jobs)
+  if [ "$filename" != "Too Many Requests" ]
+  then
+    echo "Processing: $filename"
+    # Process the file here
+    ffmpeg -i "$filename" "$filename.ogg"
+  else
+    sleep 1
+  fi
+done
+```
+
+### Forward Hook Example
+
+To use forward hooks, first obtain a channel and secret by making a GET request to `/h`:
+
+```bash
+# Get a new channel and secret
+curl https://patchwork.example.com/h
+# Returns: {"channel":"abc123-def456-...","secret":"sha256hash..."}
+```
+
+Then use the channel and secret for secure communication:
+
+```bash
+# Send notification (requires secret)
+curl https://patchwork.example.com/h/abc123-def456-...?secret=sha256hash... -d "Server is down!"
+
+# Anyone can listen for notifications
+curl https://patchwork.example.com/h/abc123-def456-...
+```
+
+### Reverse Hook Example
+
+Similarly, for reverse hooks, obtain a channel and secret by making a GET request to `/r`:
+
+```bash
+# Get a new channel and secret
+curl https://patchwork.example.com/r
+# Returns: {"channel":"xyz789-abc123-...","secret":"sha256hash..."}
+```
+
+Then collect data from multiple sources:
+
+```bash
+# Anyone can submit metrics
+curl https://patchwork.example.com/r/xyz789-abc123-... -d "cpu:85%"
+curl https://patchwork.example.com/r/xyz789-abc123-... -d "memory:67%"
+
+# Reading requires secret
+curl https://patchwork.example.com/r/xyz789-abc123-...?secret=sha256hash...
+```
+
+### User Namespace Example
+
+Using ACL-controlled user namespaces with tokens:
+
+```bash
+# Send data to a user namespace (requires appropriate token)
+curl https://patchwork.example.com/u/alice/projects/web/logs?token=webhook_token -d "Deploy completed"
+
+# Read from user namespace (requires token with GET permission)
+curl https://patchwork.example.com/u/alice/projects/web/status?token=some_token_name
+```
+
+### SSH over WebSocket Tunneling
+
+Using the huproxy endpoint to tunnel SSH through HTTP/HTTPS:
+
+```bash
+# Using token-based authentication
+curl -H "Authorization: Bearer your_huproxy_token" \
+  https://patchwork.example.com/huproxy/alice/localhost/22
+
+# With SSH client (requires huproxyclient tool)
+ssh -o 'ProxyCommand=huproxyclient -auth=Bearer:your_token wss://patchwork.example.com/huproxy/alice/targethost/22' user@targethost
+```
+
+## Installation
+
+### Docker
+
+```bash
+docker run -d \
+  -p 8080:8080 \
+  -e SECRET_KEY="your-secret-key" \
+  -e FORGEJO_TOKEN="your-forgejo-token" \
+  -e FORGEJO_URL="https://git.example.com" \
+  ghcr.io/tionis/patchwork:latest
+```
+
+### From Source
+
+```bash
+git clone https://github.com/tionis/patchwork.git
+cd patchwork
+go build -o patchwork .
+./patchwork start --port 8080
+```
+
+### Environment Variables
+
+- `SECRET_KEY`: Secret key for HMAC generation (required)
+- `FORGEJO_TOKEN`: API token for accessing Forgejo/Gitea (required)
+- `FORGEJO_URL`: URL of your Forgejo/Gitea instance (default: https://forge.tionis.dev)
+- `ACL_TTL`: Cache duration for ACL files (default: 5m)
+- `LOG_LEVEL`: Logging level (DEBUG, INFO, WARN, ERROR)
+- `LOG_SOURCE`: Add source information to logs (true/false)
+
+### Forgejo/Gitea Backend Setup
+
+To enable user namespaces with ACL control:
+
+1. **Set up Forgejo/Gitea instance**: Ensure you have a running Forgejo or Gitea server
+2. **Create patchwork user**: Create a dedicated `patchwork` user account on your Forgejo/Gitea instance
+3. **Generate API token**: Create an API token for the `patchwork` user
+4. **Configure environment**: Set `FORGEJO_URL` and `FORGEJO_TOKEN` environment variables
+5. **User setup**: Users create `.patchwork` repositories and grant read access to the `patchwork` user
+
+## Health Checks
+
+Patchwork includes health check endpoints:
+
+- `/healthz`: Returns "OK!" if the server is running
+- `/status`: Alias for `/healthz`
+
+For Docker deployments, a health check is automatically configured.
+
+## License
+
+MIT
 curl -H "Authorization: Bearer your_secure_token_here" 
      --http1.1 
      --upgrade websocket 
