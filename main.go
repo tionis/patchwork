@@ -77,8 +77,54 @@ type ConfigData struct {
 	ACLTTL     time.Duration
 }
 
+// getClientIP extracts the real client IP from reverse proxy headers
+func getClientIP(r *http.Request) string {
+	// Check X-Forwarded-For header first (most common)
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff != "" {
+		// X-Forwarded-For can contain multiple IPs, take the first one
+		if idx := strings.Index(xff, ","); idx != -1 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+	
+	// Check X-Real-IP header (nginx)
+	xri := r.Header.Get("X-Real-IP")
+	if xri != "" {
+		return strings.TrimSpace(xri)
+	}
+	
+	// Check CF-Connecting-IP header (Cloudflare)
+	cfip := r.Header.Get("CF-Connecting-IP")
+	if cfip != "" {
+		return strings.TrimSpace(cfip)
+	}
+	
+	// Fall back to RemoteAddr
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
+// logRequest logs HTTP request details at info level
+func (s *server) logRequest(r *http.Request, message string) {
+	clientIP := getClientIP(r)
+	s.logger.Info(message, 
+		"method", r.Method,
+		"path", r.URL.Path,
+		"query", r.URL.RawQuery,
+		"client_ip", clientIP,
+		"user_agent", r.Header.Get("User-Agent"),
+		"referer", r.Header.Get("Referer"),
+	)
+}
+
 // statusHandler handles health check requests
 func (s *server) statusHandler(w http.ResponseWriter, r *http.Request) {
+	s.logRequest(r, "Status check request")
 	w.WriteHeader(http.StatusOK)
 	io.WriteString(w, "OK!\n")
 }
@@ -123,6 +169,7 @@ type HookResponse struct {
 func (s *server) publicHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	path := vars["path"]
+	s.logRequest(r, "Public namespace access")
 	s.handlePatch(w, r, "p", nil, path)
 }
 
@@ -130,10 +177,13 @@ func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	username := vars["username"]
 	path := vars["path"]
+	s.logRequest(r, "User namespace access")
+	s.logger.Info("User namespace details", "username", username, "path", path)
 	s.handlePatch(w, r, "u/"+username, &owner{name: username, typ: 1}, path)
 }
 
 func (s *server) forwardHookRootHandler(w http.ResponseWriter, r *http.Request) {
+	s.logRequest(r, "Forward hook root request")
 	if r.Method == "GET" {
 		// Generate a new channel and secret
 		uuid, err := generateUUID()
@@ -145,6 +195,10 @@ func (s *server) forwardHookRootHandler(w http.ResponseWriter, r *http.Request) 
 
 		channel := uuid
 		secret := s.computeSecret(channel)
+
+		s.logger.Info("Forward hook channel created", 
+			"channel", channel, 
+			"client_ip", getClientIP(r))
 
 		response := HookResponse{
 			Channel: channel,
@@ -165,26 +219,33 @@ func (s *server) forwardHookRootHandler(w http.ResponseWriter, r *http.Request) 
 func (s *server) forwardHookHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	path := vars["path"]
+	s.logRequest(r, "Forward hook access")
+	s.logger.Info("Forward hook details", "channel", path, "method", r.Method)
 
 	// For forward hooks, check secret on POST but allow anyone to GET
 	if r.Method == "POST" {
 		secret := r.URL.Query().Get("secret")
 		if secret == "" {
+			s.logger.Info("Forward hook POST denied - missing secret", "channel", path, "client_ip", getClientIP(r))
 			http.Error(w, "Secret required for POST", http.StatusUnauthorized)
 			return
 		}
 
 		// Verify the secret matches the channel
 		if !s.verifySecret(path, secret) {
+			s.logger.Info("Forward hook POST denied - invalid secret", "channel", path, "client_ip", getClientIP(r))
 			http.Error(w, "Invalid secret", http.StatusUnauthorized)
 			return
 		}
+		
+		s.logger.Info("Forward hook POST authorized", "channel", path, "client_ip", getClientIP(r))
 	}
 
 	s.handlePatch(w, r, "h", nil, path)
 }
 
 func (s *server) reverseHookRootHandler(w http.ResponseWriter, r *http.Request) {
+	s.logRequest(r, "Reverse hook root request")
 	if r.Method == "GET" {
 		// Generate a new channel and secret
 		uuid, err := generateUUID()
@@ -196,6 +257,10 @@ func (s *server) reverseHookRootHandler(w http.ResponseWriter, r *http.Request) 
 
 		channel := uuid
 		secret := s.computeSecret(channel)
+
+		s.logger.Info("Reverse hook channel created", 
+			"channel", channel, 
+			"client_ip", getClientIP(r))
 
 		response := HookResponse{
 			Channel: channel,
@@ -216,20 +281,28 @@ func (s *server) reverseHookRootHandler(w http.ResponseWriter, r *http.Request) 
 func (s *server) reverseHookHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	path := vars["path"]
+	s.logRequest(r, "Reverse hook access")
+	s.logger.Info("Reverse hook details", "channel", path, "method", r.Method)
 
 	// For reverse hooks, check secret on GET but allow anyone to POST
 	if r.Method == "GET" {
 		secret := r.URL.Query().Get("secret")
 		if secret == "" {
+			s.logger.Info("Reverse hook GET denied - missing secret", "channel", path, "client_ip", getClientIP(r))
 			http.Error(w, "Secret required for GET", http.StatusUnauthorized)
 			return
 		}
 
 		// Verify the secret matches the channel
 		if !s.verifySecret(path, secret) {
+			s.logger.Info("Reverse hook GET denied - invalid secret", "channel", path, "client_ip", getClientIP(r))
 			http.Error(w, "Invalid secret", http.StatusUnauthorized)
 			return
 		}
+		
+		s.logger.Info("Reverse hook GET authorized", "channel", path, "client_ip", getClientIP(r))
+	} else if r.Method == "POST" {
+		s.logger.Info("Reverse hook POST access", "channel", path, "client_ip", getClientIP(r))
 	}
 
 	s.handlePatch(w, r, "r", nil, path)
@@ -241,11 +314,19 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 	path = "/" + strings.TrimPrefix(path, "/")
 	channelPath := namespace + path
 
-	s.logger.Debug("Handling patch request", "method", r.Method, "channelPath", channelPath)
+	s.logger.Info("Channel access", 
+		"namespace", namespace,
+		"path", path,
+		"channel_path", channelPath,
+		"method", r.Method,
+		"client_ip", getClientIP(r),
+		"content_length", r.ContentLength,
+		"pubsub", r.URL.Query().Get("pubsub"))
 
 	// Get or create channel
 	s.channelsMutex.Lock()
 	if _, ok := s.channels[channelPath]; !ok {
+		s.logger.Info("Creating new channel", "channel_path", channelPath)
 		s.channels[channelPath] = &patchChannel{
 			data:      make(chan stream),
 			unpersist: make(chan bool),
@@ -268,9 +349,13 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 	switch method {
 	case "GET":
 		// Consumer: wait for data
+		s.logger.Info("Waiting for data on channel", "channel_path", channelPath, "client_ip", getClientIP(r))
 		select {
 		case stream := <-channel.data:
-			s.logger.Debug("Sending data to consumer", "channelPath", channelPath)
+			s.logger.Info("Delivering data to consumer", 
+				"channel_path", channelPath, 
+				"client_ip", getClientIP(r),
+				"content_type", stream.headers["Content-Type"])
 
 			// Set any headers from the stream
 			for k, v := range stream.headers {
@@ -288,11 +373,19 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 			}
 
 		case <-r.Context().Done():
-			s.logger.Debug("Consumer canceled", "channelPath", channelPath)
+			s.logger.Info("Consumer request canceled", 
+				"channel_path", channelPath, 
+				"client_ip", getClientIP(r))
 		}
 
 	case "POST", "PUT":
 		// Producer: send data
+		s.logger.Info("Producing data to channel", 
+			"channel_path", channelPath, 
+			"client_ip", getClientIP(r),
+			"content_type", r.Header.Get("Content-Type"),
+			"pubsub", pubsub)
+		
 		var buf []byte
 		var err error
 
@@ -475,26 +568,48 @@ func startServer(port int) {
 
 func serveFile(logger *slog.Logger, path string, contentType string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		clientIP := getClientIP(r)
+		logger.Info("Static file request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"file_path", path,
+			"client_ip", clientIP,
+			"user_agent", r.Header.Get("User-Agent"))
+			
 		p, err := assets.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
+				logger.Info("Static file not found", "file_path", path, "client_ip", clientIP)
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			logger.Error("Error reading file", "error", err)
+			logger.Error("Error reading file", "error", err, "file_path", path)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", contentType)
 		_, err = w.Write(p)
 		if err != nil {
-			logger.Error("Error writing file", "error", err)
+			logger.Error("Error writing file", "error", err, "file_path", path)
 			return
 		}
+		logger.Info("Static file served successfully", 
+			"file_path", path, 
+			"client_ip", clientIP,
+			"content_type", contentType,
+			"size_bytes", len(p))
 	}
 }
 
 func notFoundHandler(w http.ResponseWriter, r *http.Request) {
+	// Log 404s at info level to track potential scanning/attacks
+	clientIP := getClientIP(r)
+	slog.Info("404 Not Found",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"query", r.URL.RawQuery,
+		"client_ip", clientIP,
+		"user_agent", r.Header.Get("User-Agent"))
 	w.WriteHeader(http.StatusNotFound)
 }
 
@@ -551,18 +666,28 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	router.HandleFunc("/favicon-32x32.png", serveFile(logger, "assets/favicon-32x32.png", "image/png"))
 
 	router.HandleFunc("/static/{path:.*}", func(w http.ResponseWriter, r *http.Request) {
-		logger.Debug("Serving static file", "path", mux.Vars(r)["path"])
-		p, err := assets.ReadFile("assets/" + mux.Vars(r)["path"])
+		path := mux.Vars(r)["path"]
+		clientIP := getClientIP(r)
+		
+		logger.Info("Static asset request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"asset_path", path,
+			"client_ip", clientIP,
+			"user_agent", r.Header.Get("User-Agent"))
+		
+		p, err := assets.ReadFile("assets/" + path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
+				logger.Info("Static asset not found", "asset_path", path, "client_ip", clientIP)
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			logger.Error("Error reading static file", "error", err)
+			logger.Error("Error reading static asset", "error", err, "asset_path", path)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		fileEnding := mux.Vars(r)["path"][strings.LastIndex(mux.Vars(r)["path"], ".")+1:]
+		fileEnding := path[strings.LastIndex(path, ".")+1:]
 		switch fileEnding {
 		case "css":
 			w.Header().Set("Content-Type", "text/css")
