@@ -343,6 +343,7 @@ func NewAuthCache(forgejoURL, forgejoToken string, ttl time.Duration, logger *sl
 func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 	// Construct the API URL for the auth.yaml file
 	apiURL := fmt.Sprintf("%s/api/v1/repos/%s/.patchwork/media/auth.yaml", cache.forgejoURL, url.QueryEscape(username))
+	cache.logger.Debug("Fetching auth from Forgejo", "username", username, "url", apiURL)
 
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
@@ -361,6 +362,7 @@ func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 
 	if resp.StatusCode == http.StatusNotFound {
 		// Return empty auth if file doesn't exist
+		cache.logger.Info("Auth file not found, returning empty auth", "username", username)
 		return &UserAuth{
 			Tokens:    make(map[string]TokenInfo),
 			UpdatedAt: time.Now(),
@@ -368,16 +370,22 @@ func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		cache.logger.Error("Unexpected status code from Forgejo",
+			"username", username,
+			"status_code", resp.StatusCode,
+			"url", apiURL)
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		cache.logger.Error("Failed to read response body", "username", username, "error", err)
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	var auth UserAuth
 	if err := yaml.Unmarshal(body, &auth); err != nil {
+		cache.logger.Error("Failed to parse YAML", "username", username, "error", err)
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
