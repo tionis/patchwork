@@ -63,8 +63,10 @@ type server struct {
 
 // Configuration template data for rendering index.html
 type ConfigData struct {
-	ForgejoURL string
-	ACLTTL     time.Duration
+	ForgejoURL   string
+	ACLTTL       time.Duration
+	BaseURL      string
+	WebSocketURL string
 }
 
 // TokenInfo represents information about a token from auth.yaml
@@ -879,6 +881,25 @@ func (s *server) handlePatch(w http.ResponseWriter, r *http.Request, namespace s
 	}
 }
 
+// healthCheck performs a health check by making an HTTP request to the given URL
+func healthCheck(url string) error {
+	client := &http.Client{
+		Timeout: time.Second * 5,
+	}
+	
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("health check failed: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("health check failed: received status %d", resp.StatusCode)
+	}
+	
+	return nil
+}
+
 func main() {
 	app := &cli.App{
 		Name:  "patchwork",
@@ -898,6 +919,20 @@ func main() {
 				Action: func(c *cli.Context) error {
 					port := c.Int("port")
 					return startServer(port)
+				},
+			},
+			{
+				Name:  "healthcheck",
+				Usage: "check the health of the patchwork server",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "url",
+						Value: "http://localhost:8080/healthz",
+						Usage: "URL to check for health",
+					},
+				},
+				Action: func(c *cli.Context) error {
+					return healthCheck(c.String("url"))
 				},
 			},
 		},
@@ -1164,9 +1199,20 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		}
 
 		// Prepare template data
+		scheme := "http"
+		wsScheme := "ws"
+		if r.TLS != nil {
+			scheme = "https"
+			wsScheme = "wss"
+		}
+		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
+		wsURL := fmt.Sprintf("%s://%s", wsScheme, r.Host)
+		
 		data := ConfigData{
-			ForgejoURL: server.forgejoURL,
-			ACLTTL:     server.aclTTL,
+			ForgejoURL:   server.forgejoURL,
+			ACLTTL:       server.aclTTL,
+			BaseURL:      baseURL,
+			WebSocketURL: wsURL,
 		}
 
 		// Set content type and execute template

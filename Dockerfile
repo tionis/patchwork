@@ -19,6 +19,9 @@ COPY --from=build /patchwork /patchwork
 
 EXPOSE 8080
 
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["/patchwork", "healthcheck"] || exit 1
+
 USER nonroot:nonroot
 
 ENV LOG_LEVEL=info
