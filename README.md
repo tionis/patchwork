@@ -1,5 +1,12 @@
 # Patchwork
 
+[![CI](https://github.com/tionis/patchwork/workflows/CI/badge.svg)](https://github.com/tionis/patchwork/actions/workflows/ci.yml)
+[![Test](https://github.com/tionis/patchwork/workflows/Test/badge.svg)](https://github.com/tionis/patchwork/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/tionis/patchwork/branch/main/graph/badge.svg)](https://codecov.io/gh/tionis/patchwork)
+[![Go Report Card](https://goreportcard.com/badge/github.com/tionis/patchwork)](https://goreportcard.com/report/github.com/tionis/patchwork)
+[![Docker Image](https://ghcr-badge.egpl.dev/tionis/patchwork/latest_tag?trim=major&label=docker)](https://github.com/tionis/patchwork/pkgs/container/patchwork)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A simple communication backend for scripts and other small applications.
 Patchwork enables IFTTT-type applications by providing infinite HTTP endpoints
 that serve as a multi-process, multi-consumer (MPMC) queue.

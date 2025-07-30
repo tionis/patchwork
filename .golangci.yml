@@ -1,0 +1,66 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+output:
+  formats:
+    - format: colored-line-number
+      path: stdout
+  print-issued-line: true
+  print-linter-name: true
+  uniq-by-line: true
+  sort-results: true
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    - gofmt
+    - goimports
+    - goconst
+    - misspell
+    - revive
+    - gosec
+    - unparam
+
+linters-settings:
+  revive:
+    severity: warning
+    rules:
+      - name: exported
+        arguments: [disableStutteringCheck]
+  
+  gosec:
+    excludes:
+      - G204 # Subprocess launched with variable
+      - G304 # File path provided as taint input
+  
+  gofmt:
+    simplify: true
+  
+  goconst:
+    min-len: 2
+    min-occurrences: 2
+
+issues:
+  exclude-rules:
+    # Exclude some linters from running on tests files.
+    - path: _test\.go
+      linters:
+        - gosec
+        - unparam
+    
+    # Exclude known false positives
+    - text: "Use of weak random number generator"
+      linters:
+        - gosec
+    
+    # Exclude shadow warnings for common variable names
+    - text: "shadow: declaration of \"err\""
+      linters:
+        - govet
