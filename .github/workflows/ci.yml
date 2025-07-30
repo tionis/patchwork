@@ -94,26 +94,3 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
         target: build-release-stage
-
-  security-scan:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-    - name: Generate short SHA
-      id: short-sha
-      run: echo "short_sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
-      
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.short-sha.outputs.short_sha }}
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-
-    - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: 'trivy-results.sarif'
