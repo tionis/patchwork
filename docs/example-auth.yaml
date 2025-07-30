@@ -11,6 +11,7 @@ tokens:
       - "a list"
       - "of glob" 
       - "patterns"
+      - "/some-prefix/*"
     POST:
       - "some-other-path"
   "some-other-read-only-token":

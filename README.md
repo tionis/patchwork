@@ -94,29 +94,30 @@ tokens:
   "some_token_name":
     is_admin: false
     POST: 
-      - "projects/*/data"  # Can POST to any project's data endpoint
+      - "/projects/*/data"  # Can POST to any project's data endpoint
     GET: 
-      - "projects/myproject/**"  # Can GET from all paths under myproject
+      - "/projects/myproject/*"  # Can GET from all paths under myproject
+      - "!/projects/myproject/secret/*" # But nothing in my secret project
 
   "restricted_token":
     is_admin: false
     POST: []  # No POST access
     GET: 
-      - "**"  # Can GET from all subpaths in this namespace
+      - "*"  # Can GET from all subpaths in this namespace
 
   "webhook_token":
     is_admin: false
     POST: 
-      - "webhooks/*"  # Can POST to any webhook endpoint
+      - "/webhooks/*"  # Can POST to any webhook endpoint
     GET: 
-      - "status"  # Can only GET the status endpoint
+      - "/status"  # Can only GET the status endpoint
 
   "admin_token":
     is_admin: true
     POST: 
-      - "**"
+      - "*"
     GET: 
-      - "**"
+      - "*"
 ```
 
 Each token can have `POST` and `GET` permissions defined with glob patterns:

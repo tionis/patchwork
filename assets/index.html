@@ -103,21 +103,22 @@
   "my_app_token":
     is_admin: false
     POST: 
-      - "projects/*/logs"    # Can POST to any project's logs
-      - "webhooks/*"         # Can POST to webhook endpoints
+      - "/projects/*/logs"    # Can POST to any project's logs
+      - "/webhooks/*"         # Can POST to webhook endpoints
     GET: 
-      - "projects/myapp/**"  # Can GET from all myapp paths
+      - "/projects/myapp/**"  # Can GET from all myapp paths
+      - "!/projects/myapp/secret/**" # But not from secret paths
       
   "readonly_token":
     is_admin: false
     POST: []               # No POST access
     GET: 
-      - "**"               # Can GET from all paths
+      - "*"               # Can GET from all paths
       
   "admin_token":
     is_admin: true
-    POST: ["**"]
-    GET: ["**"]</pre>
+    POST: ["*"]
+    GET: ["*"]</pre>
   
   <p>
     Use OpenSSH-style glob patterns to control access: <code>**</code> matches everything, 
