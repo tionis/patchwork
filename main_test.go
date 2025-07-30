@@ -21,35 +21,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Mock logger for testing
-type mockLogger struct {
-	logs []string
-}
-
-func (m *mockLogger) Debug(msg string, args ...interface{}) {
-	m.logs = append(m.logs, fmt.Sprintf("DEBUG: %s %v", msg, args))
-}
-
-func (m *mockLogger) Info(msg string, args ...interface{}) {
-	m.logs = append(m.logs, fmt.Sprintf("INFO: %s %v", msg, args))
-}
-
-func (m *mockLogger) Warn(msg string, args ...interface{}) {
-	m.logs = append(m.logs, fmt.Sprintf("WARN: %s %v", msg, args))
-}
-
-func (m *mockLogger) Error(msg string, args ...interface{}) {
-	m.logs = append(m.logs, fmt.Sprintf("ERROR: %s %v", msg, args))
-}
-
-func (m *mockLogger) WithGroup(name string) *slog.Logger {
-	return slog.Default()
-}
-
-func (m *mockLogger) GetLogs() []string {
-	return m.logs
-}
-
 func TestGetClientIP(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -231,7 +202,9 @@ func TestHealthCheck(t *testing.T) {
 	// Test successful health check
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		if _, err := w.Write([]byte("OK")); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	}))
 	defer server.Close()
 
@@ -243,7 +216,9 @@ func TestHealthCheck(t *testing.T) {
 	// Test failed health check (404)
 	server404 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("Not Found"))
+		if _, err := w.Write([]byte("Not Found")); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	}))
 	defer server404.Close()
 
@@ -272,15 +247,27 @@ func TestGetHTTPServer(t *testing.T) {
 	originalSecretKey := os.Getenv("SECRET_KEY")
 
 	defer func() {
-		os.Setenv("FORGEJO_URL", originalForgejoURL)
-		os.Setenv("FORGEJO_TOKEN", originalForgejoToken)
-		os.Setenv("SECRET_KEY", originalSecretKey)
+		if err := os.Setenv("FORGEJO_URL", originalForgejoURL); err != nil {
+			t.Logf("Failed to restore FORGEJO_URL: %v", err)
+		}
+		if err := os.Setenv("FORGEJO_TOKEN", originalForgejoToken); err != nil {
+			t.Logf("Failed to restore FORGEJO_TOKEN: %v", err)
+		}
+		if err := os.Setenv("SECRET_KEY", originalSecretKey); err != nil {
+			t.Logf("Failed to restore SECRET_KEY: %v", err)
+		}
 	}()
 
 	t.Run("Missing SECRET_KEY", func(t *testing.T) {
-		os.Setenv("FORGEJO_URL", "https://test.example.com")
-		os.Setenv("FORGEJO_TOKEN", "test-token")
-		os.Setenv("SECRET_KEY", "")
+		if err := os.Setenv("FORGEJO_URL", "https://test.example.com"); err != nil {
+			t.Fatalf("Failed to set FORGEJO_URL: %v", err)
+		}
+		if err := os.Setenv("FORGEJO_TOKEN", "test-token"); err != nil {
+			t.Fatalf("Failed to set FORGEJO_TOKEN: %v", err)
+		}
+		if err := os.Setenv("SECRET_KEY", ""); err != nil {
+			t.Fatalf("Failed to set SECRET_KEY: %v", err)
+		}
 
 		logger := slog.Default()
 		ctx := context.Background()

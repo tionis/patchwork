@@ -12,20 +12,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// PatchChannel represents a communication channel between producers and consumers
+// PatchChannel represents a communication channel between producers and consumers.
 type PatchChannel struct {
 	Data      chan Stream
 	Unpersist chan bool
 }
 
-// Stream represents a data stream with metadata
+// Stream represents a data stream with metadata.
 type Stream struct {
 	Reader  io.ReadCloser
 	Done    chan struct{}
 	Headers map[string]string
 }
 
-// Server contains the main server state and configuration
+// Server contains the main server state and configuration.
 type Server struct {
 	Logger        *slog.Logger
 	Channels      map[string]*PatchChannel
@@ -38,7 +38,7 @@ type Server struct {
 	AuthCache     *AuthCache
 }
 
-// ConfigData represents configuration template data for rendering index.html
+// ConfigData represents configuration template data for rendering index.html.
 type ConfigData struct {
 	ForgejoURL   string
 	ACLTTL       time.Duration
@@ -46,7 +46,7 @@ type ConfigData struct {
 	WebSocketURL string
 }
 
-// TokenInfo represents information about a token from auth.yaml
+// TokenInfo represents information about a token from auth.yaml.
 type TokenInfo struct {
 	IsAdmin   bool               `yaml:"is_admin"`
 	HuProxy   []*sshUtil.Pattern `yaml:"huproxy,omitempty"`
@@ -58,13 +58,13 @@ type TokenInfo struct {
 	ExpiresAt *time.Time         `yaml:"expires_at,omitempty"`
 }
 
-// UserAuth represents the auth.yaml configuration for a user
+// UserAuth represents the auth.yaml configuration for a user.
 type UserAuth struct {
 	Tokens    map[string]TokenInfo `yaml:"tokens"`
 	UpdatedAt time.Time            `yaml:"-"`
 }
 
-// AuthCache represents cached auth data with expiration
+// AuthCache represents cached auth data with expiration.
 type AuthCache struct {
 	Data         map[string]*UserAuth
 	Mutex        sync.RWMutex
@@ -74,13 +74,13 @@ type AuthCache struct {
 	Logger       *slog.Logger
 }
 
-// HookResponse represents the response structure for hook endpoint requests
+// HookResponse represents the response structure for hook endpoint requests.
 type HookResponse struct {
 	Channel string `json:"channel"`
 	Secret  string `json:"secret"`
 }
 
-// MarshalYAML implements custom YAML marshaling for TokenInfo
+// MarshalYAML implements custom YAML marshaling for TokenInfo.
 func (t TokenInfo) MarshalYAML() (interface{}, error) {
 	// Create a temporary struct with string slices for patterns
 	type TokenInfoYAML struct {
@@ -103,18 +103,23 @@ func (t TokenInfo) MarshalYAML() (interface{}, error) {
 	for _, pattern := range t.HuProxy {
 		result.HuProxy = append(result.HuProxy, pattern.String())
 	}
+
 	for _, pattern := range t.GET {
 		result.GET = append(result.GET, pattern.String())
 	}
+
 	for _, pattern := range t.POST {
 		result.POST = append(result.POST, pattern.String())
 	}
+
 	for _, pattern := range t.PUT {
 		result.PUT = append(result.PUT, pattern.String())
 	}
+
 	for _, pattern := range t.DELETE {
 		result.DELETE = append(result.DELETE, pattern.String())
 	}
+
 	for _, pattern := range t.PATCH {
 		result.PATCH = append(result.PATCH, pattern.String())
 	}
@@ -122,7 +127,7 @@ func (t TokenInfo) MarshalYAML() (interface{}, error) {
 	return result, nil
 }
 
-// UnmarshalYAML implements custom YAML unmarshaling for TokenInfo
+// UnmarshalYAML implements custom YAML unmarshaling for TokenInfo.
 func (t *TokenInfo) UnmarshalYAML(node *yaml.Node) error {
 	// Create a temporary struct with string slices for patterns
 	type TokenInfoYAML struct {
@@ -137,7 +142,9 @@ func (t *TokenInfo) UnmarshalYAML(node *yaml.Node) error {
 	}
 
 	var temp TokenInfoYAML
-	if err := node.Decode(&temp); err != nil {
+
+	err := node.Decode(&temp)
+	if err != nil {
 		return err
 	}
 
@@ -151,41 +158,52 @@ func (t *TokenInfo) UnmarshalYAML(node *yaml.Node) error {
 		if err != nil {
 			return fmt.Errorf("invalid huproxy pattern %q: %w", str, err)
 		}
+
 		t.HuProxy = append(t.HuProxy, pattern)
 	}
+
 	for _, str := range temp.GET {
 		pattern, err := sshUtil.NewPattern(str)
 		if err != nil {
 			return fmt.Errorf("invalid GET pattern %q: %w", str, err)
 		}
+
 		t.GET = append(t.GET, pattern)
 	}
+
 	for _, str := range temp.POST {
 		pattern, err := sshUtil.NewPattern(str)
 		if err != nil {
 			return fmt.Errorf("invalid POST pattern %q: %w", str, err)
 		}
+
 		t.POST = append(t.POST, pattern)
 	}
+
 	for _, str := range temp.PUT {
 		pattern, err := sshUtil.NewPattern(str)
 		if err != nil {
 			return fmt.Errorf("invalid PUT pattern %q: %w", str, err)
 		}
+
 		t.PUT = append(t.PUT, pattern)
 	}
+
 	for _, str := range temp.DELETE {
 		pattern, err := sshUtil.NewPattern(str)
 		if err != nil {
 			return fmt.Errorf("invalid DELETE pattern %q: %w", str, err)
 		}
+
 		t.DELETE = append(t.DELETE, pattern)
 	}
+
 	for _, str := range temp.PATCH {
 		pattern, err := sshUtil.NewPattern(str)
 		if err != nil {
 			return fmt.Errorf("invalid PATCH pattern %q: %w", str, err)
 		}
+
 		t.PATCH = append(t.PATCH, pattern)
 	}
 

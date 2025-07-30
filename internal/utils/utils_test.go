@@ -10,54 +10,54 @@ import (
 
 func TestGetClientIP(t *testing.T) {
 	tests := []struct {
-		name            string
-		forwardedFor    string
-		realIP          string
-		remoteAddr      string
-		expectedIP      string
+		name         string
+		forwardedFor string
+		realIP       string
+		remoteAddr   string
+		expectedIP   string
 	}{
 		{
-			name:            "X-Forwarded-For single IP",
-			forwardedFor:    "192.168.1.100",
-			expectedIP:      "192.168.1.100",
+			name:         "X-Forwarded-For single IP",
+			forwardedFor: "192.168.1.100",
+			expectedIP:   "192.168.1.100",
 		},
 		{
-			name:            "X-Forwarded-For multiple IPs",
-			forwardedFor:    "192.168.1.100, 10.0.0.1, 172.16.0.1",
-			expectedIP:      "192.168.1.100",
+			name:         "X-Forwarded-For multiple IPs",
+			forwardedFor: "192.168.1.100, 10.0.0.1, 172.16.0.1",
+			expectedIP:   "192.168.1.100",
 		},
 		{
-			name:            "X-Real-IP header",
-			realIP:          "203.0.113.100",
-			expectedIP:      "203.0.113.100",
+			name:       "X-Real-IP header",
+			realIP:     "203.0.113.100",
+			expectedIP: "203.0.113.100",
 		},
 		{
-			name:            "X-Forwarded-For takes precedence over X-Real-IP",
-			forwardedFor:    "192.168.1.100",
-			realIP:          "203.0.113.100",
-			expectedIP:      "192.168.1.100",
+			name:         "X-Forwarded-For takes precedence over X-Real-IP",
+			forwardedFor: "192.168.1.100",
+			realIP:       "203.0.113.100",
+			expectedIP:   "192.168.1.100",
 		},
 		{
-			name:            "RemoteAddr fallback with port",
-			remoteAddr:      "198.51.100.50:12345",
-			expectedIP:      "198.51.100.50",
+			name:       "RemoteAddr fallback with port",
+			remoteAddr: "198.51.100.50:12345",
+			expectedIP: "198.51.100.50",
 		},
 		{
-			name:            "RemoteAddr fallback without port",
-			remoteAddr:      "198.51.100.50",
-			expectedIP:      "198.51.100.50",
+			name:       "RemoteAddr fallback without port",
+			remoteAddr: "198.51.100.50",
+			expectedIP: "198.51.100.50",
 		},
 		{
-			name:            "IPv6 address with port",
-			remoteAddr:      "[2001:db8::1]:8080",
-			expectedIP:      "[2001:db8::1]",
+			name:       "IPv6 address with port",
+			remoteAddr: "[2001:db8::1]:8080",
+			expectedIP: "[2001:db8::1]",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/test", nil)
-			
+
 			if tt.forwardedFor != "" {
 				req.Header.Set("X-Forwarded-For", tt.forwardedFor)
 			}
@@ -90,7 +90,7 @@ func TestLogRequest(t *testing.T) {
 	LogRequest(req, "Test message", logger)
 
 	logOutput := logBuffer.String()
-	
+
 	// Check that important information is logged
 	expectedStrings := []string{
 		"Test message",
@@ -132,7 +132,7 @@ func TestGenerateUUID(t *testing.T) {
 
 	// Test that UUID contains only hex characters
 	for _, char := range uuid1 {
-		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
 			t.Errorf("Expected UUID to contain only hex characters, found %c", char)
 			break
 		}
@@ -145,7 +145,7 @@ func TestComputeSecret(t *testing.T) {
 	channel := "test-channel"
 
 	secret1 := ComputeSecret(secretKey, namespace, channel)
-	
+
 	// Test that secret is generated
 	if secret1 == "" {
 		t.Error("Expected non-empty secret")
@@ -176,7 +176,7 @@ func TestComputeSecret(t *testing.T) {
 
 	// Test that secret is hex-encoded
 	for _, char := range secret1 {
-		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
 			t.Errorf("Expected secret to be hex-encoded, found character %c", char)
 			break
 		}
@@ -298,7 +298,7 @@ func TestSecurityEdgeCases(t *testing.T) {
 
 	t.Run("Special characters in namespace and channel", func(t *testing.T) {
 		secretKey := []byte("test-secret-key")
-		
+
 		specialCases := []struct {
 			namespace string
 			channel   string

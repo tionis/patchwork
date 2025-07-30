@@ -83,15 +83,15 @@ func (m *MockServer) AuthenticateToken(username, token, path, reqType string, is
 	if m.authFunc != nil {
 		return m.authFunc(username, token, path, reqType, isHuProxy, clientIP)
 	}
-	
+
 	if m.authError != nil {
 		return false, m.authReason, m.authError
 	}
-	
+
 	if username == m.expectedUsername && token == m.expectedToken {
 		return m.shouldAuth, m.authReason, nil
 	}
-	
+
 	return false, "invalid credentials", nil
 }
 
@@ -110,7 +110,7 @@ func startMockTCPEchoServer(t *testing.T) (string, func()) {
 	}
 
 	address := listener.Addr().String()
-	
+
 	// Start server in goroutine
 	go func() {
 		for {
@@ -118,10 +118,14 @@ func startMockTCPEchoServer(t *testing.T) (string, func()) {
 			if err != nil {
 				return // Server closed
 			}
-			
+
 			// Handle connection in goroutine
 			go func(c net.Conn) {
-				defer c.Close()
+				defer func() {
+					if err := c.Close(); err != nil {
+						t.Logf("Failed to close connection: %v", err)
+					}
+				}()
 				// Echo server: copy everything back
 				_, err := io.Copy(c, c)
 				if err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
@@ -130,11 +134,15 @@ func startMockTCPEchoServer(t *testing.T) (string, func()) {
 			}(conn)
 		}
 	}()
-	
+
 	// Give server time to start
 	time.Sleep(10 * time.Millisecond)
-	
-	return address, func() { listener.Close() }
+
+	return address, func() {
+		if err := listener.Close(); err != nil {
+			t.Logf("Failed to close listener: %v", err)
+		}
+	}
 }
 
 // startMockTCPServerWithCustomHandler creates a TCP server with custom message handling
@@ -145,23 +153,27 @@ func startMockTCPServerWithCustomHandler(t *testing.T, handler func([]byte) []by
 	}
 
 	address := listener.Addr().String()
-	
+
 	go func() {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
 				return
 			}
-			
+
 			go func(c net.Conn) {
-				defer c.Close()
+				defer func() {
+					if err := c.Close(); err != nil {
+						t.Logf("Failed to close connection: %v", err)
+					}
+				}()
 				buffer := make([]byte, 1024)
 				for {
 					n, err := c.Read(buffer)
 					if err != nil {
 						return
 					}
-					
+
 					response := handler(buffer[:n])
 					if len(response) > 0 {
 						c.Write(response)
@@ -170,7 +182,7 @@ func startMockTCPServerWithCustomHandler(t *testing.T, handler func([]byte) []by
 			}(conn)
 		}
 	}()
-	
+
 	time.Sleep(10 * time.Millisecond)
 	return address, func() { listener.Close() }
 }
@@ -192,7 +204,7 @@ func TestFile2WS(t *testing.T) {
 			if err != nil {
 				break
 			}
-			
+
 			if messageType == websocket.BinaryMessage {
 				// Echo the data back
 				conn.WriteMessage(websocket.BinaryMessage, data)
@@ -217,7 +229,7 @@ func TestFile2WS(t *testing.T) {
 
 	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	// Start File2WS in a goroutine
 	errCh := make(chan error, 1)
 	go func() {
@@ -240,7 +252,7 @@ func TestFile2WS(t *testing.T) {
 
 	// Test context cancellation
 	cancel()
-	
+
 	// Wait for File2WS to finish
 	select {
 	case err := <-errCh:
@@ -261,7 +273,7 @@ func TestFile2WSContextCancellation(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		
+
 		// Just wait and don't read messages
 		time.Sleep(2 * time.Second)
 	}))
@@ -278,7 +290,7 @@ func TestFile2WSContextCancellation(t *testing.T) {
 	reader := strings.NewReader(strings.Repeat("data", 1000))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- File2WS(ctx, cancel, reader, wsConn)
@@ -348,7 +360,7 @@ func TestHuproxyHandlerAuthentication(t *testing.T) {
 			// Start mock TCP echo server
 			tcpAddr, closeTCP := startMockTCPEchoServer(t)
 			defer closeTCP()
-			
+
 			// Parse TCP address
 			host, port, err := net.SplitHostPort(tcpAddr)
 			if err != nil {
@@ -401,7 +413,7 @@ func TestHuproxyHandlerAuthentication(t *testing.T) {
 			// Check that authentication was called with correct parameters
 			if tt.authHeader != "" {
 				logs := mockSrv.logger.GetLogs()
-				
+
 				// Should have authentication request log
 				found := false
 				for _, log := range logs {
@@ -456,7 +468,7 @@ func TestHuproxyHandlerTCPConnection(t *testing.T) {
 	// Create WebSocket connection with authentication
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer valid-token")
-	
+
 	wsConn, resp, err := websocket.DefaultDialer.Dial(wsURL, headers)
 	if err != nil {
 		t.Fatalf("Failed to connect to WebSocket: %v, response: %v", err, resp)
@@ -526,7 +538,7 @@ func TestHuproxyHandlerTCPConnectionFailure(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer valid-token")
-	
+
 	wsConn, resp, err := websocket.DefaultDialer.Dial(wsURL, headers)
 	if err != nil {
 		t.Fatalf("Failed to connect to WebSocket: %v, response: %v", err, resp)
@@ -560,10 +572,10 @@ func TestHuproxyHandlerClientIPExtraction(t *testing.T) {
 	host, port, _ := net.SplitHostPort(tcpAddr)
 
 	tests := []struct {
-		name            string
-		xForwardedFor   string
-		remoteAddr      string
-		expectedIP      string
+		name          string
+		xForwardedFor string
+		remoteAddr    string
+		expectedIP    string
 	}{
 		{
 			name:          "X-Forwarded-For header",
@@ -582,7 +594,7 @@ func TestHuproxyHandlerClientIPExtraction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockSrv := NewMockServer()
-			
+
 			// Set up auth function to capture client IP
 			var capturedClientIP net.IP
 			mockSrv.authFunc = func(username, token, path, reqType string, isHuProxy bool, clientIP net.IP) (bool, string, error) {
@@ -591,20 +603,20 @@ func TestHuproxyHandlerClientIPExtraction(t *testing.T) {
 			}
 
 			handler := HuproxyHandler(mockSrv)
-			
+
 			req := httptest.NewRequest("GET", "/", nil)
 			req = mux.SetURLVars(req, map[string]string{
 				"user": "testuser",
 				"host": host,
 				"port": port,
 			})
-			
+
 			req.Header.Set("Authorization", "Bearer valid-token")
 			req.Header.Set("Connection", "Upgrade")
 			req.Header.Set("Upgrade", "websocket")
 			req.Header.Set("Sec-WebSocket-Version", "13")
 			req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
-			
+
 			if tt.xForwardedFor != "" {
 				req.Header.Set("X-Forwarded-For", tt.xForwardedFor)
 			}
@@ -615,7 +627,7 @@ func TestHuproxyHandlerClientIPExtraction(t *testing.T) {
 
 			// Verify the captured client IP
 			if capturedClientIP == nil {
-				// The IP parsing in huproxy might fail for certain formats, 
+				// The IP parsing in huproxy might fail for certain formats,
 				// so let's just verify the function was called
 				logs := mockSrv.logger.GetLogs()
 				foundConnectionRequest := false
@@ -670,7 +682,7 @@ func TestHuproxyHandlerLargeDataTransfer(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer valid-token")
-	
+
 	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
 	if err != nil {
 		t.Fatalf("Failed to connect to WebSocket: %v", err)
@@ -744,7 +756,7 @@ func TestHuproxyHandlerBasicFunctionality(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer valid-token")
-	
+
 	// This should work and establish the tunnel
 	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
 	if err != nil {

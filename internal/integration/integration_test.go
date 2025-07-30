@@ -127,7 +127,11 @@ func TestFullServerIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to get status: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				t.Logf("Failed to close response body: %v", closeErr)
+			}
+		}()
 
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -149,7 +153,11 @@ func TestFullServerIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to access public namespace: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				t.Errorf("Failed to close response body: %v", closeErr)
+			}
+		}()
 
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("Expected status 200 for public access, got %d", resp.StatusCode)
@@ -495,8 +503,12 @@ func BenchmarkIntegratedServer(b *testing.B) {
 			if err != nil {
 				b.Fatalf("Failed to make request: %v", err)
 			}
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+				b.Logf("Failed to discard response body: %v", err)
+			}
+			if err := resp.Body.Close(); err != nil {
+				b.Logf("Failed to close response body: %v", err)
+			}
 		}
 	})
 
@@ -513,8 +525,12 @@ func BenchmarkIntegratedServer(b *testing.B) {
 			if err != nil {
 				b.Fatalf("Failed to make request: %v", err)
 			}
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+				b.Logf("Failed to discard response body: %v", err)
+			}
+			if err := resp.Body.Close(); err != nil {
+				b.Logf("Failed to close response body: %v", err)
+			}
 		}
 	})
 
@@ -528,8 +544,12 @@ func BenchmarkIntegratedServer(b *testing.B) {
 			if err != nil {
 				b.Fatalf("Failed to make request: %v", err)
 			}
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+				b.Logf("Failed to discard response body: %v", err)
+			}
+			if err := resp.Body.Close(); err != nil {
+				b.Logf("Failed to close response body: %v", err)
+			}
 		}
 	})
 }

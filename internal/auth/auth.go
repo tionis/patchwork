@@ -10,8 +10,15 @@ import (
 	sshUtil "github.com/tionis/ssh-tools/util"
 )
 
-// AuthenticateToken provides authentication for tokens using ACL cache
-func AuthenticateToken(authCache *types.AuthCache, username string, token, path, reqType string, isHuProxy bool, clientIP net.IP, logger *slog.Logger) (bool, string, error) {
+// AuthenticateToken provides authentication for tokens using ACL cache.
+func AuthenticateToken(
+	authCache *types.AuthCache,
+	username string,
+	token, path, reqType string,
+	isHuProxy bool,
+	clientIP net.IP,
+	logger *slog.Logger,
+) (bool, string, error) {
 	if username == "" {
 		// Public namespace, no authentication required
 		return true, "public", nil
@@ -32,9 +39,25 @@ func AuthenticateToken(authCache *types.AuthCache, username string, token, path,
 	}
 
 	// Use auth cache to validate token
-	valid, tokenInfo, err := ValidateToken(authCache, username, token, reqType, operation, isHuProxy)
+	valid, tokenInfo, err := ValidateToken(
+		authCache,
+		username,
+		token,
+		reqType,
+		operation,
+		isHuProxy,
+	)
 	if err != nil {
-		logger.Error("Token validation error", "username", username, "error", err, "is_huproxy", isHuProxy)
+		logger.Error(
+			"Token validation error",
+			"username",
+			username,
+			"error",
+			err,
+			"is_huproxy",
+			isHuProxy,
+		)
+
 		return false, "validation error", err
 	}
 
@@ -53,8 +76,12 @@ func AuthenticateToken(authCache *types.AuthCache, username string, token, path,
 	return true, "authenticated", nil
 }
 
-// ValidateToken checks if a token is valid for a user and operation
-func ValidateToken(cache *types.AuthCache, username, token, method, path string, isHuProxy bool) (bool, *types.TokenInfo, error) {
+// ValidateToken checks if a token is valid for a user and operation.
+func ValidateToken(
+	cache *types.AuthCache,
+	username, token, method, path string,
+	isHuProxy bool,
+) (bool, *types.TokenInfo, error) {
 	auth, err := GetUserAuth(cache, username)
 	if err != nil {
 		return false, nil, err
@@ -75,11 +102,13 @@ func ValidateToken(cache *types.AuthCache, username, token, method, path string,
 		if len(tokenInfo.HuProxy) == 0 {
 			return false, nil, nil
 		}
+
 		return sshUtil.MatchPatternList(tokenInfo.HuProxy, path), &tokenInfo, nil
 	}
 
 	// For regular HTTP requests, check method-specific permissions
 	var patterns []*sshUtil.Pattern
+
 	switch strings.ToUpper(method) {
 	case "GET":
 		patterns = tokenInfo.GET

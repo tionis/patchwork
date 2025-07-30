@@ -12,36 +12,42 @@ import (
 	"github.com/tionis/patchwork/internal/utils"
 )
 
-// StatusHandler handles health check requests
+// StatusHandler handles health check requests.
 func StatusHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+	err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	if err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
-// PublicHandler handles requests to the public namespace
+// PublicHandler handles requests to the public namespace.
 func PublicHandler(s *types.Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		path := vars["path"]
+
 		utils.LogRequest(r, "Public namespace access", s.Logger)
 		server.HandlePatch(s, w, r, "p", "", path)
 	}
 }
 
-// UserHandler handles requests to user namespaces
+// UserHandler handles requests to user namespaces.
 func UserHandler(s *types.Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		username := vars["username"]
 		path := vars["path"]
+
 		utils.LogRequest(r, "User namespace access", s.Logger)
 		s.Logger.Info("User namespace details", "username", username, "path", path)
 		server.HandlePatch(s, w, r, "u/"+username, username, path)
 	}
 }
 
-// UserAdminHandler handles requests to user administrative endpoints
+// UserAdminHandler handles requests to user administrative endpoints.
 func UserAdminHandler(s *types.Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -54,8 +60,15 @@ func UserAdminHandler(s *types.Server) http.HandlerFunc {
 		// Get Authorization header
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			s.Logger.Info("Admin access denied - no authorization header", "username", username, "admin_path", adminPath)
+			s.Logger.Info(
+				"Admin access denied - no authorization header",
+				"username",
+				username,
+				"admin_path",
+				adminPath,
+			)
 			http.Error(w, "Authorization required", http.StatusUnauthorized)
+
 			return
 		}
 
@@ -70,16 +83,31 @@ func UserAdminHandler(s *types.Server) http.HandlerFunc {
 		}
 
 		// Validate token and check admin status
-		valid, tokenInfo, err := auth.ValidateToken(s.AuthCache, username, token, "ADMIN", adminPath, false)
+		valid, tokenInfo, err := auth.ValidateToken(
+			s.AuthCache,
+			username,
+			token,
+			"ADMIN",
+			adminPath,
+			false,
+		)
 		if err != nil {
 			s.Logger.Error("Admin token validation error", "username", username, "error", err)
 			http.Error(w, "Token validation error", http.StatusInternalServerError)
+
 			return
 		}
 
 		if !valid || !tokenInfo.IsAdmin {
-			s.Logger.Info("Admin access denied - invalid or non-admin token", "username", username, "admin_path", adminPath)
+			s.Logger.Info(
+				"Admin access denied - invalid or non-admin token",
+				"username",
+				username,
+				"admin_path",
+				adminPath,
+			)
 			http.Error(w, "Admin access denied", http.StatusForbidden)
+
 			return
 		}
 
@@ -87,7 +115,13 @@ func UserAdminHandler(s *types.Server) http.HandlerFunc {
 		switch adminPath {
 		case "invalidate_cache":
 			auth.InvalidateUser(s.AuthCache, username)
-			s.Logger.Info("Cache invalidated via admin endpoint", "username", username, "client_ip", utils.GetClientIP(r))
+			s.Logger.Info(
+				"Cache invalidated via admin endpoint",
+				"username",
+				username,
+				"client_ip",
+				utils.GetClientIP(r),
+			)
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"status": "cache invalidated"}`))
 
@@ -98,7 +132,7 @@ func UserAdminHandler(s *types.Server) http.HandlerFunc {
 	}
 }
 
-// ForwardHookRootHandler handles forward hook root requests
+// ForwardHookRootHandler handles forward hook root requests.
 func ForwardHookRootHandler(s *types.Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -111,6 +145,7 @@ func ForwardHookRootHandler(s *types.Server) http.HandlerFunc {
 		if err != nil {
 			s.Logger.Error("Failed to generate channel ID", "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
+
 			return
 		}
 
@@ -126,7 +161,13 @@ func ForwardHookRootHandler(s *types.Server) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			s.Logger.Error("Failed to encode hook response", "error", err)
+			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+
+			return
+		}
 
 		s.Logger.Info("Forward hook channel created",
 			"username", username,
@@ -136,7 +177,7 @@ func ForwardHookRootHandler(s *types.Server) http.HandlerFunc {
 	}
 }
 
-// ForwardHookHandler handles forward hook requests with specific channels
+// ForwardHookHandler handles forward hook requests with specific channels.
 func ForwardHookHandler(s *types.Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -155,6 +196,7 @@ func ForwardHookHandler(s *types.Server) http.HandlerFunc {
 				"channel", channel,
 				"client_ip", utils.GetClientIP(r))
 			http.Error(w, "Invalid secret", http.StatusUnauthorized)
+
 			return
 		}
 
@@ -168,7 +210,7 @@ func ForwardHookHandler(s *types.Server) http.HandlerFunc {
 	}
 }
 
-// ReverseHookRootHandler handles reverse hook root requests
+// ReverseHookRootHandler handles reverse hook root requests.
 func ReverseHookRootHandler(s *types.Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -181,6 +223,7 @@ func ReverseHookRootHandler(s *types.Server) http.HandlerFunc {
 		if err != nil {
 			s.Logger.Error("Failed to generate channel ID", "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
+
 			return
 		}
 
@@ -196,7 +239,13 @@ func ReverseHookRootHandler(s *types.Server) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			s.Logger.Error("Failed to encode hook response", "error", err)
+			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+
+			return
+		}
 
 		s.Logger.Info("Reverse hook channel created",
 			"username", username,
@@ -206,7 +255,7 @@ func ReverseHookRootHandler(s *types.Server) http.HandlerFunc {
 	}
 }
 
-// ReverseHookHandler handles reverse hook requests with specific channels
+// ReverseHookHandler handles reverse hook requests with specific channels.
 func ReverseHookHandler(s *types.Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -225,6 +274,7 @@ func ReverseHookHandler(s *types.Server) http.HandlerFunc {
 				"channel", channel,
 				"client_ip", utils.GetClientIP(r))
 			http.Error(w, "Invalid secret", http.StatusUnauthorized)
+
 			return
 		}
 

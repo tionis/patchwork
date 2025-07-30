@@ -25,33 +25,42 @@ var (
 // This function was moved from the original huproxy/lib package.
 func File2WS(ctx context.Context, cancel func(), src io.Reader, dst *websocket.Conn) error {
 	defer cancel()
+
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
+
 		b := make([]byte, 32*1024)
 		if n, err := src.Read(b); err != nil {
 			return err
 		} else {
 			b = b[:n]
 		}
-		if err := dst.WriteMessage(websocket.BinaryMessage, b); err != nil {
+
+		err := dst.WriteMessage(websocket.BinaryMessage, b)
+		if err != nil {
 			return err
 		}
 	}
 }
 
 // HuproxyHandlerFunc creates a handler function for HuProxy WebSocket tunneling
-// This handler expects a server interface that provides authentication and logging
+// This handler expects a server interface that provides authentication and logging.
 type ServerInterface interface {
-	AuthenticateToken(username string, token, path, reqType string, isHuProxy bool, clientIP net.IP) (bool, string, error)
+	AuthenticateToken(
+		username string,
+		token, path, reqType string,
+		isHuProxy bool,
+		clientIP net.IP,
+	) (bool, string, error)
 	GetLogger() interface {
 		Info(msg string, args ...interface{})
 		Error(msg string, args ...interface{})
 	}
 }
 
-// HuproxyHandler handles HuProxy WebSocket tunnel requests
+// HuproxyHandler handles HuProxy WebSocket tunnel requests.
 func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -81,6 +90,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 				"target", address,
 				"client_ip", clientIP)
 			http.Error(w, "Unauthorized: Missing Authorization header", http.StatusUnauthorized)
+
 			return
 		}
 
@@ -93,10 +103,18 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 		if clientIPStr == "" {
 			clientIPStr = r.RemoteAddr
 		}
+
 		clientIPParsed := net.ParseIP(clientIPStr)
 
 		// Authenticate token against user's auth.yaml file for huproxy permissions
-		allowed, reason, err := srv.AuthenticateToken(user, authToken, address, "CONNECT", true, clientIPParsed)
+		allowed, reason, err := srv.AuthenticateToken(
+			user,
+			authToken,
+			address,
+			"CONNECT",
+			true,
+			clientIPParsed,
+		)
 		if err != nil {
 			logger.Error("HUProxy authentication error",
 				"error", err,
@@ -104,8 +122,10 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 				"target", address,
 				"client_ip", clientIP)
 			http.Error(w, "Internal Server Error: "+reason, http.StatusInternalServerError)
+
 			return
 		}
+
 		if !allowed {
 			logger.Info("HUProxy authentication denied",
 				"user", user,
@@ -113,6 +133,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 				"target", address,
 				"client_ip", clientIP)
 			http.Error(w, "Forbidden: "+reason, http.StatusForbidden)
+
 			return
 		}
 
@@ -120,6 +141,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 			"user", user,
 			"target", address,
 			"client_ip", clientIP)
+
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 
@@ -135,6 +157,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 				"user", user,
 				"target", address,
 				"client_ip", clientIP)
+
 			return
 		}
 		defer func(conn *websocket.Conn) {
@@ -142,6 +165,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 				"user", user,
 				"target", address,
 				"client_ip", clientIP)
+
 			err := conn.Close()
 			if err != nil {
 				logger.Error("Failed to close WebSocket connection",
@@ -164,6 +188,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 				"user", user,
 				"target", address,
 				"client_ip", clientIP)
+
 			return
 		}
 		defer func(targetConn net.Conn) {
@@ -171,6 +196,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 				"user", user,
 				"target", address,
 				"client_ip", clientIP)
+
 			err := targetConn.Close()
 			if err != nil {
 				logger.Error("Failed to close TCP connection",
@@ -189,6 +215,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 		// websocket -> server
 		go func() {
 			totalBytes := int64(0)
+
 			for {
 				mt, r, err := conn.NextReader()
 				if websocket.IsCloseError(err,
@@ -200,8 +227,10 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 						"target", address,
 						"client_ip", clientIP,
 						"total_bytes_ws_to_tcp", totalBytes)
+
 					return
 				}
+
 				if err != nil {
 					logger.Error("WebSocket NextReader error",
 						"error", err,
@@ -209,16 +238,20 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 						"target", address,
 						"client_ip", clientIP,
 						"total_bytes_ws_to_tcp", totalBytes)
+
 					return
 				}
+
 				if mt != websocket.BinaryMessage {
 					logger.Error("Received non-binary WebSocket message",
 						"message_type", mt,
 						"user", user,
 						"target", address,
 						"client_ip", clientIP)
+
 					return
 				}
+
 				if bytesWritten, err := io.Copy(targetConn, r); err != nil {
 					logger.Error("Error copying WebSocket data to TCP",
 						"error", err,
@@ -241,14 +274,16 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 			"target", address,
 			"client_ip", clientIP)
 
-		if err := File2WS(ctx, cancel, targetConn, conn); err == io.EOF {
+		if err := File2WS(ctx, cancel, targetConn, conn); errors.Is(err, io.EOF) {
 			logger.Info("TCP connection closed normally (EOF)",
 				"user", user,
 				"target", address,
 				"client_ip", clientIP)
-			if err := conn.WriteControl(websocket.CloseMessage,
+
+			err := conn.WriteControl(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-				time.Now().Add(HuProxyWriteTimeout)); errors.Is(err, websocket.ErrCloseSent) {
+				time.Now().Add(HuProxyWriteTimeout))
+			if errors.Is(err, websocket.ErrCloseSent) {
 			} else if err != nil {
 				logger.Error("Error sending WebSocket close message",
 					"error", err,
