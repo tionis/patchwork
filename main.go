@@ -453,22 +453,26 @@ func (cache *AuthCache) InvalidateUser(username string) {
 func (cache *AuthCache) validateToken(username, token, method, path string, isHuProxy bool) (bool, *TokenInfo, error) {
 	auth, err := cache.GetUserAuth(username)
 	if err != nil {
+		cache.logger.Error("Failed to get user auth", "username", username, "error", err)
 		return false, nil, err
 	}
 
 	tokenInfo, exists := auth.Tokens[token]
 	if !exists {
+		cache.logger.Info("Token not found", "username", username, "token", token)
 		return false, nil, nil
 	}
 
 	// Check if token is expired
 	if tokenInfo.ExpiresAt != nil && time.Now().After(*tokenInfo.ExpiresAt) {
+		cache.logger.Info("Token expired", "username", username, "token", token)
 		return false, nil, nil
 	}
 
 	// For HuProxy requests, check if token has huproxy permissions
 	if isHuProxy {
 		if len(tokenInfo.HuProxy) == 0 {
+			cache.logger.Info("HuProxy token has no permissions", "username", username, "token", token)
 			return false, nil, nil
 		}
 		return sshUtil.MatchPatternList(tokenInfo.HuProxy, path), &tokenInfo, nil
@@ -495,10 +499,17 @@ func (cache *AuthCache) validateToken(username, token, method, path string, isHu
 	}
 
 	if len(patterns) == 0 {
+		cache.logger.Info("No patterns found for token", "username", username, "token", token)
 		return false, nil, nil
 	}
 
-	return sshUtil.MatchPatternList(patterns, path), &tokenInfo, nil
+	if sshUtil.MatchPatternList(patterns, path) {
+		cache.logger.Info("Token validated", "username", username, "token", token)
+		return true, &tokenInfo, nil
+	} else {
+		cache.logger.Info("Token does not match patterns", "username", username, "token", token, "path", path)
+	}
+	return false, nil, nil
 }
 
 // HookResponse represents the response structure for hook endpoint requests
