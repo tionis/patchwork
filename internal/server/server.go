@@ -220,6 +220,8 @@ func HealthCheck(url string) error {
 		closeErr := resp.Body.Close()
 		if closeErr != nil {
 			// Note: Can't use logger here as it's not available in this context
+			// Ignore close error in health check context
+			_ = closeErr
 		}
 	}()
 

@@ -123,7 +123,10 @@ func UserAdminHandler(s *types.Server) http.HandlerFunc {
 				utils.GetClientIP(r),
 			)
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"status": "cache invalidated"}`))
+
+			if _, err := w.Write([]byte(`{"status": "cache invalidated"}`)); err != nil {
+				s.Logger.Error("Failed to write response", "error", err)
+			}
 
 		default:
 			s.Logger.Info("Unknown admin endpoint", "username", username, "admin_path", adminPath)
