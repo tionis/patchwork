@@ -3,7 +3,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 COPY ./vendor ./vendor
 COPY ./*.go ./
-COPY ./huproxy ./huproxy/
+COPY ./internal ./internal
 COPY ./assets ./assets
 RUN CGO_ENABLED=0 GOOS=linux go build -o /patchwork
 
