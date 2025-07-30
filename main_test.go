@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"gopkg.in/yaml.v3"
 )
 
 // Mock logger for testing
@@ -51,10 +52,10 @@ func (m *mockLogger) GetLogs() []string {
 
 func TestGetClientIP(t *testing.T) {
 	tests := []struct {
-		name         string
-		headers      map[string]string
-		remoteAddr   string
-		expectedIP   string
+		name       string
+		headers    map[string]string
+		remoteAddr string
+		expectedIP string
 	}{
 		{
 			name:       "X-Forwarded-For single IP",
@@ -93,10 +94,10 @@ func TestGetClientIP(t *testing.T) {
 			expectedIP: "192.168.1.1",
 		},
 		{
-			name:       "X-Forwarded-For takes precedence",
+			name: "X-Forwarded-For takes precedence",
 			headers: map[string]string{
-				"X-Forwarded-For": "192.168.1.100",
-				"X-Real-IP":       "203.0.113.1",
+				"X-Forwarded-For":  "192.168.1.100",
+				"X-Real-IP":        "203.0.113.1",
 				"CF-Connecting-IP": "198.51.100.1",
 			},
 			remoteAddr: "10.0.0.1:12345",
@@ -108,7 +109,7 @@ func TestGetClientIP(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/", nil)
 			req.RemoteAddr = tt.remoteAddr
-			
+
 			for key, value := range tt.headers {
 				req.Header.Set(key, value)
 			}
@@ -160,7 +161,7 @@ func TestServerComputeSecret(t *testing.T) {
 	secretKey := []byte("test-secret-key-for-testing")
 	logger := slog.Default()
 	authCache := NewAuthCache("https://test.example.com", "test-token", 5*time.Minute, logger)
-	
+
 	server := &server{
 		logger:    logger,
 		secretKey: secretKey,
@@ -198,7 +199,7 @@ func TestServerVerifySecret(t *testing.T) {
 	secretKey := []byte("test-secret-key-for-testing")
 	logger := slog.Default()
 	authCache := NewAuthCache("https://test.example.com", "test-token", 5*time.Minute, logger)
-	
+
 	server := &server{
 		logger:    logger,
 		secretKey: secretKey,
@@ -269,7 +270,7 @@ func TestGetHTTPServer(t *testing.T) {
 	originalForgejoURL := os.Getenv("FORGEJO_URL")
 	originalForgejoToken := os.Getenv("FORGEJO_TOKEN")
 	originalSecretKey := os.Getenv("SECRET_KEY")
-	
+
 	defer func() {
 		os.Setenv("FORGEJO_URL", originalForgejoURL)
 		os.Setenv("FORGEJO_TOKEN", originalForgejoToken)
@@ -283,7 +284,7 @@ func TestGetHTTPServer(t *testing.T) {
 
 		logger := slog.Default()
 		ctx := context.Background()
-		
+
 		server := getHTTPServer(logger, ctx, 8080)
 		if server != nil {
 			t.Error("Expected nil server when SECRET_KEY is missing")
@@ -297,7 +298,7 @@ func TestGetHTTPServer(t *testing.T) {
 
 		logger := slog.Default()
 		ctx := context.Background()
-		
+
 		server := getHTTPServer(logger, ctx, 8080)
 		if server != nil {
 			t.Error("Expected nil server when FORGEJO_TOKEN is missing")
@@ -312,7 +313,7 @@ func TestGetHTTPServer(t *testing.T) {
 
 		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 		ctx := context.Background()
-		
+
 		server := getHTTPServer(logger, ctx, 8081)
 		if server == nil {
 			t.Fatal("Expected valid server, got nil")
@@ -419,7 +420,7 @@ func TestServeFile(t *testing.T) {
 func TestAuthenticateTokenEdgeCases(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	authCache := NewAuthCache("https://test.example.com", "test-token", 5*time.Minute, logger)
-	
+
 	server := &server{
 		logger:    logger,
 		authCache: authCache,
@@ -468,15 +469,112 @@ func TestTokenInfoMarshalUnmarshalYAML(t *testing.T) {
 	}
 }
 
+func TestTokenInfoUnmarshalYAML(t *testing.T) {
+	tests := []struct {
+		name          string
+		yamlData      string
+		expectedAdmin bool
+		expectError   bool
+	}{
+		{
+			name:          "Valid admin token",
+			yamlData:      "is_admin: true",
+			expectedAdmin: true,
+			expectError:   false,
+		},
+		{
+			name:          "Valid non-admin token",
+			yamlData:      "is_admin: false",
+			expectedAdmin: false,
+			expectError:   false,
+		},
+		{
+			name:          "Empty YAML",
+			yamlData:      "",
+			expectedAdmin: false,
+			expectError:   false,
+		},
+		{
+			name:          "Only admin field",
+			yamlData:      "is_admin: true",
+			expectedAdmin: true,
+			expectError:   false,
+		},
+		{
+			name:        "Invalid YAML",
+			yamlData:    "is_admin: [invalid",
+			expectError: true,
+		},
+		{
+			name:        "Admin field with string value",
+			yamlData:    "is_admin: \"true\"",
+			expectError: true, // String values can't be unmarshaled to bool
+		},
+		{
+			name:        "Admin field with string false",
+			yamlData:    "is_admin: \"false\"",
+			expectError: true, // String values can't be unmarshaled to bool
+		},
+		{
+			name:          "Complex YAML with other fields",
+			yamlData:      "is_admin: true\nGET:\n  - \"/api/*\"\nPOST:\n  - \"/data/*\"",
+			expectedAdmin: true,
+			expectError:   false,
+		},
+		{
+			name:          "YAML with expires_at field",
+			yamlData:      "is_admin: false\nexpires_at: 2024-12-31T23:59:59Z",
+			expectedAdmin: false,
+			expectError:   false,
+		},
+		{
+			name:          "YAML with HTTP method patterns",
+			yamlData:      "is_admin: false\nGET:\n  - \"/api/*\"\n  - \"/health\"\nPOST:\n  - \"/data/*\"\nhuproxy:\n  - \"example.com:*\"",
+			expectedAdmin: false,
+			expectError:   false,
+		},
+		{
+			name:          "YAML with all HTTP methods",
+			yamlData:      "is_admin: true\nGET:\n  - \"/*\"\nPOST:\n  - \"/*\"\nPUT:\n  - \"/*\"\nDELETE:\n  - \"/*\"\nPATCH:\n  - \"/*\"",
+			expectedAdmin: true,
+			expectError:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var tokenInfo TokenInfo
+
+			// Use yaml.Unmarshal to trigger the UnmarshalYAML method
+			err := yaml.Unmarshal([]byte(tt.yamlData), &tokenInfo)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error from UnmarshalYAML, got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Expected no error from UnmarshalYAML, got %v", err)
+				return
+			}
+
+			if tokenInfo.IsAdmin != tt.expectedAdmin {
+				t.Errorf("Expected IsAdmin %v, got %v", tt.expectedAdmin, tokenInfo.IsAdmin)
+			}
+		})
+	}
+}
 func TestPatchChannelCreation(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	authCache := NewAuthCache("https://test.example.com", "test-token", 5*time.Minute, logger)
-	
+
 	server := &server{
-		logger:        logger,
-		channels:      make(map[string]*patchChannel),
-		ctx:           context.Background(),
-		authCache:     authCache,
+		logger:    logger,
+		channels:  make(map[string]*patchChannel),
+		ctx:       context.Background(),
+		authCache: authCache,
 	}
 
 	// Test that channels map is properly initialized
@@ -552,7 +650,7 @@ func TestConfigDataStruct(t *testing.T) {
 func TestServerInterface(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	authCache := NewAuthCache("https://test.example.com", "test-token", 5*time.Minute, logger)
-	
+
 	server := &server{
 		logger:    logger,
 		authCache: authCache,
@@ -625,10 +723,10 @@ func TestPublicHandler(t *testing.T) {
 		expectedStatus int
 	}{
 		{
-			name:           "GET request - should hang waiting for data",
-			method:         "GET",
-			path:           "unique-path-1",
-			expectTimeout:  true, // GET will wait for data
+			name:          "GET request - should hang waiting for data",
+			method:        "GET",
+			path:          "unique-path-1",
+			expectTimeout: true, // GET will wait for data
 		},
 		{
 			name:          "POST request with data - should hang waiting for consumer",
@@ -639,7 +737,7 @@ func TestPublicHandler(t *testing.T) {
 		},
 		{
 			name:          "PUT request - should hang waiting for consumer",
-			method:        "PUT", 
+			method:        "PUT",
 			path:          "unique-path-3",
 			body:          "updated data",
 			expectTimeout: true, // PUT will wait for consumer
@@ -657,7 +755,7 @@ func TestPublicHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create fresh server for each test to avoid channel pollution
 			server := createTestMainServer()
-			
+
 			var body io.Reader
 			if tt.body != "" {
 				body = strings.NewReader(tt.body)
@@ -673,7 +771,7 @@ func TestPublicHandler(t *testing.T) {
 					server.publicHandler(w, req)
 					done <- true
 				}()
-				
+
 				select {
 				case <-done:
 					t.Errorf("Expected operation to timeout waiting for channel communication, but got status %d with body: %s", w.Code, w.Body.String())
@@ -760,7 +858,7 @@ func TestUserHandler(t *testing.T) {
 			}
 
 			w := httptest.NewRecorder()
-			
+
 			if tt.shouldComplete {
 				server.userHandler(w, req)
 				if w.Code != tt.expectedStatus {
@@ -772,7 +870,7 @@ func TestUserHandler(t *testing.T) {
 					server.userHandler(w, req)
 					done <- true
 				}()
-				
+
 				select {
 				case <-done:
 					if w.Code != tt.expectedStatus {
@@ -911,17 +1009,17 @@ func TestForwardHookHandler(t *testing.T) {
 		expectTimeout  bool
 	}{
 		{
-			name:           "GET request without secret - will hang waiting for data",
-			method:         "GET",
-			secret:         "",
-			expectTimeout:  true, // GET will hang waiting for data
+			name:          "GET request without secret - will hang waiting for data",
+			method:        "GET",
+			secret:        "",
+			expectTimeout: true, // GET will hang waiting for data
 		},
 		{
-			name:           "POST request with valid secret - will hang waiting for consumer",
-			method:         "POST",
-			secret:         "VALID_SECRET", // Will be replaced with actual secret
-			body:           "test data",
-			expectTimeout:  true, // POST will hang waiting for consumer
+			name:          "POST request with valid secret - will hang waiting for consumer",
+			method:        "POST",
+			secret:        "VALID_SECRET", // Will be replaced with actual secret
+			body:          "test data",
+			expectTimeout: true, // POST will hang waiting for consumer
 		},
 		{
 			name:           "POST request without secret",
@@ -943,7 +1041,7 @@ func TestForwardHookHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create fresh server for each test
 			server := createTestMainServer()
-			
+
 			// Create a unique channel for this test
 			req := httptest.NewRequest("GET", "/h", nil)
 			w := httptest.NewRecorder()
@@ -958,7 +1056,7 @@ func TestForwardHookHandler(t *testing.T) {
 			// Use unique path for each test to avoid interference
 			testPath := fmt.Sprintf("%s-test-%d", hookResponse.Channel, i)
 			testSecret := server.computeSecret("h", testPath)
-			
+
 			var body io.Reader
 			if tt.body != "" {
 				body = strings.NewReader(tt.body)
@@ -983,7 +1081,7 @@ func TestForwardHookHandler(t *testing.T) {
 					server.forwardHookHandler(w, req)
 					done <- true
 				}()
-				
+
 				select {
 				case <-done:
 					t.Error("Expected operation to timeout waiting for channel communication")
@@ -1055,10 +1153,10 @@ func TestReverseHookHandler(t *testing.T) {
 		expectTimeout  bool
 	}{
 		{
-			name:           "GET request with valid secret - will hang waiting for data",
-			method:         "GET",
-			secret:         "VALID_SECRET", // Will be replaced with actual secret
-			expectTimeout:  true, // GET will hang waiting for data
+			name:          "GET request with valid secret - will hang waiting for data",
+			method:        "GET",
+			secret:        "VALID_SECRET", // Will be replaced with actual secret
+			expectTimeout: true,           // GET will hang waiting for data
 		},
 		{
 			name:           "GET request without secret",
@@ -1075,11 +1173,11 @@ func TestReverseHookHandler(t *testing.T) {
 			expectTimeout:  false, // Auth failure happens before channel operations
 		},
 		{
-			name:           "POST request without secret - will hang waiting for consumer",
-			method:         "POST",
-			secret:         "",
-			body:           "test data",
-			expectTimeout:  true, // POST will hang waiting for consumer
+			name:          "POST request without secret - will hang waiting for consumer",
+			method:        "POST",
+			secret:        "",
+			body:          "test data",
+			expectTimeout: true, // POST will hang waiting for consumer
 		},
 	}
 
@@ -1087,7 +1185,7 @@ func TestReverseHookHandler(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create fresh server for each test
 			server := createTestMainServer()
-			
+
 			// Create a unique channel for this test
 			req := httptest.NewRequest("GET", "/r", nil)
 			w := httptest.NewRecorder()
@@ -1102,7 +1200,7 @@ func TestReverseHookHandler(t *testing.T) {
 			// Use unique path for each test to avoid interference
 			testPath := fmt.Sprintf("%s-test-%d", hookResponse.Channel, i)
 			testSecret := server.computeSecret("r", testPath)
-			
+
 			var body io.Reader
 			if tt.body != "" {
 				body = strings.NewReader(tt.body)
@@ -1127,7 +1225,7 @@ func TestReverseHookHandler(t *testing.T) {
 					server.reverseHookHandler(w, req)
 					done <- true
 				}()
-				
+
 				select {
 				case <-done:
 					t.Error("Expected operation to timeout waiting for channel communication")
@@ -1211,21 +1309,21 @@ func TestHandlePatch(t *testing.T) {
 			if tt.token != "" {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
-			
+
 			w := httptest.NewRecorder()
-			
+
 			if tt.shouldTimeout {
 				// Add timeout context for operations that might hang
 				ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 				defer cancel()
 				req = req.WithContext(ctx)
-				
+
 				done := make(chan bool)
 				go func() {
 					server.handlePatch(w, req, tt.namespace, tt.username, tt.path)
 					done <- true
 				}()
-				
+
 				select {
 				case <-done:
 					t.Log("Operation completed within timeout")
@@ -1247,41 +1345,41 @@ func TestHandlePatch(t *testing.T) {
 
 func TestHandlePatchChannelOperations(t *testing.T) {
 	server := createTestMainServer()
-	
+
 	t.Run("Channel creation and path normalization", func(t *testing.T) {
 		// Test that channels are created properly without actually using them
 		originalChannelCount := len(server.channels)
-		
+
 		// This will create a channel but timeout waiting for consumer
 		req := httptest.NewRequest("POST", "/p/test-channel", strings.NewReader("test"))
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 		defer cancel()
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
-		
+
 		done := make(chan bool)
 		go func() {
 			server.handlePatch(w, req, "p", "", "/test-channel")
 			done <- true
 		}()
-		
+
 		// Wait a bit for channel creation
 		time.Sleep(5 * time.Millisecond)
-		
+
 		// Check that channel was created
 		server.channelsMutex.RLock()
 		newChannelCount := len(server.channels)
 		_, exists := server.channels["p/test-channel"]
 		server.channelsMutex.RUnlock()
-		
+
 		if newChannelCount <= originalChannelCount {
 			t.Error("Expected new channel to be created")
 		}
-		
+
 		if !exists {
 			t.Error("Expected channel 'p/test-channel' to exist")
 		}
-		
+
 		// Clean up
 		cancel()
 		select {
@@ -1294,11 +1392,11 @@ func TestHandlePatchChannelOperations(t *testing.T) {
 
 func TestHandlePatchProducerConsumer(t *testing.T) {
 	server := createTestMainServer()
-	
+
 	t.Run("Producer-Consumer communication", func(t *testing.T) {
 		channelPath := "p/test-producer-consumer"
 		testData := "producer-consumer test data"
-		
+
 		// Start consumer in goroutine
 		consumerDone := make(chan string)
 		go func() {
@@ -1307,23 +1405,23 @@ func TestHandlePatchProducerConsumer(t *testing.T) {
 			defer cancel()
 			req = req.WithContext(ctx)
 			w := httptest.NewRecorder()
-			
+
 			server.handlePatch(w, req, "p", "", "/test-producer-consumer")
 			consumerDone <- w.Body.String()
 		}()
-		
+
 		// Give consumer time to start waiting
 		time.Sleep(10 * time.Millisecond)
-		
+
 		// Send data as producer
 		req := httptest.NewRequest("POST", "/"+channelPath, strings.NewReader(testData))
 		w := httptest.NewRecorder()
 		server.handlePatch(w, req, "p", "", "/test-producer-consumer")
-		
+
 		if w.Code != http.StatusOK {
 			t.Errorf("Producer: Expected status %d, got %d", http.StatusOK, w.Code)
 		}
-		
+
 		// Wait for consumer to receive data
 		select {
 		case receivedData := <-consumerDone:
@@ -1349,7 +1447,7 @@ func TestHandlePatchWithPubSub(t *testing.T) {
 			server.handlePatch(w, req, "p", "", "/test")
 			done <- true
 		}()
-		
+
 		select {
 		case <-done:
 			if w.Code != http.StatusOK {
@@ -1370,7 +1468,7 @@ func TestHandlePatchWithPubSub(t *testing.T) {
 			server.handlePatch(w, req, "p", "", "/test")
 			done <- true
 		}()
-		
+
 		// Should timeout waiting for consumer since it's treated as POST
 		select {
 		case <-done:
