@@ -1,0 +1,84 @@
+# Example config.yaml configuration file
+# This file should be placed in your .patchwork repository at the root level
+
+# Authentication tokens with unified structure
+tokens:
+  "production_app_token": 
+    is_admin: false
+    POST:
+      - "/projects/*/data"      # Can POST to any project's data endpoint
+      - "/webhooks/*"           # Can POST to webhook endpoints  
+      - "/_/ntfy"              # Can send notifications
+    GET:
+      - "/projects/myapp/*"     # Can GET from all myapp paths
+      - "!/projects/myapp/secret/*" # But not from secret paths
+    huproxy:
+      - "*.production.com:*"    # Can access production hosts via HuProxy
+      - "backup.example.com:22" # Specific backup server access
+
+  "development_token":
+    is_admin: false
+    POST:
+      - "/dev/*"               # Development environment access
+      - "/_/ntfy"              # Notification access
+    GET:
+      - "/dev/*"               # Can read development data
+      - "/status"              # Can check status
+    huproxy:
+      - "*.dev.com:*"          # Development hosts
+      - "localhost:*"          # Local development
+
+  "readonly_monitoring_token":
+    is_admin: false
+    POST: []                   # No POST access
+    GET:
+      - "/status"              # Can only read status
+      - "/health"              # And health endpoints
+
+  "webhook_integration_token":
+    is_admin: false
+    POST:
+      - "/webhooks/github/*"   # Specific webhook paths
+      - "/_/ntfy"              # Can send notifications
+    GET:
+      - "/webhooks/status"     # Can check webhook status
+
+  "admin_token_example":
+    is_admin: true
+    POST: ["*"]                # Full access
+    GET: ["*"]
+    huproxy: ["*"]             # Can access any host via HuProxy
+
+  "backup_script_token":
+    is_admin: false
+    POST:
+      - "/backups/*"           # Can write backup data
+    GET:
+      - "/backups/*"           # Can read backup status
+    huproxy:
+      - "backup.example.com:22" # SSH access to backup server
+
+# Notification configuration
+ntfy:
+  type: matrix                 # Notification backend type
+  config:
+    access_token: "your_matrix_access_token_here"
+    user: "@bot:matrix.org"
+    endpoint: "https://matrix.org"        # Optional: Matrix server endpoint
+    room_id: "!roomid:matrix.org"         # Optional: Default room for notifications
+
+# Example of other notification backends (uncomment to use):
+# ntfy:
+#   type: discord
+#   config:
+#     webhook_url: "https://discord.com/api/webhooks/..."
+#     username: "Patchwork Bot"
+
+# ntfy:
+#   type: http
+#   config:
+#     url: "https://api.pushover.net/1/messages.json"
+#     method: "POST"
+#     headers:
+#       Content-Type: "application/json"
+#     body_template: '{"token":"APP_TOKEN","user":"USER_KEY","message":"{{.Content}}"}'

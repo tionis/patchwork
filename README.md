@@ -1,6 +1,6 @@
 # Patchwork
 
-[![CI](https://github.com/tionis/patchwork/workflows/CI/badge.svg)](https://github.com/tionis/patchwork/actions/workflows/ci.yml)
+[![CI](https://github.com/tionis/patchwork/workflows/CI/badge.svg)](https://githPatchwork uses a Forgejo-integrated authentication system. Each user maintains a `config.yaml` file in their `.patchwork` repository to define access tokens, permissions, and notification settings.b.com/tionis/patchwork/actions/workflows/ci.yml)
 [![Test](https://github.com/tionis/patchwork/workflows/Test/badge.svg)](https://github.com/tionis/patchwork/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/tionis/patchwork/branch/main/graph/badge.svg)](https://codecov.io/gh/tionis/patchwork)
 [![Go Report Card](https://goreportcard.com/badge/github.com/tionis/patchwork)](https://goreportcard.com/report/github.com/tionis/patchwork)
@@ -14,6 +14,7 @@ that serve as a multi-process, multi-consumer (MPMC) queue.
 
 - **Channel-based Communication**: HTTP endpoints that act as communication channels
 - **Multiple Namespaces**: Public (`/p`), hooks (`/h`, `/r`), user (`/u/{username}`) namespaces
+- **Notification System**: Built-in notification backend support (Matrix, Discord, etc.)
 - **WebSocket Tunneling**: SSH/TCP tunneling via HuProxy integration
 - **Token-based Authentication**: Forgejo-integrated ACL system with caching
 - **Administrative API**: Cache invalidation and user management endpoints
@@ -81,7 +82,8 @@ The server is organized by namespaces with different access patterns:
   Useful for collecting data from multiple sources where you want to control who can read.
 - **`/u/{username}/**`**: User namespace - controlled by ACL lists.
   Access is controlled by YAML ACL files stored in Forgejo/Gitea repositories 
-  that specify which tokens can access which paths.
+  that specify which tokens can access which paths. Includes notification endpoints
+  (`/_/ntfy`) for sending alerts and messages.
 - **`/huproxy/{user}/{host}/{port}`**: HTTP-to-TCP WebSocket proxy for tunneling 
   SSH and other protocols. Based on Google's HUProxy project, this endpoint provides 
   WebSocket tunneling primarily for SSH connections. Uses token-based authentication 
@@ -89,21 +91,26 @@ The server is organized by namespaces with different access patterns:
 
 ## Authentication
 
-Patchwork uses a Forgejo-integrated authentication system. Each user maintains an `auth.yaml` file in their `.patchwork` repository to define access tokens and permissions.
+Patchwork uses a Forgejo-integrated authentication system. Each user maintains a `config.yaml` file in their `.patchwork` repository to define access tokens, permissions, notification settings, and HuProxy access.
 
-### User Namespace ACL (`auth.yaml`)
+### User Configuration (`config.yaml`)
 
-For user namespaces (`/u/{username}/`), create a `.patchwork` repository with an `auth.yaml` file:
+For user namespaces (`/u/{username}/`), create a `.patchwork` repository with a `config.yaml` file:
 
 ```yaml
+# Unified config.yaml structure - tokens directly at root level
 tokens:
-  "some_token_name":
+  "my_token_name":
     is_admin: false
     POST: 
       - "/projects/*/data"  # Can POST to any project's data endpoint
+      - "/_/ntfy"          # Can send notifications
     GET: 
       - "/projects/myproject/*"  # Can GET from all paths under myproject
       - "!/projects/myproject/secret/*" # But nothing in my secret project
+    huproxy:
+      - "*.example.com:*"  # Can access specific hosts via HuProxy
+      - "localhost:*"
 
   "restricted_token":
     is_admin: false
@@ -115,51 +122,82 @@ tokens:
     is_admin: false
     POST: 
       - "/webhooks/*"  # Can POST to any webhook endpoint
+      - "/_/ntfy"      # Can send notifications
     GET: 
       - "/status"  # Can only GET the status endpoint
 
   "admin_token":
     is_admin: true
-    POST: 
-      - "*"
-    GET: 
-      - "*"
+    POST: ["*"]
+    GET: ["*"]
+
+# Optional: Configure notification backend
+ntfy:
+  type: matrix
+  config:
+    access_token: "your_matrix_access_token"
+    user: "@bot:matrix.org"
+    endpoint: "https://matrix.org"  # optional: Matrix server endpoint
+    room_id: "!roomid:matrix.org"   # optional: specific room ID
 ```
 
-Each token can have `POST` and `GET` permissions defined with glob patterns:
+### Permission System
+
+Each token can have `POST`, `GET`, and `huproxy` permissions defined with glob patterns:
 - Empty array (`[]`) denies all access for that method
-- `**` allows access to all subpaths
+- `"*"` allows access to all subpaths
 - Specific glob patterns like `projects/*/data` allow fine-grained control
+- Negation patterns like `!secret/*` can exclude specific paths
 - Admin tokens (`is_admin: true`) have access to administrative endpoints
 
-### HuProxy Configuration
+### HuProxy Access
 
-For HuProxy access, configure tokens in the `huproxy` field of your `.patchwork/auth.yaml` file:
+HuProxy access is configured within each token's definition using the `huproxy` field:
 
 ```yaml
 tokens:
-  "ssh_access_token":
-    is_admin: false
+  "production_ssh_token":
     huproxy:
-      - "*"  # allows all host:port combinations
-  "restricted_huproxy_token":
-    is_admin: false
+      - "*.production.com:*"
+  "development_access":
     huproxy:
-      - "*.example.com:*"
+      - "*.dev.com:*"
       - "localhost:*"
+  "backup_script_token":
+    huproxy:
+      - "backup.example.com:22"
+```
+
+### Notification System
+
+The notification endpoint is available at `/u/{username}/_/ntfy` and supports:
+- Multiple message types: `plain`, `markdown`, `html`
+- Various input methods: JSON POST, form POST, GET with query parameters
+- Backend integration: Matrix, Discord, and other notification services
+
+Example notification usage:
+```bash
+curl -X POST "https://patchwork.example.com/u/username/_/ntfy" \
+  -H "Authorization: Bearer your-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "markdown",
+    "title": "Alert",
+    "content": "Something **important** happened!"
+  }'
 ```
 
 ### Repository Setup
 
 1. **Create `.patchwork` repository**: Each user/organization creates a repository named `.patchwork`
-2. **Add `auth.yaml`**: Place the ACL and HuProxy configuration in a file named `auth.yaml` in the repository root
+2. **Add `config.yaml`**: Place the unified configuration in a file named `config.yaml` in the repository root
 3. **Grant access**: Give the special `patchwork` user read access to the `.patchwork` repository
 4. **Caching**: The patchwork server pulls and caches these configuration files as needed
 
 Example repository structure:
 ```
 user/.patchwork/
-├── auth.yaml
+├── config.yaml
 └── README.md (optional)
 ```
 
@@ -351,10 +389,10 @@ curl -H "Authorization: Bearer your_secure_token_here"
 
 #### Token-based Authentication
 
-Authentication is managed through `auth.yaml` files stored in each user's `.patchwork` repository:
+Authentication is managed through `config.yaml` files stored in each user's `.patchwork` repository:
 
 ```yaml
-# .patchwork/auth.yaml
+# .patchwork/config.yaml
 tokens:
   "production_ssh_token_abc123":
     huproxy:
@@ -369,7 +407,7 @@ tokens:
 ```
 
 **Security Notes:**
-- Tokens are validated against the user's `.patchwork/auth.yaml` file
+- Tokens are validated against the user's `.patchwork/config.yaml` file
 - Each user controls their own token list through their repository
 - Tokens should be long, random strings (recommended: 32+ characters)
 - The proxy supports any TCP service, not just SSH (databases, VNC, etc.)
@@ -440,17 +478,17 @@ The server is organized by namespaces with different access patterns:
 - **`/huproxy/{user}/{host}/{port}`**: HTTP-to-TCP WebSocket proxy for tunneling SSH and other protocols.
   Based on Google's HUProxy project, this endpoint provides WebSocket tunneling primarily for SSH
   connections. Uses token-based authentication via `Authorization` header. Tokens are managed through
-  the `huproxy` field in the user's `auth.yaml` file in their `.patchwork` repository.
+  the `huproxy` field in the user's `config.yaml` file in their `.patchwork` repository.
 
 ### ACL File Format
 
 For user namespaces, access control is managed through YAML files stored in
 Forgejo/Gitea repositories. Each user or organization can create a 
-`.patchwork` repository containing an `auth.yaml` file:
+`.patchwork` repository containing an `config.yaml` file:
 
-- **`auth.yaml`**: Defines ACL permissions and HuProxy tokens for different authentication tokens
+- **`config.yaml`**: Defines ACL permissions and HuProxy tokens for different authentication tokens
 
-#### User Namespace ACL (`auth.yaml`)
+#### User Namespace ACL (`config.yaml`)
 
 ```yaml
 some_token_name:
@@ -475,20 +513,20 @@ Each token can have `POST` and `GET` permissions defined with glob patterns:
 #### Repository Setup
 
 1. **Create `.patchwork` repository**: Each user/organization creates a repository named `.patchwork`
-2. **Add `auth.yaml`**: Place the ACL and HuProxy configuration in a file named `auth.yaml` in the repository root
+2. **Add `config.yaml`**: Place the ACL and HuProxy configuration in a file named `config.yaml` in the repository root
 3. **Grant access**: Give the special `patchwork` user read access to the `.patchwork` repository
 4. **Caching**: The patchwork server pulls and caches these configuration files as needed
 
 Example repository structure:
 ```
 user/.patchwork/
-├── auth.yaml
+├── config.yaml
 └── README.md (optional)
 ```
 
 #### HuProxy Configuration
 
-For HuProxy access, configure tokens in the `huproxy` field of your `.patchwork/auth.yaml` file:
+For HuProxy access, configure tokens in the `huproxy` field of your `.patchwork/config.yaml` file:
 
 ```yaml
 tokens:
@@ -645,7 +683,7 @@ curl -H "Authorization: your_huproxy_token" \
   https://patchwork.example.com/huproxy/alice/database/5432
 ```
 
-**Note**: Tokens are configured in the `huproxy` field of the `auth.yaml` file in the user's `.patchwork` repository.
+**Note**: Tokens are configured in the `huproxy` field of the `config.yaml` file in the user's `.patchwork` repository.
 
 ## Tools
 
@@ -738,7 +776,7 @@ For users who want to use the `/u/{username}/` namespace:
 
 1. **Create `.patchwork` repository** in your Forgejo/Gitea account
 2. **Add the `patchwork` user** as a collaborator with read access
-3. **Create `auth.yaml`** file with your token permissions
+3. **Create `config.yaml`** file with your token permissions
 4. **Commit and push** the configuration
 
 The patchwork server will automatically fetch and cache your ACL configuration when needed.

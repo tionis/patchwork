@@ -106,7 +106,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 
 		clientIPParsed := net.ParseIP(clientIPStr)
 
-		// Authenticate token against user's auth.yaml file for huproxy permissions
+		// Authenticate token against user's config.yaml file for huproxy permissions
 		allowed, reason, err := srv.AuthenticateToken(
 			user,
 			authToken,

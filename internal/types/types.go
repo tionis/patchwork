@@ -27,15 +27,16 @@ type Stream struct {
 
 // Server contains the main server state and configuration.
 type Server struct {
-	Logger        *slog.Logger
-	Channels      map[string]*PatchChannel
-	ChannelsMutex sync.RWMutex
-	Ctx           context.Context
-	ForgejoURL    string
-	ForgejoToken  string
-	AclTTL        time.Duration
-	SecretKey     []byte
-	AuthCache     *AuthCache
+	Logger              *slog.Logger
+	Channels            map[string]*PatchChannel
+	ChannelsMutex       sync.RWMutex
+	Ctx                 context.Context
+	ForgejoURL          string
+	ForgejoToken        string
+	AclTTL              time.Duration
+	SecretKey           []byte
+	AuthCache           *AuthCache
+	NotificationBackend NotificationBackend
 }
 
 // ConfigData represents configuration template data for rendering index.html.
@@ -46,7 +47,7 @@ type ConfigData struct {
 	WebSocketURL string
 }
 
-// TokenInfo represents information about a token from auth.yaml.
+// TokenInfo represents information about a token from config.yaml.
 type TokenInfo struct {
 	IsAdmin   bool               `yaml:"is_admin"`
 	HuProxy   []*sshUtil.Pattern `yaml:"huproxy,omitempty"`
@@ -58,7 +59,7 @@ type TokenInfo struct {
 	ExpiresAt *time.Time         `yaml:"expires_at,omitempty"`
 }
 
-// UserAuth represents the auth.yaml configuration for a user.
+// UserAuth represents the config.yaml configuration for a user.
 type UserAuth struct {
 	Tokens    map[string]TokenInfo `yaml:"tokens"`
 	UpdatedAt time.Time            `yaml:"-"`

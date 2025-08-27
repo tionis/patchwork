@@ -85,7 +85,7 @@
       <strong>/huproxy/{user}/{host}/{port}</strong>: HTTP-to-TCP WebSocket proxy for tunneling SSH and other protocols.
       Based on Google's HUProxy project, this endpoint provides WebSocket tunneling primarily for SSH
       connections. Uses token-based authentication via <code>Authorization</code> header. Tokens are managed through
-      a <code>huproxy.yaml</code> file in the user's <code>.patchwork</code> repository.
+      a <code>config.yaml</code> file in the user's <code>.patchwork</code> repository.
     </li>
   </ul>
 
@@ -93,21 +93,25 @@
   <p>
     For user namespaces (<code>/u/{username}/</code>), access is controlled by tokens
     that you configure in your own <code>.patchwork</code> repository. Create a 
-    <code>.patchwork</code> repository in your account and add an <code>auth.yaml</code> 
-    file to define which tokens can access which paths.
+    <code>.patchwork</code> repository in your account and add a <code>config.yaml</code> 
+    file to define tokens, permissions, notification settings, and HuProxy access.
   </p>
   
-  <h4>auth.yaml Format</h4>
-  <p>Create an <code>auth.yaml</code> file in your <code>.patchwork</code> repository:</p>
+  <h4>config.yaml Format</h4>
+  <p>Create a <code>config.yaml</code> file in your <code>.patchwork</code> repository:</p>
   <pre>tokens:
-  "my_app_token":
+  "my_token_name":
     is_admin: false
     POST: 
       - "/projects/*/logs"    # Can POST to any project's logs
       - "/webhooks/*"         # Can POST to webhook endpoints
+      - "/_/ntfy"            # Can send notifications
     GET: 
       - "/projects/myapp/**"  # Can GET from all myapp paths
       - "!/projects/myapp/secret/**" # But not from secret paths
+    huproxy:
+      - "*.example.com:*"    # Can access specific hosts via HuProxy
+      - "localhost:*"
       
   "readonly_token":
     is_admin: false
@@ -118,18 +122,41 @@
   "admin_token":
     is_admin: true
     POST: ["*"]
-    GET: ["*"]</pre>
+    GET: ["*"]
+
+# Optional: Configure notification backend
+ntfy:
+  type: matrix
+  config:
+    access_token: "your_matrix_access_token"
+    user: "@bot:matrix.org"
+    endpoint: "https://matrix.org"
+    room_id: "!roomid:matrix.org"</pre>
   
   <p>
-    Use OpenSSH-style glob patterns to control access: <code>**</code> matches everything, 
-    <code>*</code> matches one level, empty array <code>[]</code> denies access.
-    These follow the same pattern matching rules as OpenSSH configuration files.
+    Use glob patterns to control access: <code>*</code> matches everything, 
+    empty array <code>[]</code> denies access, and negation patterns like 
+    <code>!secret/**</code> can exclude specific paths.
   </p>
   
   <p>
     Example token usage:
   </p>
-  <pre>curl {{.BaseURL}}/u/alice/projects/logs?token=my_app_token -d "Deploy completed"</pre>
+  <pre>curl {{.BaseURL}}/u/alice/projects/logs?token=my_token_name -d "Deploy completed"</pre>
+
+  <h4>Notification System</h4>
+  <p>Send notifications via the <code>/_/ntfy</code> endpoint:</p>
+  <pre># JSON notification
+curl -X POST "{{.BaseURL}}/u/alice/_/ntfy" \
+  -H "Authorization: Bearer my_token_name" \
+  -H "Content-Type: application/json" \
+  -d '{"type": "markdown", "title": "Alert", "content": "Something **important** happened!"}'
+
+# Plain text notification  
+curl -X POST "{{.BaseURL}}/u/alice/_/ntfy" \
+  -H "Authorization: Bearer my_token_name" \
+  -H "Content-Type: text/plain" \
+  -d "Server maintenance completed"</pre>
 
   <h2>Modes</h2>
   <p>Each endpoint supports multiple modes:</p>
@@ -219,9 +246,9 @@ curl {{.BaseURL}}/r/xyz789-abc123-...?secret=sha256hash...</pre>
   useful when direct connections are blocked by firewalls.</p>
   
   <h4>Setup</h4>
-  <p>Configure your tokens in your <code>.patchwork/auth.yaml</code> file:</p>
+  <p>Configure your tokens in your <code>.patchwork/config.yaml</code> file:</p>
   <pre>tokens:
-  your_secure_token:
+  "your_secure_token":
     huproxy:
       - "*"  # Allow all hosts and ports
       - "*.example.com:*"  # Or restrict to specific patterns</pre>

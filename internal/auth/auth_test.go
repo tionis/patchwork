@@ -268,7 +268,7 @@ func TestAuthenticateToken(t *testing.T) {
 	defer mockServer.Close()
 
 	cache := NewAuthCache(mockServer.URL, "test-token", 5*time.Minute, logger)
-	
+
 	// Add test user auth data directly to cache to avoid network calls
 	testUserAuth := &types.UserAuth{
 		Tokens: map[string]types.TokenInfo{
@@ -290,14 +290,14 @@ func TestAuthenticateToken(t *testing.T) {
 	cache.Data["testuser"] = testUserAuth
 
 	tests := []struct {
-		name        string
-		username    string
-		token       string
-		path        string
-		reqType     string
-		isHuProxy   bool
-		clientIP    net.IP
-		expectValid bool
+		name         string
+		username     string
+		token        string
+		path         string
+		reqType      string
+		isHuProxy    bool
+		clientIP     net.IP
+		expectValid  bool
 		expectReason string
 	}{
 		{
@@ -382,15 +382,15 @@ func TestAuthenticateToken(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			valid, reason, err := AuthenticateToken(cache, tt.username, tt.token, tt.path, tt.reqType, tt.isHuProxy, tt.clientIP, logger)
-			
+
 			if err != nil {
 				t.Errorf("Unexpected error: %v", err)
 			}
-			
+
 			if valid != tt.expectValid {
 				t.Errorf("Expected valid=%v, got %v", tt.expectValid, valid)
 			}
-			
+
 			if reason != tt.expectReason {
 				t.Errorf("Expected reason=%q, got %q", tt.expectReason, reason)
 			}
@@ -410,19 +410,19 @@ func TestAuthenticateTokenUserNotFound(t *testing.T) {
 
 	cache := NewAuthCache(mockServer.URL, "test-token", 5*time.Minute, logger)
 
-	// Test with user that doesn't exist - should fetch from server and return empty auth
+	// Test with user that doesn't exist - should return error
 	valid, reason, err := AuthenticateToken(cache, "nonexistent", "some-token", "/test", "GET", false, net.ParseIP("192.168.1.1"), logger)
-	
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
+
+	if err == nil {
+		t.Errorf("Expected error for nonexistent user")
 	}
-	
+
 	if valid {
 		t.Errorf("Expected authentication to fail for nonexistent user")
 	}
-	
-	if reason != "invalid token" {
-		t.Errorf("Expected reason 'invalid token', got '%s'", reason)
+
+	if reason != "validation error" {
+		t.Errorf("Expected reason 'validation error', got '%s'", reason)
 	}
 }
 
@@ -460,11 +460,11 @@ func TestFetchUserAuthWithMockServer(t *testing.T) {
 			expectTokens: 2,
 		},
 		{
-			name:           "Auth file not found",
+			name:           "Config file not found",
 			username:       "noauth",
 			serverResponse: "",
 			statusCode:     http.StatusNotFound,
-			expectError:    false,
+			expectError:    true,
 			expectTokens:   0,
 		},
 		{
@@ -481,17 +481,17 @@ func TestFetchUserAuthWithMockServer(t *testing.T) {
 			serverResponse: `tokens:
   invalid-token:
     invalid yaml: [`,
-			statusCode:  http.StatusOK,
-			expectError: true,
+			statusCode:   http.StatusOK,
+			expectError:  true,
 			expectTokens: 0,
 		},
 		{
-			name:     "Empty auth file",
-			username: "empty",
+			name:           "Empty auth file",
+			username:       "empty",
 			serverResponse: `tokens: {}`,
-			statusCode:   http.StatusOK,
-			expectError:  false,
-			expectTokens: 0,
+			statusCode:     http.StatusOK,
+			expectError:    false,
+			expectTokens:   0,
 		},
 	}
 
@@ -499,10 +499,11 @@ func TestFetchUserAuthWithMockServer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create mock server
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Verify the request
-				expectedPath := fmt.Sprintf("/api/v1/repos/%s/.patchwork/media/auth.yaml", tt.username)
+				// Verify the request path
+				expectedPath := fmt.Sprintf("/api/v1/repos/%s/.patchwork/media/config.yaml", tt.username)
 				if r.URL.Path != expectedPath {
 					t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
+					return
 				}
 
 				// Check authorization header
@@ -616,18 +617,18 @@ func TestGetUserAuthNetworkError(t *testing.T) {
 	cache := NewAuthCache("http://invalid-url-that-does-not-exist.local", "test-token", 5*time.Minute, logger)
 
 	userAuth, err := GetUserAuth(cache, "testuser")
-	
+
 	// Should return error for network failure
 	if err == nil {
 		t.Error("Expected network error, got nil")
 	}
-	
+
 	if userAuth != nil {
 		t.Error("Expected nil userAuth on network error")
 	}
 
 	// Error message should contain network-related information
-	if err != nil && !strings.Contains(err.Error(), "failed to fetch auth") {
+	if err != nil && !strings.Contains(err.Error(), "failed to fetch config.yaml") {
 		t.Errorf("Expected network error message, got: %v", err)
 	}
 }
@@ -663,15 +664,15 @@ func TestAuthenticateTokenWithExpiredCache(t *testing.T) {
 
 	// Authentication should fetch fresh data and succeed with new token
 	valid, reason, err := AuthenticateToken(cache, "testuser", "fresh-token", "/test", "GET", false, net.ParseIP("192.168.1.1"), logger)
-	
+
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
-	
+
 	if !valid {
 		t.Errorf("Expected authentication to succeed with fresh token, got valid=%v, reason=%s", valid, reason)
 	}
-	
+
 	if reason != "authenticated" {
 		t.Errorf("Expected reason 'authenticated', got '%s'", reason)
 	}

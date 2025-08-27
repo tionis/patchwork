@@ -29,15 +29,45 @@ func NewAuthCache(
 	}
 }
 
-// FetchUserAuth fetches auth.yaml data from Forgejo for a specific user.
+// FetchUserAuth fetches config.yaml from Forgejo for a specific user.
 func FetchUserAuth(cache *types.AuthCache, username string) (*types.UserAuth, error) {
-	// Construct the API URL for the auth.yaml file
+	config, err := fetchUserConfig(cache, username)
+	if err != nil {
+		return nil, err
+	}
+
+	return &types.UserAuth{
+		Tokens:    config.Tokens,
+		UpdatedAt: time.Now(),
+	}, nil
+}
+
+// fetchUserConfig fetches config.yaml from Forgejo for a specific user.
+func fetchUserConfig(cache *types.AuthCache, username string) (*types.Config, error) {
 	apiURL := fmt.Sprintf(
-		"%s/api/v1/repos/%s/.patchwork/media/auth.yaml",
+		"%s/api/v1/repos/%s/.patchwork/media/config.yaml",
 		cache.ForgejoURL,
 		url.QueryEscape(username),
 	)
-	cache.Logger.Debug("Fetching auth from Forgejo", "username", username, "url", apiURL)
+
+	body, err := fetchFileFromForgejo(cache, apiURL, username, "config.yaml")
+	if err != nil {
+		return nil, err
+	}
+
+	var config types.Config
+	if err := yaml.Unmarshal(body, &config); err != nil {
+		cache.Logger.Error("Failed to parse config.yaml", "username", username, "error", err)
+		return nil, fmt.Errorf("failed to parse config.yaml: %w", err)
+	}
+
+	cache.Logger.Info("Fetched config from Forgejo", "username", username, "tokens", len(config.Tokens))
+	return &config, nil
+}
+
+// fetchFileFromForgejo fetches a file from Forgejo and handles common error cases.
+func fetchFileFromForgejo(cache *types.AuthCache, apiURL, username, filename string) ([]byte, error) {
+	cache.Logger.Debug("Fetching file from Forgejo", "username", username, "file", filename, "url", apiURL)
 
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
@@ -51,27 +81,18 @@ func FetchUserAuth(cache *types.AuthCache, username string) (*types.UserAuth, er
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch auth: %w", err)
+		return nil, fmt.Errorf("failed to fetch %s: %w", filename, err)
 	}
 
 	defer func() {
 		closeErr := resp.Body.Close()
 		if closeErr != nil {
-			// Log error if available, otherwise ignore
-			if cache.Logger != nil {
-				cache.Logger.Error("Error closing response body", "error", closeErr)
-			}
+			cache.Logger.Error("Error closing response body", "error", closeErr)
 		}
 	}()
 
 	if resp.StatusCode == http.StatusNotFound {
-		// Return empty auth if file doesn't exist
-		cache.Logger.Info("Auth file not found, returning empty auth", "username", username)
-
-		return &types.UserAuth{
-			Tokens:    make(map[string]types.TokenInfo),
-			UpdatedAt: time.Now(),
-		}, nil
+		return nil, fmt.Errorf("%s not found", filename)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -86,21 +107,10 @@ func FetchUserAuth(cache *types.AuthCache, username string) (*types.UserAuth, er
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		cache.Logger.Error("Failed to read response body", "username", username, "error", err)
-
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	var auth types.UserAuth
-	if err := yaml.Unmarshal(body, &auth); err != nil {
-		cache.Logger.Error("Failed to parse YAML", "username", username, "error", err)
-
-		return nil, fmt.Errorf("failed to parse YAML: %w", err)
-	}
-
-	auth.UpdatedAt = time.Now()
-	cache.Logger.Info("Fetched auth from Forgejo", "username", username, "tokens", len(auth.Tokens))
-
-	return &auth, nil
+	return body, nil
 }
 
 // GetUserAuth retrieves auth data for a user, using cache if available and not expired.

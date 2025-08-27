@@ -28,6 +28,8 @@ import (
 	"github.com/dusted-go/logging/prettylog"
 	"github.com/gorilla/mux"
 	"github.com/tionis/patchwork/internal/huproxy"
+	"github.com/tionis/patchwork/internal/notification"
+	"github.com/tionis/patchwork/internal/types"
 	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
@@ -88,7 +90,7 @@ type ConfigData struct {
 	WebSocketURL string
 }
 
-// TokenInfo represents information about a token from auth.yaml.
+// TokenInfo represents information about a token from config.yaml.
 type TokenInfo struct {
 	IsAdmin   bool               `yaml:"is_admin"`
 	HuProxy   []*sshUtil.Pattern `yaml:"huproxy,omitempty"`
@@ -230,7 +232,7 @@ func (t *TokenInfo) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-// UserAuth represents the auth.yaml configuration for a user.
+// UserAuth represents the config.yaml configuration for a user.
 type UserAuth struct {
 	Tokens    map[string]TokenInfo `yaml:"tokens"`
 	UpdatedAt time.Time            `yaml:"-"`
@@ -409,11 +411,11 @@ func NewAuthCache(
 	}
 }
 
-// fetchUserAuth fetches auth.yaml data from Forgejo for a specific user.
+// fetchUserAuth fetches config.yaml data from Forgejo for a specific user.
 func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
-	// Construct the API URL for the auth.yaml file
+	// Construct the API URL for the config.yaml file
 	apiURL := fmt.Sprintf(
-		"%s/api/v1/repos/%s/.patchwork/media/auth.yaml",
+		"%s/api/v1/repos/%s/.patchwork/media/config.yaml",
 		cache.forgejoURL,
 		url.QueryEscape(username),
 	)
@@ -482,23 +484,27 @@ func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 
 // GetUserAuth retrieves auth data for a user, using cache if available and not expired.
 func (cache *AuthCache) GetUserAuth(username string) (*UserAuth, error) {
+	cache.logger.Debug("Getting user auth from cache", "username", username)
 	cache.mutex.RLock()
 	auth, exists := cache.data[username]
 	cache.mutex.RUnlock()
 
 	// Check if cached data is still valid
 	if exists && time.Since(auth.UpdatedAt) < cache.ttl {
+		cache.logger.Debug("Using cached auth data", "username", username)
+		cache.logger.Debug("Returning auth data", "username", username, "auth", auth)
 		return auth, nil
 	}
 
 	// Fetch fresh data
+	cache.logger.Debug("Fetching fresh auth data", "username", username)
 	freshAuth, err := cache.fetchUserAuth(username)
 	if err != nil {
 		cache.logger.Error("Failed to fetch auth", "username", username, "error", err)
 		// Return cached data if available, even if expired
 		if exists {
 			cache.logger.Warn("Using expired auth data", "username", username)
-
+			cache.logger.Debug("Returning auth data", "username", username, "auth", auth)
 			return auth, nil
 		}
 
@@ -510,6 +516,8 @@ func (cache *AuthCache) GetUserAuth(username string) (*UserAuth, error) {
 	cache.data[username] = freshAuth
 	cache.mutex.Unlock()
 
+	cache.logger.Debug("Updated auth cache", "username", username)
+	cache.logger.Debug("Returning auth data", "username", username, "auth", freshAuth)
 	return freshAuth, nil
 }
 
@@ -696,6 +704,257 @@ func (s *server) userAdminHandler(w http.ResponseWriter, r *http.Request) {
 		s.logger.Info("Unknown admin endpoint", "username", username, "admin_path", adminPath)
 		http.Error(w, "Unknown administrative endpoint", http.StatusNotFound)
 	}
+}
+
+func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	username := vars["username"]
+
+	s.logRequest(r, "User notification request")
+	s.logger.Info("User notification details", "username", username, "method", r.Method)
+
+	// Only allow POST and GET methods
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Authenticate the request
+	token := r.Header.Get("Authorization")
+	if token == "" {
+		token = r.URL.Query().Get("token")
+	}
+
+	// Handle different Authorization header formats
+	if strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimPrefix(token, "Bearer ")
+	} else if strings.HasPrefix(token, "token ") {
+		token = strings.TrimPrefix(token, "token ")
+	}
+
+	clientIPParsed := net.ParseIP(getClientIP(r))
+	if clientIPParsed == nil {
+		clientIPParsed = net.IPv4(127, 0, 0, 1)
+	}
+
+	allowed, reason, err := s.authenticateToken(
+		username,
+		token,
+		"/_/ntfy",
+		r.Method,
+		false,
+		clientIPParsed,
+	)
+	if err != nil {
+		s.logger.Error("Authentication error", "error", err, "username", username)
+		http.Error(w, "Authentication error", http.StatusInternalServerError)
+		return
+	}
+
+	if !allowed {
+		s.logger.Info("Access denied", "username", username, "reason", reason)
+		http.Error(w, "Access denied: "+reason, http.StatusUnauthorized)
+		return
+	}
+
+	// Fetch user configuration to get notification settings
+	userConfig, err := s.fetchUserConfig(username)
+	if err != nil {
+		s.logger.Error("Failed to fetch user config", "error", err, "username", username)
+		http.Error(w, "Failed to fetch user configuration", http.StatusInternalServerError)
+		return
+	}
+
+	// Check if notification backend is configured
+	if userConfig.Ntfy.Type == "" {
+		s.logger.Error("No notification backend configured for user", "username", username)
+		http.Error(w, "Notification backend not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Create notification backend
+	backend, err := notification.BackendFactory(s.logger, userConfig.Ntfy)
+	if err != nil {
+		s.logger.Error("Failed to create notification backend", "error", err, "username", username)
+		http.Error(w, "Failed to create notification backend", http.StatusInternalServerError)
+		return
+	}
+	defer backend.Close()
+
+	// Parse the notification message
+	var msg types.NotificationMessage
+	var parseErr error
+
+	if r.Method == http.MethodPost {
+		contentType := r.Header.Get("Content-Type")
+
+		if strings.Contains(contentType, "application/json") {
+			// Parse JSON body
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				s.logger.Error("Failed to read request body", "error", err)
+				http.Error(w, "Failed to read request body", http.StatusBadRequest)
+				return
+			}
+			defer r.Body.Close()
+
+			if err := json.Unmarshal(body, &msg); err != nil {
+				s.logger.Error("Failed to parse JSON", "error", err)
+				http.Error(w, "Invalid JSON", http.StatusBadRequest)
+				return
+			}
+		} else if strings.Contains(contentType, "application/x-www-form-urlencoded") {
+			// Parse form data
+			if err := r.ParseForm(); err != nil {
+				s.logger.Error("Failed to parse form", "error", err)
+				http.Error(w, "Failed to parse form", http.StatusBadRequest)
+				return
+			}
+
+			msg, parseErr = s.parseNotificationFromForm(r.Form)
+			if parseErr != nil {
+				s.logger.Error("Failed to parse notification from form", "error", parseErr)
+				http.Error(w, parseErr.Error(), http.StatusBadRequest)
+				return
+			}
+		} else {
+			// Treat as plain text
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				s.logger.Error("Failed to read request body", "error", err)
+				http.Error(w, "Failed to read request body", http.StatusBadRequest)
+				return
+			}
+			defer r.Body.Close()
+
+			msg = types.NotificationMessage{
+				Type:    "plain",
+				Content: string(body),
+			}
+		}
+	} else if r.Method == http.MethodGet {
+		// Parse query parameters
+		msg, parseErr = s.parseNotificationFromQuery(r.URL.Query())
+		if parseErr != nil {
+			s.logger.Error("Failed to parse notification from query", "error", parseErr)
+			http.Error(w, parseErr.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Set default values
+	if msg.Type == "" {
+		msg.Type = "plain"
+	}
+
+	// Validate the message
+	if msg.Content == "" {
+		http.Error(w, "Content is required", http.StatusBadRequest)
+		return
+	}
+
+	// Send the notification
+	if err := backend.SendNotification(msg); err != nil {
+		s.logger.Error("Failed to send notification", "error", err, "username", username)
+		http.Error(w, "Failed to send notification", http.StatusInternalServerError)
+		return
+	}
+
+	s.logger.Info("Notification sent successfully", "username", username, "type", msg.Type)
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	response := map[string]string{
+		"status": "sent",
+		"type":   msg.Type,
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		s.logger.Error("Failed to encode response", "error", err)
+	}
+}
+
+// fetchUserConfig fetches the user's configuration from Forgejo.
+func (s *server) fetchUserConfig(username string) (*types.Config, error) {
+	return s.fetchUserConfigFile(username, "config.yaml")
+}
+
+// fetchUserConfigFile fetches a config.yaml file from Forgejo.
+func (s *server) fetchUserConfigFile(username, filename string) (*types.Config, error) {
+	data, err := s.fetchFileFromForgejo(username, filename)
+	if err != nil {
+		return nil, err
+	}
+
+	var config types.Config
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse %s: %w", filename, err)
+	}
+
+	return &config, nil
+}
+
+// fetchUserAuthFile fetches a config.yaml file from Forgejo.
+// fetchFileFromForgejo fetches a file from a user's .patchwork repository.
+func (s *server) fetchFileFromForgejo(username, filename string) ([]byte, error) {
+	apiURL := fmt.Sprintf("%s/api/v1/repos/%s/.patchwork/media/%s", s.forgejoURL, username, filename)
+
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("Authorization", "token "+s.forgejoToken)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch %s: %w", filename, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("%s not found", filename)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	return io.ReadAll(resp.Body)
+}
+
+// parseNotificationFromQuery parses notification data from URL query parameters.
+func (s *server) parseNotificationFromQuery(values url.Values) (types.NotificationMessage, error) {
+	msg := types.NotificationMessage{
+		Type:    values.Get("type"),
+		Title:   values.Get("title"),
+		Content: values.Get("content"),
+		Room:    values.Get("room"),
+	}
+
+	if msg.Content == "" {
+		// Try alternative parameter names
+		if body := values.Get("body"); body != "" {
+			msg.Content = body
+		} else if message := values.Get("message"); message != "" {
+			msg.Content = message
+		}
+	}
+
+	if msg.Content == "" {
+		return msg, fmt.Errorf("content, body, or message parameter is required")
+	}
+
+	return msg, nil
+}
+
+// parseNotificationFromForm parses notification data from form values.
+func (s *server) parseNotificationFromForm(values url.Values) (types.NotificationMessage, error) {
+	return s.parseNotificationFromQuery(values)
 }
 
 func (s *server) forwardHookRootHandler(w http.ResponseWriter, r *http.Request) {
@@ -1467,6 +1726,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	router.HandleFunc("/h/{path:.*}", server.forwardHookHandler)
 	router.HandleFunc("/r", server.reverseHookRootHandler)
 	router.HandleFunc("/r/{path:.*}", server.reverseHookHandler)
+	router.HandleFunc("/u/{username}/_/ntfy", server.userNtfyHandler)
 	router.HandleFunc("/u/{username}/_/{adminPath:.*}", server.userAdminHandler)
 	router.HandleFunc("/u/{username}/{path:.*}", server.userHandler)
 

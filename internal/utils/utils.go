@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -67,6 +68,16 @@ func ComputeSecret(secretKey []byte, namespace, channel string) string {
 // VerifySecret verifies if the provided secret matches the expected secret for a channel.
 func VerifySecret(secretKey []byte, namespace, channel, providedSecret string) bool {
 	expectedSecret := ComputeSecret(secretKey, namespace, channel)
-
 	return hmac.Equal([]byte(expectedSecret), []byte(providedSecret))
+}
+
+// GetClientIPParsed extracts and parses the client IP address.
+func GetClientIPParsed(r *http.Request) net.IP {
+	clientIPStr := GetClientIP(r)
+	clientIP := net.ParseIP(clientIPStr)
+	if clientIP == nil {
+		// Fallback if IP parsing fails
+		return net.IPv4(127, 0, 0, 1)
+	}
+	return clientIP
 }
