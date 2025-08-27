@@ -130,6 +130,7 @@ func (m *MatrixBackend) SendNotification(msg types.NotificationMessage) error {
 		"msgtype":        "m.text",
 		"body":           msg.Content,
 		"formatted_body": body,
+		"format":         "org.matrix.custom.html",
 	}
 
 	if format == "org.matrix.custom.html" {
@@ -153,11 +154,8 @@ func (m *MatrixBackend) SendNotification(msg types.NotificationMessage) error {
 
 // sendMatrixMessage sends a message to a Matrix room.
 func (m *MatrixBackend) sendMatrixMessage(roomID string, message map[string]interface{}) error {
-	// Generate a transaction ID
-	//txnID := fmt.Sprintf("patchwork_%d", time.Now().UnixNano())
-
 	// Construct the API URL using the configured endpoint
-	url := fmt.Sprintf("%s/_matrix/client/r0/rooms/%s/send/m.room.message/",
+	url := fmt.Sprintf("%s/_matrix/client/r0/rooms/%s/send/m.room.message",
 		m.endpoint, roomID)
 
 	m.logger.Debug("Sending Matrix message",
@@ -165,7 +163,6 @@ func (m *MatrixBackend) sendMatrixMessage(roomID string, message map[string]inte
 		"message", message,
 		"matrixUser", m.user,
 		"endpoint", m.endpoint,
-		//"txnID", txnID,
 		"url", url)
 
 	// Marshal the message
@@ -175,7 +172,7 @@ func (m *MatrixBackend) sendMatrixMessage(roomID string, message map[string]inte
 	}
 
 	// Create the request
-	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(payload))
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payload))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
