@@ -37,7 +37,7 @@ func PublicHandler(s *types.Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		path := vars["path"]
-		
+
 		s.Logger.Info("Public request",
 			"path", path,
 			"method", r.Method,
@@ -69,9 +69,7 @@ func UserHandler(s *types.Server) http.HandlerFunc {
 		}
 
 		// Handle different Authorization header formats
-		if strings.HasPrefix(token, "Bearer ") {
-			token = strings.TrimPrefix(token, "Bearer ")
-		}
+		token = strings.TrimPrefix(token, "Bearer ")
 
 		allowed, reason, err := auth.AuthenticateToken(
 			s.AuthCache,
@@ -121,9 +119,7 @@ func UserAdminHandler(s *types.Server) http.HandlerFunc {
 		}
 
 		// Handle different Authorization header formats
-		if strings.HasPrefix(token, "Bearer ") {
-			token = strings.TrimPrefix(token, "Bearer ")
-		}
+		token = strings.TrimPrefix(token, "Bearer ")
 
 		// Check if user is admin
 		allowed, reason, err := auth.AuthenticateToken(
@@ -223,9 +219,7 @@ func ForwardHookHandler(s *types.Server) http.HandlerFunc {
 		}
 
 		// Handle different Authorization header formats
-		if strings.HasPrefix(token, "Bearer ") {
-			token = strings.TrimPrefix(token, "Bearer ")
-		}
+		token = strings.TrimPrefix(token, "Bearer ")
 
 		allowed, reason, err := auth.AuthenticateToken(
 			s.AuthCache,
@@ -314,9 +308,7 @@ func ReverseHookHandler(s *types.Server) http.HandlerFunc {
 		}
 
 		// Handle different Authorization header formats
-		if strings.HasPrefix(token, "Bearer ") {
-			token = strings.TrimPrefix(token, "Bearer ")
-		}
+		token = strings.TrimPrefix(token, "Bearer ")
 
 		allowed, reason, err := auth.AuthenticateToken(
 			s.AuthCache,
