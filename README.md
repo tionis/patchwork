@@ -81,7 +81,7 @@ curl https://patchwork.example.com/public/res/api/users
 curl -X POST -d '{"name":"Alice"}' https://patchwork.example.com/public/req/api/users
 ```
 
-The request-responder mode supports all HTTP methods, header passthrough (including `Patch-Uri` for request path information), and a "double clutch" mode where responders can handle multiple sequential requests using `?switch=true`.
+The request-responder mode supports all HTTP methods, header passthrough (including `Patch-Uri` for request path information), and a "double clutch" mode using `?switch=true` that allows dynamic response routing.
 
 ## Namespaces
 
@@ -360,8 +360,17 @@ curl -H "Patch-Status: 201" \
   -d '{"id":123,"name":"Alice"}' \
   https://patchwork.example.com/public/res/api/users
 
-# Double clutch mode for multiple requests
-curl "https://patchwork.example.com/public/res/api/process?switch=true"
+# Double clutch mode with dynamic response routing
+# Terminal 1: Requester (blocks waiting for response)
+curl -X POST -d '{"task":"process"}' https://patchwork.example.com/public/req/myservice
+
+# Terminal 2: Responder in switch mode (body = new channel ID)
+curl -X POST "https://patchwork.example.com/public/res/myservice?switch=true" -d "worker-123"
+# Returns the request data and switches to channel "worker-123"
+
+# Terminal 3: Send response on the new channel
+curl -X POST -d '{"result":"completed"}' https://patchwork.example.com/public/worker-123
+# Original requester receives this response
 ```
 
 **Using passthrough headers**:

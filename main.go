@@ -1605,7 +1605,20 @@ func (s *server) handleResponderSwitch(
 
 	newChannelID := strings.TrimSpace(string(buf))
 	if newChannelID == "" {
+		s.logger.Error("Empty channel ID provided in switch mode",
+			"channel_id", channelID,
+			"client_ip", getClientIP(r))
 		http.Error(w, "New channel ID required in request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate channel ID format (basic validation)
+	if strings.Contains(newChannelID, "/") || strings.Contains(newChannelID, "?") {
+		s.logger.Error("Invalid channel ID format in switch mode",
+			"channel_id", channelID,
+			"new_channel", newChannelID,
+			"client_ip", getClientIP(r))
+		http.Error(w, "Invalid channel ID format - must not contain '/' or '?'", http.StatusBadRequest)
 		return
 	}
 
@@ -1622,7 +1635,7 @@ func (s *server) handleResponderSwitch(
 		// reqChannelPath is like "p/req/channelID", we want "p/newChannelID"
 		namespace := strings.Split(reqChannelPath, "/")[0]
 		newChannelPath := namespace + "/" + newChannelID
-		
+
 		// Get or create the new channel
 		s.channelsMutex.Lock()
 		newChannel, exists := s.channels[newChannelPath]
@@ -1668,7 +1681,31 @@ func (s *server) handleResponderSwitch(
 			case <-ctx.Done():
 				s.logger.Error("Timeout waiting for response on switched channel",
 					"original_channel", channelID,
-					"new_channel", newChannelID)
+					"new_channel", newChannelID,
+					"timeout_seconds", 30)
+
+				// Send timeout error to the original requester if possible
+				timeoutError := fmt.Sprintf("Double clutch timeout: No response received on channel '%s' within 30 seconds", newChannelID)
+				errorStream := stream{
+					reader: io.NopCloser(strings.NewReader(timeoutError)),
+					done:   make(chan struct{}),
+					headers: map[string]string{
+						"Content-Type": "text/plain",
+						"Patch-Status": "504", // Gateway Timeout
+					},
+				}
+
+				select {
+				case resChannel.data <- errorStream:
+					s.logger.Info("Timeout error sent to original requester",
+						"original_channel", channelID,
+						"new_channel", newChannelID)
+					<-errorStream.done
+				default:
+					s.logger.Error("Failed to send timeout error to requester - channel might be closed",
+						"original_channel", channelID,
+						"new_channel", newChannelID)
+				}
 			}
 		}()
 
@@ -1683,18 +1720,27 @@ func (s *server) handleResponderSwitch(
 
 		// Set CORS headers for browser compatibility
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Type", requestStream.headers["Content-Type"])
 
-		// Close the request stream
+		// Write the request body to the responder so they can process it
+		w.WriteHeader(http.StatusOK)
+
+		// Copy the request body to the responder
+		_, err = io.Copy(w, requestStream.reader)
+		if err != nil {
+			s.logger.Error("Error copying request to responder", "error", err)
+		}
+
+		// Close the request stream after it's been consumed
 		close(requestStream.done)
 		err = requestStream.reader.Close()
 		if err != nil {
 			s.logger.Error("Error closing request stream reader", "error", err)
 		}
 
-		// Write success response indicating the switch
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "Request received, switched to channel: %s", newChannelID)
+		s.logger.Info("Request delivered to responder, waiting for response on new channel",
+			"original_channel", channelID,
+			"new_channel", newChannelID)
 
 	case <-r.Context().Done():
 		s.logger.Info("Responder switch request canceled",

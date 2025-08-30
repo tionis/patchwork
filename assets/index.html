@@ -120,14 +120,18 @@ curl -X PUT -d '{"id":1,"name":"Bob"}' {{.BaseURL}}/public/req/api/users
 curl -X DELETE {{.BaseURL}}/public/req/api/users/1</pre>
 
   <h4>Double Clutch Mode</h4>
-  <p>Use <code>?switch=true</code> on the responder side to enable "double clutch" mode, where the responder can handle multiple requests sequentially without reconnecting.</p>
-  <pre># Responder in switch mode (handles multiple requests)
-curl "{{.BaseURL}}/public/res/api/process?switch=true"
+  <p>Use <code>?switch=true</code> on the responder side to enable "double clutch" mode. In this mode, the responder receives the request, then switches to a new channel to send the response. This allows for dynamic response routing.</p>
+  <pre># Terminal 1: Start requester (will wait for response)
+curl -X POST -d '{"data":"request"}' {{.BaseURL}}/public/req/myservice
 
-# Multiple requesters can send requests sequentially
-curl -X POST -d "task1" {{.BaseURL}}/public/req/api/process
-curl -X POST -d "task2" {{.BaseURL}}/public/req/api/process
-curl -X POST -d "task3" {{.BaseURL}}/public/req/api/process</pre>
+# Terminal 2: Responder in switch mode
+# Body contains the new channel ID to switch to
+curl -X POST "{{.BaseURL}}/public/res/myservice?switch=true" -d "new-channel-123"
+# This returns the request data to the responder
+
+# Terminal 3: Send the actual response on the new channel
+curl -X POST -d '{"result":"processed"}' {{.BaseURL}}/public/new-channel-123
+# The original requester receives this response</pre>
 
   <h2>Passthrough Headers</h2>
   <p>Patchwork supports passthrough headers using the <code>Patch-H-*</code> prefix system, allowing you to forward original request context between clients through the relay system.</p>

@@ -1468,9 +1468,9 @@ func TestHandlePatchWithPubSub(t *testing.T) {
 
 func TestDeterminePathBehavior(t *testing.T) {
 	tests := []struct {
-		name           string
-		path           string
-		hasQueueParam  bool
+		name             string
+		path             string
+		hasQueueParam    bool
 		expectedBehavior PathBehavior
 	}{
 		{
@@ -1535,10 +1535,10 @@ func TestDeterminePathBehavior(t *testing.T) {
 
 func TestPrepareRequestHeaders(t *testing.T) {
 	tests := []struct {
-		name           string
-		requestHeaders map[string]string
-		requestPath    string
-		requestQuery   string
+		name            string
+		requestHeaders  map[string]string
+		requestPath     string
+		requestQuery    string
 		expectedHeaders map[string]string
 	}{
 		{
@@ -1550,8 +1550,8 @@ func TestPrepareRequestHeaders(t *testing.T) {
 			requestPath:  "/req/test",
 			requestQuery: "param=value",
 			expectedHeaders: map[string]string{
-				"Content-Type":      "application/json",
-				"Patch-Uri":         "/req/test?param=value",
+				"Content-Type":       "application/json",
+				"Patch-Uri":          "/req/test?param=value",
 				"Patch-H-User-Agent": "test-agent",
 			},
 		},
@@ -1562,9 +1562,9 @@ func TestPrepareRequestHeaders(t *testing.T) {
 			},
 			requestPath: "/req/test",
 			expectedHeaders: map[string]string{
-				"Content-Type":     "text/plain",
-				"Patch-Uri":        "/req/test",
-				"Patch-H-Accept":   "application/json",
+				"Content-Type":   "text/plain",
+				"Patch-Uri":      "/req/test",
+				"Patch-H-Accept": "application/json",
 			},
 		},
 		{
@@ -1589,7 +1589,7 @@ func TestPrepareRequestHeaders(t *testing.T) {
 			if tt.requestQuery != "" {
 				req.URL.RawQuery = tt.requestQuery
 			}
-			
+
 			for key, value := range tt.requestHeaders {
 				req.Header.Set(key, value)
 			}
@@ -1617,9 +1617,9 @@ func TestAddPassthroughHeaders(t *testing.T) {
 		{
 			name: "Basic passthrough headers",
 			streamHeaders: map[string]string{
-				"Content-Type":     "application/json",
-				"Patch-H-Custom":   "custom-value",
-				"Patch-H-Accept":   "application/json",
+				"Content-Type":   "application/json",
+				"Patch-H-Custom": "custom-value",
+				"Patch-H-Accept": "application/json",
 			},
 			expectedHeaders: map[string]string{
 				"Content-Type": "application/json",
@@ -1631,8 +1631,8 @@ func TestAddPassthroughHeaders(t *testing.T) {
 		{
 			name: "Patch-Status header sets HTTP status",
 			streamHeaders: map[string]string{
-				"Content-Type":  "text/plain",
-				"Patch-Status":  "404",
+				"Content-Type":   "text/plain",
+				"Patch-Status":   "404",
 				"Patch-H-Custom": "value",
 			},
 			expectedHeaders: map[string]string{
@@ -1657,7 +1657,7 @@ func TestAddPassthroughHeaders(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			
+
 			addPassthroughHeaders(w, tt.streamHeaders)
 
 			// Check headers
@@ -1747,7 +1747,7 @@ func TestRequestResponderHeaders(t *testing.T) {
 
 	t.Run("Headers are passed through correctly", func(t *testing.T) {
 		channelID := "test-headers"
-		
+
 		// Start responder waiting for request
 		responderDone := make(chan *httptest.ResponseRecorder)
 		go func() {
@@ -1817,7 +1817,7 @@ func TestRequestResponderHTTPMethods(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			channelID := "test-method-" + strings.ToLower(tt.method)
-			
+
 			// Start responder waiting for request
 			responderDone := make(chan *httptest.ResponseRecorder)
 			go func() {
@@ -1866,7 +1866,7 @@ func TestRequestResponderSwitchMode(t *testing.T) {
 	t.Run("Switch mode returns request info", func(t *testing.T) {
 		channelID := "test-switch-mode"
 		newChannelID := "switched-channel-123"
-		
+
 		// Start responder in switch mode
 		responderDone := make(chan *httptest.ResponseRecorder)
 		go func() {
@@ -1913,13 +1913,159 @@ func TestRequestResponderSwitchMode(t *testing.T) {
 				t.Errorf("Expected Patch-H-User-Agent header, got %q", userAgent)
 			}
 
-			// Check response body mentions the new channel
-			if !strings.Contains(responderResult.Body.String(), newChannelID) {
-				t.Errorf("Expected response body to mention new channel %q, got %q", newChannelID, responderResult.Body.String())
+			// Check response body contains the request data (changed behavior)
+			body := responderResult.Body.String()
+			if body != "test data" {
+				t.Errorf("Expected response body to contain request data 'test data', got %q", body)
 			}
 
 		case <-time.After(2 * time.Second):
 			t.Error("Switch mode responder did not complete within timeout")
+		}
+	})
+
+	t.Run("Double clutch mode complete flow", func(t *testing.T) {
+		channelID := "test-double-clutch-complete"
+		newChannelID := "switched-channel-complete"
+
+		// Channel to coordinate test
+		requesterDone := make(chan *httptest.ResponseRecorder)
+		responderDone := make(chan struct{})
+		finalResponderDone := make(chan struct{})
+
+		// Start the requester (will wait for response)
+		go func() {
+			req := httptest.NewRequest("POST", "/p/req/"+channelID, strings.NewReader("request data"))
+			req.Header.Set("Content-Type", "application/json")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/req/"+channelID)
+			requesterDone <- w
+		}()
+
+		// Give requester time to start
+		time.Sleep(50 * time.Millisecond)
+
+		// Start responder in switch mode
+		go func() {
+			req := httptest.NewRequest("POST", "/p/res/"+channelID+"?switch=true", strings.NewReader(newChannelID))
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/res/"+channelID)
+
+			// Verify responder got the request data
+			if w.Code != http.StatusOK {
+				t.Errorf("Responder: Expected status %d, got %d", http.StatusOK, w.Code)
+			}
+
+			body := w.Body.String()
+			if body != "request data" {
+				t.Errorf("Responder: Expected request body 'request data', got %q", body)
+			}
+
+			close(responderDone)
+		}()
+
+		// Wait for switch to complete
+		<-responderDone
+
+		// Give the forwarding goroutine time to set up
+		time.Sleep(50 * time.Millisecond)
+
+		// Now send the actual response on the new channel
+		go func() {
+			req := httptest.NewRequest("POST", "/p/"+newChannelID, strings.NewReader("final response"))
+			req.Header.Set("Content-Type", "text/plain")
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/"+newChannelID)
+			close(finalResponderDone)
+		}()
+
+		// Check that requester got the final response
+		select {
+		case requesterResult := <-requesterDone:
+			if requesterResult.Code != http.StatusOK {
+				t.Errorf("Requester: Expected status %d, got %d", http.StatusOK, requesterResult.Code)
+			}
+
+			body := requesterResult.Body.String()
+			if body != "final response" {
+				t.Errorf("Requester: Expected response 'final response', got %q", body)
+			}
+
+			contentType := requesterResult.Header().Get("Content-Type")
+			if contentType != "text/plain" {
+				t.Errorf("Requester: Expected Content-Type 'text/plain', got %q", contentType)
+			}
+
+		case <-time.After(6 * time.Second):
+			t.Error("Double clutch complete flow did not complete within timeout")
+		}
+
+		// Ensure final responder completed
+		<-finalResponderDone
+	})
+
+	t.Run("Double clutch timeout handling", func(t *testing.T) {
+		channelID := "test-double-clutch-timeout"
+		newChannelID := "switched-channel-timeout"
+
+		requesterDone := make(chan *httptest.ResponseRecorder)
+
+		// Start the requester (will wait for response)
+		go func() {
+			req := httptest.NewRequest("POST", "/p/req/"+channelID, strings.NewReader("request data"))
+			ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second) // Longer than switch timeout
+			defer cancel()
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/req/"+channelID)
+			requesterDone <- w
+		}()
+
+		// Give requester time to start
+		time.Sleep(50 * time.Millisecond)
+
+		// Start responder in switch mode
+		go func() {
+			req := httptest.NewRequest("POST", "/p/res/"+channelID+"?switch=true", strings.NewReader(newChannelID))
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/res/"+channelID)
+		}()
+
+		// Don't send response on the new channel - let it timeout
+
+		// Check that requester got the timeout error
+		select {
+		case requesterResult := <-requesterDone:
+			// Should receive a timeout error response
+			body := requesterResult.Body.String()
+			if !strings.Contains(body, "Double clutch timeout") {
+				t.Errorf("Expected timeout error message, got: %s", body)
+			}
+
+			// Check HTTP status code (not header, since Patch-Status sets the actual HTTP status)
+			if requesterResult.Code != http.StatusGatewayTimeout {
+				t.Errorf("Expected HTTP status 504, got %d", requesterResult.Code)
+			}
+
+		case <-time.After(40 * time.Second):
+			t.Error("Test timeout - requester did not complete")
 		}
 	})
 }
