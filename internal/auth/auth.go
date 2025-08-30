@@ -25,7 +25,8 @@ func AuthenticateToken(
 	}
 
 	if token == "" {
-		return false, "no token provided", nil
+		// If no token is provided for a user namespace, treat it as a "public" token
+		token = "public"
 	}
 
 	// For HuProxy, pass the path as the operation to check against patterns

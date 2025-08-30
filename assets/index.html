@@ -231,6 +231,9 @@ curl -H "Patch-Status: 201" -d '{"created": true}' {{.BaseURL}}/public/res/api/u
     <code>.patchwork</code> repository in your account and add a <code>config.yaml</code> 
     file to define tokens, permissions, notification settings, and HuProxy access.
   </p>
+  <p>
+    If a request is made to a user namespace without an <code>Authorization</code> header or <code>token</code> query parameter, it is treated as a request with the token <code>public</code>. This allows for creating public endpoints within a user's namespace that can be accessed without authentication.
+  </p>
   
   <h4>config.yaml Format</h4>
   <p>Create a <code>config.yaml</code> file in your <code>.patchwork</code> repository:</p>

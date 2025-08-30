@@ -1,6 +1,6 @@
 # Patchwork
 
-[![CI](https://github.com/tionis/patchwork/workflows/CI/badge.svg)](https://githPatchwork uses a Forgejo-integrated authentication system. Each user maintains a `config.yaml` file in their `.patchwork` repository to define access tokens, permissions, and notification settings.b.com/tionis/patchwork/actions/workflows/ci.yml)
+[![CI](https://github.com/tionis/patchwork/workflows/CI/badge.svg)](https://github.com/tionis/patchwork/actions/workflows/ci.yml)
 [![Test](https://github.com/tionis/patchwork/workflows/Test/badge.svg)](https://github.com/tionis/patchwork/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/tionis/patchwork/branch/main/graph/badge.svg)](https://codecov.io/gh/tionis/patchwork)
 [![Go Report Card](https://goreportcard.com/badge/github.com/tionis/patchwork)](https://goreportcard.com/report/github.com/tionis/patchwork)
@@ -654,6 +654,8 @@ The server is organized by namespaces with different access patterns:
   Based on Google's HUProxy project, this endpoint provides WebSocket tunneling primarily for SSH
   connections. Uses token-based authentication via `Authorization` header. Tokens are managed through
   the `huproxy` field in the user's `config.yaml` file in their `.patchwork` repository.
+
+If a request is made to a user namespace without an `Authorization` header or `toke` query parameter, it is treated as a request with the token `public`. This allows for creating public endpoints within a user's namespace that can be accessed without authentication.
 
 ### ACL File Format
 
