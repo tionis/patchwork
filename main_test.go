@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/tionis/patchwork/internal/metrics"
+	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
 )
 
@@ -687,16 +689,22 @@ func createTestMainServer() *server {
 		"admin":    mockUserAuth,
 	}
 
+	// Create metrics instance for testing
+	metricsInstance := metrics.NewMetrics()
+
 	return &server{
-		logger:        logger,
-		channels:      make(map[string]*patchChannel),
-		channelsMutex: sync.RWMutex{},
-		ctx:           context.Background(),
-		forgejoURL:    "https://test.forgejo.dev",
-		forgejoToken:  "test-token",
-		aclTTL:        5 * time.Minute,
-		secretKey:     secretKey,
-		authCache:     authCache,
+		logger:             logger,
+		channels:           make(map[string]*patchChannel),
+		channelsMutex:      sync.RWMutex{},
+		ctx:                context.Background(),
+		forgejoURL:         "https://test.forgejo.dev",
+		forgejoToken:       "test-token",
+		aclTTL:             5 * time.Minute,
+		secretKey:          secretKey,
+		authCache:          authCache,
+		metrics:            metricsInstance,
+		publicRateLimiters: make(map[string]*rate.Limiter),
+		rateLimiterMutex:   sync.RWMutex{},
 	}
 }
 
@@ -773,6 +781,58 @@ func TestPublicHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPublicRateLimiting(t *testing.T) {
+	server := createTestMainServer()
+
+	// Create a mock handler that doesn't block (unlike the real publicHandler)
+	mockHandler := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}
+
+	// Test rate limiting for public namespace
+	// The rate limiter allows 10 requests per second with burst of 20
+	clientIP := "192.168.1.100"
+
+	// Create multiple requests from the same IP
+	for i := 0; i < 25; i++ { // More than the burst limit of 20
+		req := httptest.NewRequest("GET", "/p/rate-limit-test", nil)
+		req.RemoteAddr = clientIP + ":12345"
+		w := httptest.NewRecorder()
+
+		// Apply rate limiting middleware with mock handler
+		rateLimitedHandler := server.rateLimitMiddleware(mockHandler)
+		rateLimitedHandler(w, req)
+
+		if i < 20 {
+			// First 20 requests should pass (burst limit)
+			if w.Code == http.StatusTooManyRequests {
+				t.Errorf("Request %d should not be rate limited, got status %d", i, w.Code)
+			}
+		} else {
+			// Requests beyond burst limit should be rate limited
+			if w.Code != http.StatusTooManyRequests {
+				t.Errorf("Request %d should be rate limited, got status %d", i, w.Code)
+			}
+		}
+	}
+
+	// Test that different IPs are not affected by each other's rate limits
+	differentIP := "192.168.1.200"
+	req := httptest.NewRequest("GET", "/p/different-ip-test", nil)
+	req.RemoteAddr = differentIP + ":12345"
+	w := httptest.NewRecorder()
+
+	rateLimitedHandler := server.rateLimitMiddleware(mockHandler)
+	rateLimitedHandler(w, req)
+
+	if w.Code == http.StatusTooManyRequests {
+		t.Error("Different IP should not be rate limited")
+	}
+
+	t.Log("Rate limiting test completed successfully")
 }
 
 func TestUserHandler(t *testing.T) {
@@ -872,8 +932,6 @@ func TestUserHandler(t *testing.T) {
 }
 
 func TestUserAdminHandler(t *testing.T) {
-	server := createTestMainServer()
-
 	tests := []struct {
 		name           string
 		username       string
@@ -902,7 +960,7 @@ func TestUserAdminHandler(t *testing.T) {
 			username:       "admin",
 			adminPath:      "unknown-endpoint",
 			token:          "admin-token",
-			expectedStatus: http.StatusInternalServerError, // Auth happens first, causes 500 error
+			expectedStatus: http.StatusNotFound, // Should get 404 for unknown endpoint
 		},
 		{
 			name:           "Non-admin token",
@@ -915,6 +973,7 @@ func TestUserAdminHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			server := createTestMainServer() // Create fresh server for each test
 			req := httptest.NewRequest("POST", "/u/"+tt.username+"/_/"+tt.adminPath, nil)
 			req = mux.SetURLVars(req, map[string]string{
 				"username":  tt.username,

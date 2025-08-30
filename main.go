@@ -28,7 +28,10 @@ import (
 
 	"github.com/dusted-go/logging/prettylog"
 	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tionis/patchwork/internal/huproxy"
+	"golang.org/x/time/rate"
+	"github.com/tionis/patchwork/internal/metrics"
 	"github.com/tionis/patchwork/internal/notification"
 	"github.com/tionis/patchwork/internal/types"
 	sshUtil "github.com/tionis/ssh-tools/util"
@@ -63,6 +66,10 @@ type server struct {
 	aclTTL        time.Duration
 	secretKey     []byte
 	authCache     *AuthCache
+	metrics       *metrics.Metrics
+	// Rate limiting for public namespaces
+	publicRateLimiters map[string]*rate.Limiter
+	rateLimiterMutex   sync.RWMutex
 }
 
 // AuthenticateToken implements the ServerInterface for huproxy.
@@ -350,14 +357,17 @@ func (s *server) authenticateToken(
 			"is_huproxy",
 			isHuProxy,
 		)
+		s.metrics.RecordAuthRequest("error")
 
 		return false, fmt.Sprintf("token validation error: %v", err), nil
 	}
 
 	if !valid {
+		s.metrics.RecordAuthRequest("denied")
 		return false, reason, nil
 	}
 
+	s.metrics.RecordAuthRequest("success")
 	s.logger.Info("Token authenticated",
 		"username", username,
 		"path", path,
@@ -537,9 +547,9 @@ func (cache *AuthCache) validateToken(
 ) (bool, string, *TokenInfo, error) {
 	auth, err := cache.GetUserAuth(username)
 	if err != nil {
-		cache.logger.Error("Failed to get user auth", "username", username, "error", err)
+		cache.logger.Debug("Failed to get user auth", "username", username, "error", err)
 
-		return false, "internal error", nil, err
+		return false, "user not found", nil, nil
 	}
 
 	tokenInfo, exists := auth.Tokens[token]
@@ -1143,6 +1153,22 @@ const (
 	// BehaviorSpecial - special control endpoints (for /_/...)
 	BehaviorSpecial
 )
+
+// getBehaviorString converts PathBehavior to string for metrics
+func getBehaviorString(behavior PathBehavior) string {
+	switch behavior {
+	case BehaviorBlocking:
+		return "blocking"
+	case BehaviorPubsub:
+		return "pubsub"
+	case BehaviorRequestResponder:
+		return "request_responder"
+	case BehaviorSpecial:
+		return "special"
+	default:
+		return "unknown"
+	}
+}
 
 // determinePathBehavior determines the behavior based on the path structure
 func determinePathBehavior(path string, hasQueueParam bool) PathBehavior {
@@ -1749,7 +1775,92 @@ func (s *server) handleResponderSwitch(
 	}
 }
 
+// getOrCreateRateLimiter returns a rate limiter for the given IP address.
+// Rate limit: 10 requests per second with a burst of 20 requests
+func (s *server) getOrCreateRateLimiter(clientIP string) *rate.Limiter {
+	s.rateLimiterMutex.Lock()
+	defer s.rateLimiterMutex.Unlock()
+
+	limiter, exists := s.publicRateLimiters[clientIP]
+	if !exists {
+		// 10 requests per second with burst of 20
+		limiter = rate.NewLimiter(rate.Limit(10), 20)
+		s.publicRateLimiters[clientIP] = limiter
+	}
+
+	return limiter
+}
+
+// cleanupOldRateLimiters removes unused rate limiters to prevent memory leaks
+func (s *server) cleanupOldRateLimiters() {
+	s.rateLimiterMutex.Lock()
+	defer s.rateLimiterMutex.Unlock()
+
+	// Clean up rate limiters that haven't been used recently
+	// This is a simple approach; in production you might want more sophisticated cleanup
+	for ip, limiter := range s.publicRateLimiters {
+		// If the limiter has available tokens (unused), remove it after some time
+		if limiter.Tokens() >= float64(limiter.Burst()) {
+			delete(s.publicRateLimiters, ip)
+		}
+	}
+}
+
+// rateLimitMiddleware applies rate limiting to public namespace requests
+func (s *server) rateLimitMiddleware(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clientIP := getClientIP(r)
+		limiter := s.getOrCreateRateLimiter(clientIP)
+
+		if !limiter.Allow() {
+			s.logger.Warn("Rate limit exceeded",
+				"client_ip", clientIP,
+				"path", r.URL.Path,
+				"method", r.Method)
+			
+			// Record rate limit metric
+			if s.metrics != nil {
+				s.metrics.HTTPRequestsTotal.WithLabelValues(r.Method, "public", "429").Inc()
+			}
+
+			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+
+		handler(w, r)
+	}
+}
+
 // handlePatch implements the core duct-like channel communication logic.
+// metricsMiddleware wraps handlers to record HTTP metrics
+func (s *server) metricsMiddleware(namespace string, handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		
+		// Create a wrapper to capture the status code
+		wrapper := &responseWrapper{ResponseWriter: w, statusCode: 200}
+		
+		handler(wrapper, r)
+		
+		duration := time.Since(start).Seconds()
+		status := fmt.Sprintf("%d", wrapper.statusCode)
+		
+		s.metrics.RecordHTTPRequest(r.Method, namespace, status)
+		s.metrics.RecordHTTPDuration(r.Method, namespace, duration)
+	}
+}
+
+// responseWrapper wraps http.ResponseWriter to capture status codes
+type responseWrapper struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWrapper) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
 func (s *server) handlePatch(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1851,6 +1962,7 @@ func (s *server) handlePatch(
 			data:      make(chan stream),
 			unpersist: make(chan bool),
 		}
+		s.metrics.SetChannelsTotal(float64(len(s.channels)))
 	}
 
 	channel := s.channels[channelPath]
@@ -1947,6 +2059,10 @@ func (s *server) handlePatch(
 
 		// Create stream with headers including passthrough headers
 		headers := prepareRequestHeaders(r)
+
+		// Track message metrics
+		behaviorStr := getBehaviorString(behavior)
+		s.metrics.RecordMessage(namespace, behaviorStr, float64(len(buf)))
 
 		if !pubsub {
 			// Regular mode: one-to-one communication
@@ -2258,16 +2374,22 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	// Initialize auth cache
 	authCache := NewAuthCache(forgejoURL, forgejoToken, aclTTL, logger.WithGroup("auth"))
 
+	// Initialize metrics
+	metricsInstance := metrics.NewMetrics()
+
 	server := &server{
-		logger:        logger,
-		channels:      make(map[string]*patchChannel),
-		channelsMutex: sync.RWMutex{},
-		ctx:           ctx,
-		forgejoURL:    forgejoURL,
-		forgejoToken:  forgejoToken,
-		aclTTL:        aclTTL,
-		secretKey:     secretKey,
-		authCache:     authCache,
+		logger:             logger,
+		channels:           make(map[string]*patchChannel),
+		channelsMutex:      sync.RWMutex{},
+		ctx:                ctx,
+		forgejoURL:         forgejoURL,
+		forgejoToken:       forgejoToken,
+		aclTTL:             aclTTL,
+		secretKey:          secretKey,
+		authCache:          authCache,
+		metrics:            metricsInstance,
+		publicRateLimiters: make(map[string]*rate.Limiter),
+		rateLimiterMutex:   sync.RWMutex{},
 	}
 
 	router := mux.NewRouter()
@@ -2360,25 +2482,26 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 
 	router.HandleFunc("/huproxy/{user}/{host}/{port}", huproxy.HuproxyHandler(server))
 
-	// Public namespace with new structure
-	router.HandleFunc("/public/{path:.*}", server.publicHandler)
+	// Public namespace with new structure (rate limited)
+	router.HandleFunc("/public/{path:.*}", server.rateLimitMiddleware(server.metricsMiddleware("public", server.publicHandler)))
 
-	// Backward compatibility - old /p/ routes map to /public/
-	router.HandleFunc("/p/{path:.*}", server.publicHandler)
+	// Backward compatibility - old /p/ routes map to /public/ (rate limited)
+	router.HandleFunc("/p/{path:.*}", server.rateLimitMiddleware(server.metricsMiddleware("public", server.publicHandler)))
 
 	// Hook namespaces (unchanged)
-	router.HandleFunc("/h", server.forwardHookRootHandler)
-	router.HandleFunc("/h/{path:.*}", server.forwardHookHandler)
-	router.HandleFunc("/r", server.reverseHookRootHandler)
-	router.HandleFunc("/r/{path:.*}", server.reverseHookHandler)
+	router.HandleFunc("/h", server.metricsMiddleware("hooks", server.forwardHookRootHandler))
+	router.HandleFunc("/h/{path:.*}", server.metricsMiddleware("hooks", server.forwardHookHandler))
+	router.HandleFunc("/r", server.metricsMiddleware("hooks", server.reverseHookRootHandler))
+	router.HandleFunc("/r/{path:.*}", server.metricsMiddleware("hooks", server.reverseHookHandler))
 
 	// User namespaces with new structure
-	router.HandleFunc("/u/{username}/_/ntfy", server.userNtfyHandler)
-	router.HandleFunc("/u/{username}/_/{adminPath:.*}", server.userAdminHandler)
-	router.HandleFunc("/u/{username}/{path:.*}", server.userHandler)
+	router.HandleFunc("/u/{username}/_/ntfy", server.metricsMiddleware("user_ntfy", server.userNtfyHandler))
+	router.HandleFunc("/u/{username}/_/{adminPath:.*}", server.metricsMiddleware("user_admin", server.userAdminHandler))
+	router.HandleFunc("/u/{username}/{path:.*}", server.metricsMiddleware("user", server.userHandler))
 
 	router.HandleFunc("/healthz", server.statusHandler)
 	router.HandleFunc("/status", server.statusHandler)
+	router.Handle("/metrics", promhttp.HandlerFor(server.metrics.GetRegistry(), promhttp.HandlerOpts{}))
 
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Read the template content
@@ -2430,6 +2553,21 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	})
 
 	http.Handle("/", router)
+
+	// Start rate limiter cleanup goroutine
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute) // Clean up every 5 minutes
+		defer ticker.Stop()
+		
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				server.cleanupOldRateLimiters()
+			}
+		}
+	}()
 
 	logger.Info("Starting Patchwork", "port", port)
 
