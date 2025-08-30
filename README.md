@@ -19,6 +19,8 @@ that serve as a multi-process, multi-consumer (MPMC) queue.
 - **WebSocket Tunneling**: SSH/TCP tunneling via HuProxy integration
 - **Token-based Authentication**: Forgejo-integrated ACL system with caching
 - **Administrative API**: Cache invalidation and user management endpoints
+- **Prometheus Metrics**: Secured metrics endpoint for monitoring with authentication
+- **Rate Limiting**: Built-in rate limiting for public namespaces to prevent abuse
 
 ## What does it do?
 
@@ -257,6 +259,36 @@ Each token can have `POST`, `GET`, and `huproxy` permissions defined with glob p
 - Specific glob patterns like `projects/*/data` allow fine-grained control
 - Negation patterns like `!secret/*` can exclude specific paths
 - Admin tokens (`is_admin: true`) have access to administrative endpoints
+
+#### Public Token Behavior
+
+When no token is provided in user namespaces, the request is treated as using a "public" token. This allows users to create public endpoints within their namespace:
+
+```yaml
+tokens:
+  "public":
+    is_admin: false
+    GET: 
+      - "/status"     # Allow public status checks
+      - "/health"     # Allow public health checks
+    POST: []          # No public POST access
+  
+  "private_token":
+    is_admin: false
+    GET: ["*"]        # Full read access with token
+    POST: ["/data/*"] # Write access to data endpoints
+```
+
+**Examples**:
+```bash
+# Public access (no token needed, uses "public" token)
+curl https://patchwork.example.com/u/alice/status
+
+# Authenticated access
+curl https://patchwork.example.com/u/alice/data/logs?token=private_token -d "log entry"
+```
+
+If no "public" token is defined, requests without authentication will be denied with "token not found".
 
 ### HuProxy Access
 
@@ -553,12 +585,66 @@ To enable user namespaces with ACL control:
 4. **Configure environment**: Set `FORGEJO_URL` and `FORGEJO_TOKEN` environment variables
 5. **User setup**: Users create `.patchwork` repositories and grant read access to the `patchwork` user
 
-## Health Checks
+## Health Checks and Monitoring
 
-Patchwork includes health check endpoints:
+Patchwork includes health check endpoints and monitoring capabilities:
 
 - `/healthz`: Returns "OK!" if the server is running
 - `/status`: Alias for `/healthz`
+- `/metrics`: Prometheus metrics endpoint with authentication
+
+### Metrics Endpoint
+
+The `/metrics` endpoint provides Prometheus-compatible metrics for monitoring server performance, request patterns, and system health. The endpoint includes comprehensive security controls:
+
+#### Authentication
+
+The metrics endpoint uses multi-layered authentication:
+
+- **Local Access**: Requests from localhost (`127.0.0.1`, `::1`) are allowed without authentication for local monitoring tools
+- **Remote Access**: Requires authentication using the server's Forgejo token
+- **Token Formats**: Supports `Bearer <token>`, `token <token>`, or direct token in `Authorization` header
+- **Query Parameter**: Token can also be passed as `?token=<token>` query parameter
+
+#### Usage Examples
+
+```bash
+# Local access (no authentication needed)
+curl http://localhost:8080/metrics
+
+# Remote access with Bearer token
+curl -H "Authorization: Bearer your-forgejo-token" https://patchwork.example.com/metrics
+
+# Remote access with query parameter
+curl https://patchwork.example.com/metrics?token=your-forgejo-token
+```
+
+#### Available Metrics
+
+- `patchwork_http_requests_total`: Total number of HTTP requests by method, namespace, and status code
+- `patchwork_http_request_duration_seconds`: HTTP request duration histograms
+- `patchwork_channels_total`: Current number of active channels
+- `patchwork_active_connections`: Number of active WebSocket/long-polling connections
+- `patchwork_messages_total`: Total messages processed by namespace and behavior
+- `patchwork_message_size_bytes`: Message size histograms
+- `patchwork_auth_requests_total`: Authentication attempts by result
+- `patchwork_cache_operations_total`: Cache hit/miss statistics
+
+#### Monitoring Setup
+
+For production monitoring, configure your monitoring system (Prometheus, Grafana, etc.) to scrape the metrics endpoint:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'patchwork'
+    static_configs:
+      - targets: ['patchwork.example.com:80']
+    scheme: https
+    authorization:
+      credentials: "your-forgejo-token"
+    metrics_path: /metrics
+```
 
 For Docker deployments, a health check is automatically configured.
 
@@ -970,3 +1056,39 @@ The patchwork server will automatically fetch and cache your ACL configuration w
 ## License
 
 MIT
+
+## Development
+
+### Test Coverage
+
+Patchwork maintains comprehensive test coverage including:
+
+- **Unit Tests**: Authentication, metrics, utilities, and core functionality
+- **Integration Tests**: Full server workflows with mock Forgejo backend
+- **Security Tests**: Metrics endpoint authentication and access controls  
+- **Performance Tests**: Benchmarks for concurrent access and load testing
+
+To run the complete test suite:
+
+```bash
+# Run all tests
+go test ./...
+
+# Run with coverage report
+go test -cover ./...
+
+# Run integration tests specifically
+go test ./internal/integration/
+
+# Run security tests
+go test -run TestSecured ./
+```
+
+### Code Quality
+
+The codebase follows Go best practices with:
+- Comprehensive error handling and logging
+- Structured code organization with clear separation of concerns
+- Extensive inline documentation and comments
+- Type safety and interface-driven design
+- Mock implementations for external dependencies in tests

@@ -25,7 +25,7 @@ func AuthenticateToken(
 	}
 
 	if token == "" {
-		// If no token is provided for a user namespace, treat it as a "public" token
+		// Missing token in user namespace should be treated as "public" token
 		token = "public"
 	}
 
@@ -49,6 +49,12 @@ func AuthenticateToken(
 		isHuProxy,
 	)
 	if err != nil {
+		// Handle the case where user doesn't exist (config.yaml not found)
+		// When treating missing tokens as "public", this should return "token not found"
+		if strings.Contains(err.Error(), "config.yaml not found") && token == "public" {
+			return false, "token not found", nil
+		}
+		
 		logger.Error(
 			"Token validation error",
 			"username",
@@ -63,6 +69,9 @@ func AuthenticateToken(
 	}
 
 	if !valid {
+		if tokenInfo == nil {
+			return false, "token not found", nil
+		}
 		return false, "invalid token", nil
 	}
 

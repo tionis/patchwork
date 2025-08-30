@@ -42,6 +42,10 @@ import (
 //go:embed assets/*
 var assets embed.FS
 
+// =============================================================================
+// TYPE DEFINITIONS
+// =============================================================================
+
 // patchChannel represents a communication channel between producers and consumers.
 type patchChannel struct {
 	data      chan stream
@@ -71,6 +75,10 @@ type server struct {
 	publicRateLimiters map[string]*rate.Limiter
 	rateLimiterMutex   sync.RWMutex
 }
+
+// =============================================================================
+// SERVER INTERFACE IMPLEMENTATIONS
+// =============================================================================
 
 // AuthenticateToken implements the ServerInterface for huproxy.
 func (s *server) AuthenticateToken(
@@ -256,6 +264,10 @@ type AuthCache struct {
 	logger       *slog.Logger
 }
 
+// =============================================================================
+// UTILITY FUNCTIONS
+// =============================================================================
+
 // getClientIP extracts the real client IP from reverse proxy headers.
 func getClientIP(r *http.Request) string {
 	// Check X-Forwarded-For header first (most common)
@@ -326,7 +338,8 @@ func (s *server) authenticateToken(
 	}
 
 	if token == "" {
-		return false, "no token provided", nil
+		// Missing token in user namespace should be treated as "public" token
+		token = "public"
 	}
 
 	// For HuProxy, pass the path as the operation to check against patterns
@@ -379,6 +392,54 @@ func (s *server) authenticateToken(
 	return true, "authenticated", nil
 }
 
+// securedMetricsHandler creates a secured metrics endpoint that requires authentication
+func (s *server) securedMetricsHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Get Authorization header or token from query parameter
+		token := r.Header.Get("Authorization")
+		if token == "" {
+			token = r.URL.Query().Get("token")
+		}
+
+		// Handle different Authorization header formats
+		if strings.HasPrefix(token, "Bearer ") {
+			token = strings.TrimPrefix(token, "Bearer ")
+		} else if strings.HasPrefix(token, "token ") {
+			token = strings.TrimPrefix(token, "token ")
+		}
+
+		// Check if this is a local request (from localhost or 127.0.0.1)
+		clientIP := getClientIP(r)
+		isLocal := clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost"
+
+		// Allow local requests without authentication (for monitoring tools on same machine)
+		if isLocal {
+			s.logger.Debug("Metrics access granted for local request", "client_ip", clientIP)
+			promhttp.HandlerFor(s.metrics.GetRegistry(), promhttp.HandlerOpts{}).ServeHTTP(w, r)
+			return
+		}
+
+		// For remote requests, require authentication with a special metrics token
+		if token == "" {
+			s.logger.Info("Metrics access denied - no token provided", "client_ip", clientIP)
+			http.Error(w, "Authentication required for metrics endpoint", http.StatusUnauthorized)
+			return
+		}
+
+		// We need to check if this token is from an admin user with metrics access
+		// Since we don't have a username for metrics endpoint, we'll check against the Forgejo token
+		// This is a simple approach - in production you might want a dedicated metrics token
+		if token == s.forgejoToken {
+			s.logger.Info("Metrics access granted with server token", "client_ip", clientIP)
+			promhttp.HandlerFor(s.metrics.GetRegistry(), promhttp.HandlerOpts{}).ServeHTTP(w, r)
+			return
+		}
+
+		s.logger.Info("Metrics access denied - invalid token", "client_ip", clientIP)
+		http.Error(w, "Invalid authentication token", http.StatusForbidden)
+	})
+}
+
 // generateUUID generates a simple UUID-like string using crypto/rand.
 func generateUUID() (string, error) {
 	b := make([]byte, 16)
@@ -392,6 +453,8 @@ func generateUUID() (string, error) {
 }
 
 // computeSecret generates an HMAC-SHA256 secret for a given channel.
+// This provides cryptographic authentication for channels, ensuring that
+// only clients with the correct secret can access the channel.
 func (s *server) computeSecret(namespace, channel string) string {
 	h := hmac.New(sha256.New, s.secretKey)
 	_, _ = fmt.Fprintf(h, "%s:%s", namespace, channel) // hash.Hash.Write never returns an error
@@ -400,6 +463,7 @@ func (s *server) computeSecret(namespace, channel string) string {
 }
 
 // verifySecret verifies if the provided secret matches the expected secret for a channel.
+// This function provides constant-time comparison to prevent timing attacks.
 func (s *server) verifySecret(namespace, channel, providedSecret string) bool {
 	expectedSecret := s.computeSecret(namespace, channel)
 
@@ -407,6 +471,8 @@ func (s *server) verifySecret(namespace, channel, providedSecret string) bool {
 }
 
 // NewAuthCache creates a new auth cache instance.
+// The cache automatically fetches and caches user authentication configurations
+// from Forgejo repositories, reducing API calls and improving performance.
 func NewAuthCache(
 	forgejoURL, forgejoToken string,
 	ttl time.Duration,
@@ -423,6 +489,8 @@ func NewAuthCache(
 }
 
 // fetchUserAuth fetches config.yaml data from Forgejo for a specific user.
+// This function directly contacts the Forgejo API to retrieve the latest
+// authentication configuration without using cache.
 func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 	// Construct the API URL for the config.yaml file
 	apiURL := fmt.Sprintf(
@@ -611,6 +679,10 @@ type HookResponse struct {
 	Channel string `json:"channel"`
 	Secret  string `json:"secret"`
 }
+
+// =============================================================================
+// HTTP HANDLERS
+// =============================================================================
 
 // Placeholder handlers for various namespace endpoints.
 func (s *server) publicHandler(w http.ResponseWriter, r *http.Request) {
@@ -1775,6 +1847,10 @@ func (s *server) handleResponderSwitch(
 	}
 }
 
+// =============================================================================
+// RATE LIMITING
+// =============================================================================
+
 // getOrCreateRateLimiter returns a rate limiter for the given IP address.
 // Rate limit: 10 requests per second with a burst of 20 requests
 func (s *server) getOrCreateRateLimiter(clientIP string) *rate.Limiter {
@@ -1791,7 +1867,9 @@ func (s *server) getOrCreateRateLimiter(clientIP string) *rate.Limiter {
 	return limiter
 }
 
-// cleanupOldRateLimiters removes unused rate limiters to prevent memory leaks
+// cleanupOldRateLimiters removes unused rate limiters to prevent memory leaks.
+// This function should be called periodically to clean up rate limiters
+// for IP addresses that haven't been used recently.
 func (s *server) cleanupOldRateLimiters() {
 	s.rateLimiterMutex.Lock()
 	defer s.rateLimiterMutex.Unlock()
@@ -1806,7 +1884,9 @@ func (s *server) cleanupOldRateLimiters() {
 	}
 }
 
-// rateLimitMiddleware applies rate limiting to public namespace requests
+// rateLimitMiddleware applies rate limiting to public namespace requests.
+// This middleware protects public endpoints from abuse by limiting requests
+// to 10 per second with a burst allowance of 20 requests per IP address.
 func (s *server) rateLimitMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		clientIP := getClientIP(r)
@@ -1831,7 +1911,10 @@ func (s *server) rateLimitMiddleware(handler http.HandlerFunc) http.HandlerFunc 
 	}
 }
 
-// handlePatch implements the core duct-like channel communication logic.
+// =============================================================================
+// MIDDLEWARE
+// =============================================================================
+
 // metricsMiddleware wraps handlers to record HTTP metrics
 func (s *server) metricsMiddleware(namespace string, handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1861,6 +1944,24 @@ func (rw *responseWrapper) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// =============================================================================
+// CORE COMMUNICATION LOGIC
+// =============================================================================
+
+// handlePatch implements the core duct-like channel communication logic.
+// It handles both GET and POST requests to create producer-consumer channels
+// where data can be passed through various namespaces (public, user, hooks).
+// 
+// GET requests either:
+//   - Wait for data from a producer (consumer mode)
+//   - Return immediately if data is already available
+//
+// POST requests:
+//   - Send data to waiting consumers (producer mode)  
+//   - Store data temporarily if no consumers are waiting
+//
+// The function manages WebSocket upgrades, responder/requester semantics,
+// and cross-origin communication patterns.
 func (s *server) handlePatch(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -2155,6 +2256,10 @@ func healthCheck(url string) error {
 	return nil
 }
 
+// =============================================================================
+// MAIN FUNCTION AND CLI
+// =============================================================================
+
 func main() {
 	app := &cli.App{
 		Name:  "patchwork",
@@ -2394,6 +2499,10 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 
 	router := mux.NewRouter()
 
+	// =============================================================================
+	// ROUTE DEFINITIONS
+	// =============================================================================
+
 	router.HandleFunc("/.well-known", notFoundHandler)
 	router.HandleFunc("/.well-known/{path:.*}", notFoundHandler)
 	router.HandleFunc("/robots.txt", notFoundHandler)
@@ -2501,7 +2610,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 
 	router.HandleFunc("/healthz", server.statusHandler)
 	router.HandleFunc("/status", server.statusHandler)
-	router.Handle("/metrics", promhttp.HandlerFor(server.metrics.GetRegistry(), promhttp.HandlerOpts{}))
+	router.Handle("/metrics", server.securedMetricsHandler())
 
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Read the template content

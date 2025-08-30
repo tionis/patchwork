@@ -15,7 +15,9 @@
   <p>
     A simple communication backend for scripts and other small applications.
     Patchwork enables IFTTT-type applications by providing infinite HTTP endpoints
-    that serve as a multi-process, multi-consumer (MPMC) queue.
+    that serve as a multi-process, multi-consumer (MPMC) queue. Features include
+    built-in metrics for monitoring, rate limiting for abuse prevention, and 
+    comprehensive authentication with token-based access control.
   </p>
 
   <h2>What does it do?</h2>
@@ -198,11 +200,12 @@ curl -H "Patch-Status: 201" -d '{"created": true}' {{.BaseURL}}/public/res/api/u
     <li>
       <strong>/public/**</strong>: Public namespace - no authentication required.
       Everyone can read and write. Perfect for testing and public communication channels.
+      Features built-in rate limiting (10 requests/second, burst of 20) to prevent abuse.
       <br><em>Examples: /public/queue/jobs, /public/pubsub/events</em>
     </li>
     <li>
       <strong>/p/**</strong>: Legacy public namespace - maintained for backward compatibility.
-      Maps to the public namespace with default behavior.
+      Maps to the public namespace with default behavior and same rate limiting.
     </li>
     <li>
       <strong>/h/**</strong>: Forward hooks - GET <code>/h</code> to obtain a new channel and secret,
@@ -266,6 +269,14 @@ curl -H "Patch-Status: 201" -d '{"created": true}' {{.BaseURL}}/public/res/api/u
     POST: ["*"]
     GET: ["*"]
 
+  # Public token allows unauthenticated access to specific endpoints
+  "public":
+    is_admin: false
+    GET:
+      - "/status"          # Allow public status checks
+      - "/health"          # Allow public health checks
+    POST: []               # No public POST access
+
 # Optional: Configure notification backend
 ntfy:
   type: matrix
@@ -282,9 +293,19 @@ ntfy:
   </p>
   
   <p>
+    <strong>Public Token Behavior:</strong> When no token is provided, the request
+    is treated as using the "public" token. This allows users to create public endpoints
+    within their namespace that can be accessed without authentication.
+  </p>
+  
+  <p>
     Example token usage:
   </p>
-  <pre>curl {{.BaseURL}}/u/alice/projects/logs?token=my_token_name -d "Deploy completed"</pre>
+  <pre># Authenticated access
+curl {{.BaseURL}}/u/alice/projects/logs?token=my_token_name -d "Deploy completed"
+
+# Public access (no token needed, uses "public" token)
+curl {{.BaseURL}}/u/alice/status</pre>
 
   <h4>Notification System</h4>
   <p>Send notifications via the <code>/_/ntfy</code> endpoint:</p>
@@ -299,6 +320,46 @@ curl -X POST "{{.BaseURL}}/u/alice/_/ntfy" \
   -H "Authorization: Bearer my_token_name" \
   -H "Content-Type: text/plain" \
   -d "Server maintenance completed"</pre>
+
+  <h2>Monitoring and Metrics</h2>
+  <p>Patchwork provides comprehensive monitoring capabilities through Prometheus-compatible metrics:</p>
+  
+  <h3>Metrics Endpoint</h3>
+  <p>The <code>/metrics</code> endpoint exposes server metrics with built-in authentication:</p>
+  
+  <h4>Authentication</h4>
+  <ul>
+    <li><strong>Local Access:</strong> Requests from localhost are allowed without authentication</li>
+    <li><strong>Remote Access:</strong> Requires authentication with the server's Forgejo token</li>
+    <li><strong>Token Formats:</strong> Bearer token, query parameter, or direct authorization header</li>
+  </ul>
+  
+  <h4>Usage Examples</h4>
+  <pre># Local monitoring (no auth needed)
+curl {{.BaseURL}}/metrics
+
+# Remote monitoring with authentication
+curl -H "Authorization: Bearer your-forgejo-token" {{.BaseURL}}/metrics
+
+# Using query parameter
+curl {{.BaseURL}}/metrics?token=your-forgejo-token</pre>
+
+  <h4>Available Metrics</h4>
+  <ul>
+    <li><code>patchwork_http_requests_total</code> - Total HTTP requests by method, namespace, status</li>
+    <li><code>patchwork_http_request_duration_seconds</code> - Request duration histograms</li>
+    <li><code>patchwork_channels_total</code> - Current number of active channels</li>
+    <li><code>patchwork_active_connections</code> - Active WebSocket/long-polling connections</li>
+    <li><code>patchwork_messages_total</code> - Messages processed by namespace and behavior</li>
+    <li><code>patchwork_auth_requests_total</code> - Authentication attempts by result</li>
+    <li><code>patchwork_cache_operations_total</code> - Cache hit/miss statistics</li>
+  </ul>
+
+  <h3>Health Checks</h3>
+  <p>Standard health check endpoints for service monitoring:</p>
+  <pre># Health check endpoints
+curl {{.BaseURL}}/healthz
+curl {{.BaseURL}}/status</pre>
 
   <h2>Modes</h2>
   <p>Each endpoint supports multiple modes:</p>

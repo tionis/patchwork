@@ -364,7 +364,7 @@ func TestAuthenticateToken(t *testing.T) {
 			isHuProxy:    false,
 			clientIP:     net.ParseIP("192.168.1.1"),
 			expectValid:  false,
-			expectReason: "no token provided",
+			expectReason: "token not found", // Missing token treated as "public", but user has no "public" token
 		},
 		{
 			name:         "Invalid token",
@@ -375,7 +375,18 @@ func TestAuthenticateToken(t *testing.T) {
 			isHuProxy:    false,
 			clientIP:     net.ParseIP("192.168.1.1"),
 			expectValid:  false,
-			expectReason: "invalid token",
+			expectReason: "token not found", // Token doesn't exist
+		},
+		{
+			name:         "Token exists but lacks permissions",
+			username:     "testuser",
+			token:        "valid-token",
+			path:         "/forbidden",
+			reqType:      "POST", // valid-token only has POST permissions for "/api/*"
+			isHuProxy:    false,
+			clientIP:     net.ParseIP("192.168.1.1"),
+			expectValid:  false,
+			expectReason: "invalid token", // Token exists but doesn't have POST permissions for /forbidden
 		},
 	}
 

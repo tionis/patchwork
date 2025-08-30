@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -38,8 +39,18 @@ func setupTestServer() (*httptest.Server, *types.Server) {
 	logger := slog.Default()
 	secretKey := []byte("test-secret-key-for-integration-testing")
 
-	// Create auth cache with test data
-	authCache := auth.NewAuthCache("https://test.forgejo.dev", "test-token", 5*time.Minute, logger)
+	// Create mock Forgejo server for auth
+	mockForgejoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Mock auth responses for test users
+		if strings.Contains(r.URL.Path, "user/.patchwork/media/config.yaml") {
+			w.WriteHeader(http.StatusNotFound) // No auth file found
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	// Create auth cache with mock server
+	authCache := auth.NewAuthCache(mockForgejoServer.URL, "test-token", 5*time.Minute, logger)
 
 	// Set up test users with various permission levels
 	authCache.Data["regular-user"] = &types.UserAuth{
@@ -84,7 +95,7 @@ func setupTestServer() (*httptest.Server, *types.Server) {
 		Logger:       logger,
 		Channels:     make(map[string]*types.PatchChannel),
 		Ctx:          context.Background(),
-		ForgejoURL:   "https://test.forgejo.dev",
+		ForgejoURL:   mockForgejoServer.URL, // Use mock server instead of test.forgejo.dev
 		ForgejoToken: "test-token",
 		AclTTL:       5 * time.Minute,
 		SecretKey:    secretKey,

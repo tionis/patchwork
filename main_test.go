@@ -407,14 +407,7 @@ func TestServeFile(t *testing.T) {
 }
 
 func TestAuthenticateTokenEdgeCases(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	authCache := NewAuthCache("https://test.example.com", "test-token", 5*time.Minute, logger)
-
-	server := &server{
-		logger:    logger,
-		authCache: authCache,
-	}
-
+	server := createTestMainServer()
 	clientIP := net.ParseIP("192.168.1.100")
 
 	t.Run("Public namespace no authentication", func(t *testing.T) {
@@ -438,8 +431,8 @@ func TestAuthenticateTokenEdgeCases(t *testing.T) {
 		if allowed {
 			t.Error("Expected access to be denied when no token provided")
 		}
-		if reason != "no token provided" {
-			t.Errorf("Expected reason 'no token provided', got %q", reason)
+		if reason != "token not found" {
+			t.Errorf("Expected reason 'token not found', got %q", reason)
 		}
 	})
 }
