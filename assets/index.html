@@ -34,11 +34,11 @@
   </p>
   
   <p>To subscribe to a channel you can simply make a <code>GET</code> request:</p>
-  <pre>curl {{.BaseURL}}/p/a61b1f42</pre>
+  <pre>curl {{.BaseURL}}/public/queue/a61b1f42</pre>
   
   <p>The above will block until something is published to the channel <code>a61b1f42</code>. 
   You can easily publish to a channel using a <code>POST</code> request:</p>
-  <pre>curl {{.BaseURL}}/p/a61b1f42 -d "hello, world"</pre>
+  <pre>curl {{.BaseURL}}/public/queue/a61b1f42 -d "hello, world"</pre>
   
   <p>The subscriber will immediately receive that data. If you reverse the order,
   then the post will block until it is received.</p>
@@ -50,7 +50,10 @@
     In pubsub mode, the publisher will become non-blocking and their data will be
     transmitted to each connected subscriber:
   </p>
-  <pre>curl {{.BaseURL}}/p/a61b1f42?pubsub=true -d "hello, world"</pre>
+  <pre>curl {{.BaseURL}}/public/pubsub/a61b1f42 -d "hello, world"</pre>
+  
+  <p>Or use the flexible namespace with the pubsub parameter:</p>
+  <pre>curl {{.BaseURL}}/public/./a61b1f42?pubsub=true -d "hello, world"</pre>
 
   <h3>Publish with GET</h3>
   <p>
@@ -59,12 +62,87 @@
   </p>
   <pre>curl {{.BaseURL}}/p/a61b1f42?pubsub=true&body=hello,%20world</pre>
 
+  <h2>Behavior Patterns</h2>
+  <p>Patchwork supports behavior determination based on the path structure, providing more predictable and explicit communication patterns:</p>
+
+  <h3>Queue Behavior (Blocking)</h3>
+  <p><strong>Paths:</strong> <code>/queue/...</code> or <code>/./...</code> (default)</p>
+  <p>In queue mode, producers will block until a consumer is available to receive the data. This ensures one-to-one communication and guarantees message delivery.</p>
+  <pre># Producer blocks until consumer connects
+curl {{.BaseURL}}/public/queue/jobs -d "process-file.txt"
+
+# Consumer receives the message
+curl {{.BaseURL}}/public/queue/jobs</pre>
+
+  <h3>Pubsub Behavior (Non-blocking)</h3>
+  <p><strong>Paths:</strong> <code>/pubsub/...</code> or <code>/./...?pubsub=true</code></p>
+  <p>In pubsub mode, producers send data immediately and don't wait for consumers. All connected consumers receive the same message (broadcast).</p>
+  <pre># Producer sends immediately (non-blocking)
+curl {{.BaseURL}}/public/pubsub/events -d "user-login"
+
+# Multiple consumers can receive the same event
+curl {{.BaseURL}}/public/pubsub/events  # Consumer 1
+curl {{.BaseURL}}/public/pubsub/events  # Consumer 2</pre>
+
+  <h3>Flexible Behavior</h3>
+  <p><strong>Paths:</strong> <code>/./...</code></p>
+  <p>The flexible space defaults to queue behavior but can be switched to pubsub with the <code>?pubsub=true</code> query parameter:</p>
+  <pre># Default: queue behavior (blocking)
+curl {{.BaseURL}}/public/./notifications -d "alert"
+
+# Override: pubsub behavior (non-blocking)
+curl {{.BaseURL}}/public/./notifications?pubsub=true -d "broadcast"</pre>
+
+  <h2>Passthrough Headers</h2>
+  <p>Patchwork supports passthrough headers using the <code>PH-*</code> prefix system, allowing you to forward original request context between clients through the relay system.</p>
+
+  <h3>How It Works</h3>
+  <ul>
+    <li><strong>Request Headers:</strong> Headers starting with <code>PH-</code> represent original headers from the requester</li>
+    <li><strong>Response Headers:</strong> <code>PH-*</code> headers are stripped of their prefix and passed through to the final receiver</li>
+    <li><strong>Automatic Headers:</strong> Common headers like <code>User-Agent</code>, <code>Accept</code>, etc. are automatically converted to <code>PH-*</code> format</li>
+  </ul>
+
+  <h3>Example Usage</h3>
+  <p><strong>Producer side</strong> (sending headers):</p>
+  <pre>curl -X POST \
+  -H "PH-Original-IP: 192.168.1.100" \
+  -H "PH-User-ID: alice123" \
+  -H "User-Agent: MyApp/1.0" \
+  -d "request data" \
+  {{.BaseURL}}/public/queue/api</pre>
+
+  <p><strong>Consumer side</strong> (receiving headers):</p>
+  <pre>curl -v {{.BaseURL}}/public/queue/api
+# Response includes:
+# Original-IP: 192.168.1.100
+# User-ID: alice123
+# User-Agent: MyApp/1.0</pre>
+
+  <p>This enables building proxy-like applications where the original request context is preserved through the relay.</p>
+
   <h2>Namespaces</h2>
-  <p>The server is organized by namespaces with different access patterns:</p>
+  <p>The server is organized by namespaces with different access patterns. Each namespace now supports structured sub-paths that determine the communication behavior:</p>
+
+  <h3>Namespace Structure</h3>
+  <p>All namespaces (public, user, etc.) now support the following sub-paths:</p>
+  <ul>
+    <li><strong>/_/...</strong> → Special control endpoints (user-owned namespaces only)</li>
+    <li><strong>/./...</strong> → Flexible space - defaults to blocking/queue behavior, can be switched to pubsub with <code>?pubsub=true</code></li>
+    <li><strong>/pubsub/...</strong> → All requests use pubsub behavior (non-blocking, broadcast to all consumers)</li>
+    <li><strong>/queue/...</strong> → All requests use blocking/queue behavior (one-to-one communication)</li>
+  </ul>
+
+  <h3>Available Namespaces</h3>
   <ul>
     <li>
-      <strong>/p/**</strong>: Public namespace - no authentication required.
+      <strong>/public/**</strong>: Public namespace - no authentication required.
       Everyone can read and write. Perfect for testing and public communication channels.
+      <br><em>Examples: /public/queue/jobs, /public/pubsub/events</em>
+    </li>
+    <li>
+      <strong>/p/**</strong>: Legacy public namespace - maintained for backward compatibility.
+      Maps to the public namespace with default behavior.
     </li>
     <li>
       <strong>/h/**</strong>: Forward hooks - GET <code>/h</code> to obtain a new channel and secret,
@@ -77,9 +155,10 @@
       Useful for collecting data from multiple sources where you want to control who can read.
     </li>
     <li>
-      <strong>/u/{username}/**</strong>: User namespace - controlled by ACL lists
-      (not implemented yet). Access is controlled by YAML ACL files stored in
-      Forgejo/Gitea repositories that specify which tokens can access which paths.
+      <strong>/u/{username}/**</strong>: User namespace - controlled by ACL lists.
+      Access is controlled by YAML ACL files stored in Forgejo/Gitea repositories 
+      that specify which tokens can access which paths. Includes notification endpoints
+      (<code>/_/ntfy</code>) for sending alerts and messages.
     </li>
     <li>
       <strong>/huproxy/{user}/{host}/{port}</strong>: HTTP-to-TCP WebSocket proxy for tunneling SSH and other protocols.
@@ -168,11 +247,47 @@ curl -X POST "{{.BaseURL}}/u/alice/_/ntfy" \
 
   <h2>Examples</h2>
 
+  <h3>Namespace Behavior Examples</h3>
+  
+  <p><strong>Queue behavior</strong> (one-to-one, blocking):</p>
+  <pre># Producer waits until consumer connects
+curl {{.BaseURL}}/public/queue/jobs -d "encode-video.mp4"
+
+# Consumer receives the job
+curl {{.BaseURL}}/public/queue/jobs</pre>
+
+  <p><strong>Pubsub behavior</strong> (broadcast, non-blocking):</p>
+  <pre># Producer sends immediately to all consumers
+curl {{.BaseURL}}/public/pubsub/events -d "user-login:alice"
+
+# Multiple consumers can listen
+curl {{.BaseURL}}/public/pubsub/events  # Logger service
+curl {{.BaseURL}}/public/pubsub/events  # Analytics service</pre>
+
+  <p><strong>Flexible behavior</strong> with override:</p>
+  <pre># Default blocking behavior
+curl {{.BaseURL}}/public/./alerts -d "server-down"
+
+# Override to pubsub
+curl {{.BaseURL}}/public/./alerts?pubsub=true -d "system-update"</pre>
+
+  <p><strong>Using passthrough headers</strong>:</p>
+  <pre># Send with context headers
+curl -X POST \
+  -H "PH-Client-IP: 10.0.1.5" \
+  -H "PH-Trace-ID: req-12345" \
+  -d "api-request" \
+  {{.BaseURL}}/public/queue/api
+
+# Receive with original context
+curl -v {{.BaseURL}}/public/queue/api
+# Headers include: Client-IP: 10.0.1.5, Trace-ID: req-12345</pre>
+
   <h3>File Sharing</h3>
   <p>Sending a file:</p>
-  <pre>curl -X POST --data-binary "@test.txt" {{.BaseURL}}/p/test.txt</pre>
+  <pre>curl -X POST --data-binary "@test.txt" {{.BaseURL}}/public/queue/files</pre>
   <p>Receiving a file:</p>
-  <pre>wget {{.BaseURL}}/p/test.txt</pre>
+  <pre>curl {{.BaseURL}}/public/queue/files > test.txt</pre>
 
   <h3>Desktop Notifications (Linux)</h3>
   <pre>#!/bin/bash

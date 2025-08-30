@@ -70,10 +70,24 @@ curl https://patchwork.example.com/p/a61b1f42?pubsub=true&body=hello,%20world
 
 ## Namespaces
 
-The server is organized by namespaces with different access patterns:
+The server is organized by namespaces with different access patterns. Each namespace now supports structured sub-paths that determine the communication behavior:
 
-- **`/p/**`**: Public namespace - no authentication required.
+### Namespace Structure
+
+All namespaces (public, user, etc.) now support the following sub-paths:
+
+- **`/_/...`** → Special control endpoints (user-owned namespaces only)
+- **`/./...`** → Flexible space - defaults to blocking/queue behavior, can be switched to pubsub with `?pubsub=true`
+- **`/pubsub/...`** → All requests use pubsub behavior (non-blocking, broadcast to all consumers)
+- **`/queue/...`** → All requests use blocking/queue behavior (one-to-one communication)
+
+### Available Namespaces
+
+- **`/public/**`**: Public namespace - no authentication required.
   Everyone can read and write. Perfect for testing and public communication channels.
+  - Example: `/public/queue/notifications` (blocking), `/public/pubsub/events` (broadcast)
+- **`/p/**`**: Legacy public namespace - maintained for backward compatibility.
+  Maps to the public namespace with default behavior.
 - **`/h/**`**: Forward hooks - GET `/h` to obtain a new channel and secret,
   then use the secret to POST data to that channel. Anyone can GET data from the channel.
   Useful for webhooks and notifications where you want to control who can send.
@@ -88,6 +102,83 @@ The server is organized by namespaces with different access patterns:
   SSH and other protocols. Based on Google's HUProxy project, this endpoint provides 
   WebSocket tunneling primarily for SSH connections. Uses token-based authentication 
   via `Authorization` header.
+
+## Behavior Patterns
+
+Patchwork supports behavior determination based on the path structure, providing more predictable and explicit communication patterns:
+
+### Queue Behavior (Blocking)
+**Paths**: `/queue/...` or `/./...` (default)
+
+In queue mode, producers will block until a consumer is available to receive the data. This ensures one-to-one communication and guarantees message delivery.
+
+```bash
+# Producer blocks until consumer connects
+curl https://patchwork.example.com/public/queue/jobs -d "process-file.txt"
+
+# Consumer receives the message
+curl https://patchwork.example.com/public/queue/jobs
+```
+
+### Pubsub Behavior (Non-blocking)
+**Paths**: `/pubsub/...` or `/./...?pubsub=true`
+
+In pubsub mode, producers send data immediately and don't wait for consumers. All connected consumers receive the same message (broadcast).
+
+```bash
+# Producer sends immediately (non-blocking)
+curl https://patchwork.example.com/public/pubsub/events -d "user-login"
+
+# Multiple consumers can receive the same event
+curl https://patchwork.example.com/public/pubsub/events  # Consumer 1
+curl https://patchwork.example.com/public/pubsub/events  # Consumer 2
+```
+
+### Flexible Behavior
+**Paths**: `/./...`
+
+The flexible space defaults to queue behavior but can be switched to pubsub with the `?pubsub=true` query parameter:
+
+```bash
+# Default: queue behavior (blocking)
+curl https://patchwork.example.com/public/./notifications -d "alert"
+
+# Override: pubsub behavior (non-blocking)
+curl https://patchwork.example.com/public/./notifications?pubsub=true -d "broadcast"
+```
+
+## Passthrough Headers
+
+Patchwork supports passthrough headers using the `PH-*` prefix system, allowing you to forward original request context between clients through the relay system.
+
+### How It Works
+
+- **Request Headers**: Headers starting with `PH-` represent original headers from the requester
+- **Response Headers**: `PH-*` headers are stripped of their prefix and passed through to the final receiver
+- **Automatic Headers**: Common headers like `User-Agent`, `Accept`, etc. are automatically converted to `PH-*` format
+
+### Example Usage
+
+**Producer side** (sending headers):
+```bash
+curl -X POST \
+  -H "PH-Original-IP: 192.168.1.100" \
+  -H "PH-User-ID: alice123" \
+  -H "User-Agent: MyApp/1.0" \
+  -d "request data" \
+  https://patchwork.example.com/public/queue/api
+```
+
+**Consumer side** (receiving headers):
+```bash
+curl -v https://patchwork.example.com/public/queue/api
+# Response includes:
+# Original-IP: 192.168.1.100
+# User-ID: alice123
+# User-Agent: MyApp/1.0
+```
+
+This enables building proxy-like applications where the original request context is preserved through the relay.
 
 ## Authentication
 
@@ -203,16 +294,60 @@ user/.patchwork/
 
 ## Examples
 
+### Namespace Behavior Examples
+
+**Queue behavior** (one-to-one, blocking):
+```bash
+# Producer waits until consumer connects
+curl https://patchwork.example.com/public/queue/jobs -d "encode-video.mp4"
+
+# Consumer receives the job
+curl https://patchwork.example.com/public/queue/jobs
+```
+
+**Pubsub behavior** (broadcast, non-blocking):
+```bash
+# Producer sends immediately to all consumers
+curl https://patchwork.example.com/public/pubsub/events -d "user-login:alice"
+
+# Multiple consumers can listen
+curl https://patchwork.example.com/public/pubsub/events  # Logger service
+curl https://patchwork.example.com/public/pubsub/events  # Analytics service
+```
+
+**Flexible behavior** with override:
+```bash
+# Default blocking behavior
+curl https://patchwork.example.com/public/./alerts -d "server-down"
+
+# Override to pubsub
+curl https://patchwork.example.com/public/./alerts?pubsub=true -d "system-update"
+```
+
+**Using passthrough headers**:
+```bash
+# Send with context headers
+curl -X POST \
+  -H "PH-Client-IP: 10.0.1.5" \
+  -H "PH-Trace-ID: req-12345" \
+  -d "api-request" \
+  https://patchwork.example.com/public/queue/api
+
+# Receive with original context
+curl -v https://patchwork.example.com/public/queue/api
+# Headers include: Client-IP: 10.0.1.5, Trace-ID: req-12345
+```
+
 ### File Sharing
 
 Sending a file:
 ```bash
-curl -X POST --data-binary "@test.txt" https://patchwork.example.com/p/test.txt
+curl -X POST --data-binary "@test.txt" https://patchwork.example.com/public/queue/files
 ```
 
 Receiving a file:
 ```bash
-wget https://patchwork.example.com/p/test.txt
+curl https://patchwork.example.com/public/queue/files > test.txt
 ```
 
 ### Desktop Notifications (Linux)

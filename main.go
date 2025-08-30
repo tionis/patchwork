@@ -607,7 +607,14 @@ func (s *server) publicHandler(w http.ResponseWriter, r *http.Request) {
 	path := vars["path"]
 
 	s.logRequest(r, "Public namespace access")
-	s.handlePatch(w, r, "p", "", path)
+	
+	// Determine namespace based on request path
+	namespace := "p" // default for backward compatibility
+	if strings.HasPrefix(r.URL.Path, "/public/") {
+		namespace = "public"
+	}
+	
+	s.handlePatch(w, r, namespace, "", path)
 }
 
 func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
@@ -1122,6 +1129,125 @@ func (s *server) reverseHookHandler(w http.ResponseWriter, r *http.Request) {
 	s.handlePatch(w, r, "r", "", path)
 }
 
+// PathBehavior represents how a path should behave
+type PathBehavior int
+
+const (
+	// BehaviorBlocking - blocking/queue behavior (default for /./... and /queue/...)
+	BehaviorBlocking PathBehavior = iota
+	// BehaviorPubsub - pubsub behavior (for /pubsub/... and /./... with ?pubsub=true)
+	BehaviorPubsub
+	// BehaviorSpecial - special control endpoints (for /_/...)
+	BehaviorSpecial
+)
+
+// determinePathBehavior determines the behavior based on the path structure
+func determinePathBehavior(path string, hasQueueParam bool) PathBehavior {
+	// Remove leading slash for consistent checking
+	cleanPath := strings.TrimPrefix(path, "/")
+	
+	// Check for special control endpoints
+	if strings.HasPrefix(cleanPath, "_/") {
+		return BehaviorSpecial
+	}
+	
+	// Check for explicit pubsub namespace
+	if strings.HasPrefix(cleanPath, "pubsub/") {
+		return BehaviorPubsub
+	}
+	
+	// Check for explicit queue namespace
+	if strings.HasPrefix(cleanPath, "queue/") {
+		return BehaviorBlocking
+	}
+	
+	// For flexible space (/./...), check query parameter
+	if strings.HasPrefix(cleanPath, "./") {
+		if hasQueueParam {
+			return BehaviorPubsub
+		}
+		return BehaviorBlocking
+	}
+	
+	// Default to blocking behavior
+	return BehaviorBlocking
+}
+
+// processPassthroughHeaders handles PH-* headers for request/response
+func processPassthroughHeaders(headers http.Header, isRequest bool) map[string]string {
+	processed := make(map[string]string)
+	
+	for key, values := range headers {
+		if strings.HasPrefix(key, "PH-") {
+			if isRequest {
+				// For requests: PH-* headers represent original headers from requester
+				// Strip PH- prefix for the responder
+				originalKey := strings.TrimPrefix(key, "PH-")
+				if len(values) > 0 {
+					processed[originalKey] = values[0]
+				}
+			} else {
+				// For responses: PH-* headers should be stripped and passed through
+				originalKey := strings.TrimPrefix(key, "PH-")
+				if len(values) > 0 {
+					processed[originalKey] = values[0]
+				}
+			}
+		}
+	}
+	
+	return processed
+}
+
+// addPassthroughHeaders adds headers to the response, handling PH-* passthrough
+func addPassthroughHeaders(w http.ResponseWriter, streamHeaders map[string]string) {
+	for key, value := range streamHeaders {
+		if strings.HasPrefix(key, "PH-") {
+			// Strip PH- prefix and add as regular header
+			originalKey := strings.TrimPrefix(key, "PH-")
+			w.Header().Set(originalKey, value)
+		} else {
+			// Regular headers pass through as-is
+			w.Header().Set(key, value)
+		}
+	}
+}
+
+// prepareRequestHeaders prepares headers for the stream, adding PH-* prefixes for passthrough
+func prepareRequestHeaders(r *http.Request) map[string]string {
+	headers := make(map[string]string)
+	
+	// Add content type if present
+	contentType := r.Header.Get("Content-Type")
+	if contentType != "" {
+		headers["Content-Type"] = contentType
+	} else {
+		headers["Content-Type"] = "text/plain"
+	}
+	
+	// Process passthrough headers (add PH- prefix to headers that should be passed through)
+	// For now, we'll pass through common headers like User-Agent, Accept, etc.
+	passthroughCandidates := []string{
+		"User-Agent", "Accept", "Accept-Language", "Accept-Encoding",
+		"Referer", "Origin", "X-Forwarded-For", "X-Real-IP",
+	}
+	
+	for _, headerName := range passthroughCandidates {
+		if value := r.Header.Get(headerName); value != "" {
+			headers["PH-"+headerName] = value
+		}
+	}
+	
+	// Also add any explicit PH-* headers from the request
+	for key, values := range r.Header {
+		if strings.HasPrefix(key, "PH-") && len(values) > 0 {
+			headers[key] = values[0]
+		}
+	}
+	
+	return headers
+}
+
 // handlePatch implements the core duct-like channel communication logic.
 func (s *server) handlePatch(
 	w http.ResponseWriter,
@@ -1134,6 +1260,11 @@ func (s *server) handlePatch(
 	path = "/" + strings.TrimPrefix(path, "/")
 	channelPath := namespace + path
 
+	// Determine behavior based on path structure
+	queries := r.URL.Query()
+	_, hasPubsubParam := queries["pubsub"]
+	behavior := determinePathBehavior(path, hasPubsubParam)
+
 	s.logger.Info("Channel access",
 		"namespace", namespace,
 		"path", path,
@@ -1141,7 +1272,8 @@ func (s *server) handlePatch(
 		"method", r.Method,
 		"client_ip", getClientIP(r),
 		"content_length", r.ContentLength,
-		"pubsub", r.URL.Query().Get("pubsub"))
+		"behavior", behavior,
+		"pubsub_param", hasPubsubParam)
 
 	// Authenticate for user namespaces
 	if username != "" {
@@ -1223,9 +1355,16 @@ func (s *server) handlePatch(
 	channel := s.channels[channelPath]
 	s.channelsMutex.Unlock()
 
-	// Check for pubsub mode
-	queries := r.URL.Query()
+	// Determine behavior based on path structure and query params
+	// (queries, hasPubsubParam, and behavior already defined above)
+	
+	// For backward compatibility, also check the old pubsub query parameter
 	_, pubsub := queries["pubsub"]
+	if behavior == BehaviorPubsub || pubsub {
+		pubsub = true
+	} else {
+		pubsub = false
+	}
 
 	// Handle GET with body parameter (convert to POST)
 	method := r.Method
@@ -1253,10 +1392,8 @@ func (s *server) handlePatch(
 				"client_ip", getClientIP(r),
 				"content_type", stream.headers["Content-Type"])
 
-			// Set any headers from the stream
-			for k, v := range stream.headers {
-				w.Header().Set(k, v)
-			}
+			// Set headers from the stream, handling passthrough headers
+			addPassthroughHeaders(w, stream.headers)
 
 			_, err := io.Copy(w, stream.reader)
 			if err != nil {
@@ -1301,15 +1438,8 @@ func (s *server) handlePatch(
 			}
 		}
 
-		// Create stream with headers
-		headers := make(map[string]string)
-
-		contentType := r.Header.Get("Content-Type")
-		if contentType != "" {
-			headers["Content-Type"] = contentType
-		} else {
-			headers["Content-Type"] = "text/plain"
-		}
+		// Create stream with headers including passthrough headers
+		headers := prepareRequestHeaders(r)
 
 		if !pubsub {
 			// Regular mode: one-to-one communication
@@ -1721,11 +1851,20 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	})
 
 	router.HandleFunc("/huproxy/{user}/{host}/{port}", huproxy.HuproxyHandler(server))
+	
+	// Public namespace with new structure  
+	router.HandleFunc("/public/{path:.*}", server.publicHandler)
+	
+	// Backward compatibility - old /p/ routes map to /public/
 	router.HandleFunc("/p/{path:.*}", server.publicHandler)
+	
+	// Hook namespaces (unchanged)
 	router.HandleFunc("/h", server.forwardHookRootHandler)
 	router.HandleFunc("/h/{path:.*}", server.forwardHookHandler)
 	router.HandleFunc("/r", server.reverseHookRootHandler)
 	router.HandleFunc("/r/{path:.*}", server.reverseHookHandler)
+	
+	// User namespaces with new structure
 	router.HandleFunc("/u/{username}/_/ntfy", server.userNtfyHandler)
 	router.HandleFunc("/u/{username}/_/{adminPath:.*}", server.userAdminHandler)
 	router.HandleFunc("/u/{username}/{path:.*}", server.userHandler)
