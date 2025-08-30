@@ -1465,3 +1465,516 @@ func TestHandlePatchWithPubSub(t *testing.T) {
 		}
 	})
 }
+
+func TestDeterminePathBehavior(t *testing.T) {
+	tests := []struct {
+		name           string
+		path           string
+		hasQueueParam  bool
+		expectedBehavior PathBehavior
+	}{
+		{
+			name:             "Req path should return BehaviorRequestResponder",
+			path:             "/req/test",
+			hasQueueParam:    false,
+			expectedBehavior: BehaviorRequestResponder,
+		},
+		{
+			name:             "Res path should return BehaviorRequestResponder",
+			path:             "/res/test",
+			hasQueueParam:    false,
+			expectedBehavior: BehaviorRequestResponder,
+		},
+		{
+			name:             "Pubsub path should return BehaviorPubsub",
+			path:             "/pubsub/test",
+			hasQueueParam:    false,
+			expectedBehavior: BehaviorPubsub,
+		},
+		{
+			name:             "Queue path should return BehaviorBlocking",
+			path:             "/queue/test",
+			hasQueueParam:    false,
+			expectedBehavior: BehaviorBlocking,
+		},
+		{
+			name:             "Special path should return BehaviorSpecial",
+			path:             "/_/test",
+			hasQueueParam:    false,
+			expectedBehavior: BehaviorSpecial,
+		},
+		{
+			name:             "Flexible path with queue param should return BehaviorPubsub",
+			path:             "/./test",
+			hasQueueParam:    true,
+			expectedBehavior: BehaviorPubsub,
+		},
+		{
+			name:             "Flexible path without queue param should return BehaviorBlocking",
+			path:             "/./test",
+			hasQueueParam:    false,
+			expectedBehavior: BehaviorBlocking,
+		},
+		{
+			name:             "Default path should return BehaviorBlocking",
+			path:             "/test",
+			hasQueueParam:    false,
+			expectedBehavior: BehaviorBlocking,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := determinePathBehavior(tt.path, tt.hasQueueParam)
+			if result != tt.expectedBehavior {
+				t.Errorf("Expected %v, got %v", tt.expectedBehavior, result)
+			}
+		})
+	}
+}
+
+func TestPrepareRequestHeaders(t *testing.T) {
+	tests := []struct {
+		name           string
+		requestHeaders map[string]string
+		requestPath    string
+		requestQuery   string
+		expectedHeaders map[string]string
+	}{
+		{
+			name: "Basic headers with URI",
+			requestHeaders: map[string]string{
+				"Content-Type": "application/json",
+				"User-Agent":   "test-agent",
+			},
+			requestPath:  "/req/test",
+			requestQuery: "param=value",
+			expectedHeaders: map[string]string{
+				"Content-Type":      "application/json",
+				"Patch-Uri":         "/req/test?param=value",
+				"Patch-H-User-Agent": "test-agent",
+			},
+		},
+		{
+			name: "No content type should default to text/plain",
+			requestHeaders: map[string]string{
+				"Accept": "application/json",
+			},
+			requestPath: "/req/test",
+			expectedHeaders: map[string]string{
+				"Content-Type":     "text/plain",
+				"Patch-Uri":        "/req/test",
+				"Patch-H-Accept":   "application/json",
+			},
+		},
+		{
+			name: "Existing Patch-H headers should be preserved",
+			requestHeaders: map[string]string{
+				"Patch-H-Custom": "custom-value",
+				"User-Agent":     "test-agent",
+			},
+			requestPath: "/req/test",
+			expectedHeaders: map[string]string{
+				"Content-Type":       "text/plain",
+				"Patch-Uri":          "/req/test",
+				"Patch-H-Custom":     "custom-value",
+				"Patch-H-User-Agent": "test-agent",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", tt.requestPath, nil)
+			if tt.requestQuery != "" {
+				req.URL.RawQuery = tt.requestQuery
+			}
+			
+			for key, value := range tt.requestHeaders {
+				req.Header.Set(key, value)
+			}
+
+			headers := prepareRequestHeaders(req)
+
+			for expectedKey, expectedValue := range tt.expectedHeaders {
+				if actual, exists := headers[expectedKey]; !exists {
+					t.Errorf("Expected header %q to exist", expectedKey)
+				} else if actual != expectedValue {
+					t.Errorf("Expected header %q to be %q, got %q", expectedKey, expectedValue, actual)
+				}
+			}
+		})
+	}
+}
+
+func TestAddPassthroughHeaders(t *testing.T) {
+	tests := []struct {
+		name            string
+		streamHeaders   map[string]string
+		expectedHeaders map[string]string
+		expectedStatus  int
+	}{
+		{
+			name: "Basic passthrough headers",
+			streamHeaders: map[string]string{
+				"Content-Type":     "application/json",
+				"Patch-H-Custom":   "custom-value",
+				"Patch-H-Accept":   "application/json",
+			},
+			expectedHeaders: map[string]string{
+				"Content-Type": "application/json",
+				"Custom":       "custom-value",
+				"Accept":       "application/json",
+			},
+			expectedStatus: 200, // Default status
+		},
+		{
+			name: "Patch-Status header sets HTTP status",
+			streamHeaders: map[string]string{
+				"Content-Type":  "text/plain",
+				"Patch-Status":  "404",
+				"Patch-H-Custom": "value",
+			},
+			expectedHeaders: map[string]string{
+				"Content-Type": "text/plain",
+				"Custom":       "value",
+			},
+			expectedStatus: 404,
+		},
+		{
+			name: "Invalid Patch-Status ignored",
+			streamHeaders: map[string]string{
+				"Content-Type": "text/plain",
+				"Patch-Status": "invalid",
+			},
+			expectedHeaders: map[string]string{
+				"Content-Type": "text/plain",
+			},
+			expectedStatus: 200, // Default status when invalid
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			
+			addPassthroughHeaders(w, tt.streamHeaders)
+
+			// Check headers
+			for expectedKey, expectedValue := range tt.expectedHeaders {
+				if actual := w.Header().Get(expectedKey); actual != expectedValue {
+					t.Errorf("Expected header %q to be %q, got %q", expectedKey, expectedValue, actual)
+				}
+			}
+
+			// Check that Patch-Status was not passed through as a regular header
+			if patchStatus := w.Header().Get("Patch-Status"); patchStatus != "" {
+				t.Errorf("Patch-Status should not be passed through as regular header, got %q", patchStatus)
+			}
+
+			// For status code, we need to trigger the write to see the status
+			if tt.expectedStatus != 200 {
+				// Status is already set by WriteHeader call in addPassthroughHeaders
+				if w.Code != tt.expectedStatus {
+					t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
+				}
+			}
+		})
+	}
+}
+
+func TestRequestResponderBasicCommunication(t *testing.T) {
+	server := createTestMainServer()
+
+	t.Run("Basic requester-responder communication", func(t *testing.T) {
+		channelID := "test-basic-communication"
+		requestData := "Hello, responder!"
+		responseData := "Hello, requester!"
+
+		// Start responder with response data (new protocol)
+		responderDone := make(chan bool)
+		go func() {
+			req := httptest.NewRequest("POST", "/p/res/"+channelID, strings.NewReader(responseData))
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/res/"+channelID)
+			responderDone <- (w.Code == http.StatusOK)
+		}()
+
+		// Give responder time to start waiting
+		time.Sleep(10 * time.Millisecond)
+
+		// Start requester
+		requesterDone := make(chan string)
+		go func() {
+			req := httptest.NewRequest("POST", "/p/req/"+channelID, strings.NewReader(requestData))
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/req/"+channelID)
+			requesterDone <- w.Body.String()
+		}()
+
+		// Check that requester received the response
+		select {
+		case receivedResponse := <-requesterDone:
+			if receivedResponse != responseData {
+				t.Errorf("Expected requester to receive %q, got %q", responseData, receivedResponse)
+			}
+		case <-time.After(1 * time.Second):
+			t.Error("Requester did not receive response within timeout")
+		}
+
+		// Check that responder completed successfully
+		select {
+		case success := <-responderDone:
+			if !success {
+				t.Error("Responder did not complete successfully")
+			}
+		case <-time.After(1 * time.Second):
+			t.Error("Responder did not complete within timeout")
+		}
+	})
+}
+
+func TestRequestResponderHeaders(t *testing.T) {
+	server := createTestMainServer()
+
+	t.Run("Headers are passed through correctly", func(t *testing.T) {
+		channelID := "test-headers"
+		
+		// Start responder waiting for request
+		responderDone := make(chan *httptest.ResponseRecorder)
+		go func() {
+			req := httptest.NewRequest("GET", "/p/res/"+channelID, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/res/"+channelID)
+			responderDone <- w
+		}()
+
+		// Give responder time to start waiting
+		time.Sleep(10 * time.Millisecond)
+
+		// Send request with custom headers
+		go func() {
+			req := httptest.NewRequest("POST", "/p/req/"+channelID+"?test=param", strings.NewReader("test"))
+			req.Header.Set("User-Agent", "test-agent")
+			req.Header.Set("Custom-Header", "custom-value")
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/req/"+channelID)
+		}()
+
+		// Check responder received headers
+		select {
+		case responderResult := <-responderDone:
+			// Check that Patch-Uri header was set
+			patchUri := responderResult.Header().Get("Patch-Uri")
+			if !strings.Contains(patchUri, "/req/"+channelID) {
+				t.Errorf("Expected Patch-Uri to contain request path, got %q", patchUri)
+			}
+			if !strings.Contains(patchUri, "test=param") {
+				t.Errorf("Expected Patch-Uri to contain query params, got %q", patchUri)
+			}
+
+			// Check passthrough headers
+			userAgent := responderResult.Header().Get("User-Agent")
+			if userAgent != "test-agent" {
+				t.Errorf("Expected User-Agent to be passed through, got %q", userAgent)
+			}
+
+		case <-time.After(2 * time.Second):
+			t.Error("Responder did not complete within timeout")
+		}
+	})
+}
+
+func TestRequestResponderHTTPMethods(t *testing.T) {
+	server := createTestMainServer()
+
+	tests := []struct {
+		name   string
+		method string
+	}{
+		{"POST method", "POST"},
+		{"PUT method", "PUT"},
+		{"DELETE method", "DELETE"},
+		{"PATCH method", "PATCH"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channelID := "test-method-" + strings.ToLower(tt.method)
+			
+			// Start responder waiting for request
+			responderDone := make(chan *httptest.ResponseRecorder)
+			go func() {
+				req := httptest.NewRequest("GET", "/p/res/"+channelID, nil)
+				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				defer cancel()
+				req = req.WithContext(ctx)
+				w := httptest.NewRecorder()
+
+				server.handlePatch(w, req, "p", "", "/res/"+channelID)
+				responderDone <- w
+			}()
+
+			// Give responder time to start waiting
+			time.Sleep(10 * time.Millisecond)
+
+			// Send request with specific HTTP method
+			go func() {
+				req := httptest.NewRequest(tt.method, "/p/req/"+channelID, strings.NewReader("test data"))
+				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				defer cancel()
+				req = req.WithContext(ctx)
+				w := httptest.NewRecorder()
+
+				server.handlePatch(w, req, "p", "", "/req/"+channelID)
+			}()
+
+			// Check responder received the request
+			select {
+			case responderResult := <-responderDone:
+				// The method information should be in headers or URI
+				patchUri := responderResult.Header().Get("Patch-Uri")
+				if !strings.Contains(patchUri, "/req/"+channelID) {
+					t.Errorf("Expected request to be received by responder")
+				}
+			case <-time.After(1 * time.Second):
+				t.Errorf("Responder did not receive %s request within timeout", tt.method)
+			}
+		})
+	}
+}
+
+func TestRequestResponderSwitchMode(t *testing.T) {
+	server := createTestMainServer()
+
+	t.Run("Switch mode returns request info", func(t *testing.T) {
+		channelID := "test-switch-mode"
+		newChannelID := "switched-channel-123"
+		
+		// Start responder in switch mode
+		responderDone := make(chan *httptest.ResponseRecorder)
+		go func() {
+			req := httptest.NewRequest("POST", "/p/res/"+channelID+"?switch=true", strings.NewReader(newChannelID))
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/res/"+channelID)
+			responderDone <- w
+		}()
+
+		// Give responder time to start waiting
+		time.Sleep(10 * time.Millisecond)
+
+		// Send request
+		go func() {
+			req := httptest.NewRequest("POST", "/p/req/"+channelID+"?param=value", strings.NewReader("test data"))
+			req.Header.Set("User-Agent", "test-agent")
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/req/"+channelID)
+		}()
+
+		// Check responder received switch response
+		select {
+		case responderResult := <-responderDone:
+			if responderResult.Code != http.StatusOK {
+				t.Errorf("Expected status %d, got %d", http.StatusOK, responderResult.Code)
+			}
+
+			// Check that request info was returned in headers
+			patchUri := responderResult.Header().Get("Patch-Uri")
+			if !strings.Contains(patchUri, "/req/"+channelID) {
+				t.Errorf("Expected Patch-Uri header with request path, got %q", patchUri)
+			}
+
+			userAgent := responderResult.Header().Get("Patch-H-User-Agent")
+			if userAgent != "test-agent" {
+				t.Errorf("Expected Patch-H-User-Agent header, got %q", userAgent)
+			}
+
+			// Check response body mentions the new channel
+			if !strings.Contains(responderResult.Body.String(), newChannelID) {
+				t.Errorf("Expected response body to mention new channel %q, got %q", newChannelID, responderResult.Body.String())
+			}
+
+		case <-time.After(2 * time.Second):
+			t.Error("Switch mode responder did not complete within timeout")
+		}
+	})
+}
+
+func TestRequestResponderErrorCases(t *testing.T) {
+	server := createTestMainServer()
+
+	tests := []struct {
+		name           string
+		path           string
+		method         string
+		expectedStatus int
+	}{
+		{
+			name:           "Empty channel ID in req",
+			path:           "/req/",
+			method:         "POST",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "Empty channel ID in res",
+			path:           "/res/",
+			method:         "GET",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "Invalid request path (not req or res)",
+			path:           "/invalid/test",
+			method:         "DELETE",
+			expectedStatus: http.StatusMethodNotAllowed, // This will go through regular handlePatch which doesn't allow DELETE
+		},
+		{
+			name:           "Switch mode with GET method",
+			path:           "/res/test?switch=true",
+			method:         "GET",
+			expectedStatus: http.StatusMethodNotAllowed,
+		},
+		{
+			name:           "Responder with unsupported method",
+			path:           "/res/test",
+			method:         "DELETE",
+			expectedStatus: http.StatusMethodNotAllowed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/p"+tt.path, strings.NewReader("test"))
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", tt.path)
+
+			if w.Code != tt.expectedStatus {
+				t.Errorf("Expected status %d, got %d. Body: %s", tt.expectedStatus, w.Code, w.Body.String())
+			}
+		})
+	}
+}

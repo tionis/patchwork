@@ -93,6 +93,42 @@ curl {{.BaseURL}}/public/./notifications -d "alert"
 # Override: pubsub behavior (non-blocking)
 curl {{.BaseURL}}/public/./notifications?pubsub=true -d "broadcast"</pre>
 
+  <h3>Request-Responder Behavior</h3>
+  <p><strong>Paths:</strong> <code>/req/...</code> and <code>/res/...</code> subnamespaces</p>
+  <p>The request-responder pattern enables HTTP request/response communication through the patchwork relay. Requesters send to <code>/req/...</code> paths, and responders handle them via <code>/res/...</code> paths with the same subpath.</p>
+  
+  <h4>Basic Communication</h4>
+  <p>Requesters and responders use matching subpaths. For example, <code>/req/api/users</code> pairs with <code>/res/api/users</code>.</p>
+  <pre># Responder waits for requests
+curl {{.BaseURL}}/public/res/api/users
+
+# Requester sends a GET request (blocks until response)
+curl {{.BaseURL}}/public/req/api/users</pre>
+
+  <h4>HTTP Methods</h4>
+  <p>All HTTP methods are supported (GET, POST, PUT, DELETE, PATCH, etc.). The method is preserved from requester to responder.</p>
+  <pre># Responder handles various methods
+curl {{.BaseURL}}/public/res/api/users
+
+# POST request with data
+curl -X POST -d '{"name":"Alice"}' {{.BaseURL}}/public/req/api/users
+
+# PUT request
+curl -X PUT -d '{"id":1,"name":"Bob"}' {{.BaseURL}}/public/req/api/users
+
+# DELETE request
+curl -X DELETE {{.BaseURL}}/public/req/api/users/1</pre>
+
+  <h4>Double Clutch Mode</h4>
+  <p>Use <code>?switch=true</code> on the responder side to enable "double clutch" mode, where the responder can handle multiple requests sequentially without reconnecting.</p>
+  <pre># Responder in switch mode (handles multiple requests)
+curl "{{.BaseURL}}/public/res/api/process?switch=true"
+
+# Multiple requesters can send requests sequentially
+curl -X POST -d "task1" {{.BaseURL}}/public/req/api/process
+curl -X POST -d "task2" {{.BaseURL}}/public/req/api/process
+curl -X POST -d "task3" {{.BaseURL}}/public/req/api/process</pre>
+
   <h2>Passthrough Headers</h2>
   <p>Patchwork supports passthrough headers using the <code>Patch-H-*</code> prefix system, allowing you to forward original request context between clients through the relay system.</p>
 
@@ -121,6 +157,24 @@ curl {{.BaseURL}}/public/./notifications?pubsub=true -d "broadcast"</pre>
 
   <p>This enables building proxy-like applications where the original request context is preserved through the relay.</p>
 
+  <h3>Request-Responder Headers</h3>
+  <p>In request-responder mode, additional headers provide request context and response control:</p>
+  <ul>
+    <li><strong>Patch-Uri:</strong> Contains the original request path (e.g., <code>/api/users/123</code>)</li>
+    <li><strong>Patch-Status:</strong> Set by responder to control HTTP response status code (e.g., <code>404</code>, <code>201</code>)</li>
+    <li><strong>Standard Headers:</strong> All <code>Patch-H-*</code> headers work as normal for forwarding request context</li>
+  </ul>
+
+  <p><strong>Request-responder example</strong>:</p>
+  <pre># Responder receives request with context
+curl {{.BaseURL}}/public/res/api/users
+# Request headers include:
+# Patch-Uri: /api/users/123
+# Patch-H-Authorization: Bearer token123
+
+# Responder can set status in response
+curl -H "Patch-Status: 201" -d '{"created": true}' {{.BaseURL}}/public/res/api/users</pre>
+
   <h2>Namespaces</h2>
   <p>The server is organized by namespaces with different access patterns. Each namespace now supports structured sub-paths that determine the communication behavior:</p>
 
@@ -131,6 +185,8 @@ curl {{.BaseURL}}/public/./notifications?pubsub=true -d "broadcast"</pre>
     <li><strong>/./...</strong> → Flexible space - defaults to blocking/queue behavior, can be switched to pubsub with <code>?pubsub=true</code></li>
     <li><strong>/pubsub/...</strong> → All requests use pubsub behavior (non-blocking, broadcast to all consumers)</li>
     <li><strong>/queue/...</strong> → All requests use blocking/queue behavior (one-to-one communication)</li>
+    <li><strong>/req/...</strong> → Request side of request-responder pattern</li>
+    <li><strong>/res/...</strong> → Response side of request-responder pattern (pairs with matching /req/ paths)</li>
   </ul>
 
   <h3>Available Namespaces</h3>
@@ -282,6 +338,27 @@ curl -X POST \
 # Receive with original context
 curl -v {{.BaseURL}}/public/queue/api
 # Headers include: Client-IP: 10.0.1.5, Trace-ID: req-12345</pre>
+
+  <p><strong>Request-responder pattern</strong>:</p>
+  <pre># Responder waits for API requests
+curl {{.BaseURL}}/public/res/api/users
+
+# Requester sends GET request (blocks until response)
+curl {{.BaseURL}}/public/req/api/users
+
+# POST request with data and headers
+curl -X POST \
+  -H "Authorization: Bearer token123" \
+  -d '{"name":"Alice"}' \
+  {{.BaseURL}}/public/req/api/users
+
+# Responder can set status code in response
+curl -H "Patch-Status: 201" \
+  -d '{"id":123,"name":"Alice"}' \
+  {{.BaseURL}}/public/res/api/users
+
+# Double clutch mode for multiple requests
+curl "{{.BaseURL}}/public/res/api/process?switch=true"</pre>
 
   <h3>File Sharing</h3>
   <p>Sending a file:</p>

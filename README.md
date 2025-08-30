@@ -13,6 +13,7 @@ that serve as a multi-process, multi-consumer (MPMC) queue.
 ## Features
 
 - **Channel-based Communication**: HTTP endpoints that act as communication channels
+- **Multiple Operating Modes**: Queue, pubsub, and request-responder patterns for different use cases
 - **Multiple Namespaces**: Public (`/p`), hooks (`/h`, `/r`), user (`/u/{username}`) namespaces
 - **Notification System**: Built-in notification backend support (Matrix, Discord, etc.)
 - **WebSocket Tunneling**: SSH/TCP tunneling via HuProxy integration
@@ -68,6 +69,20 @@ You can also publish with a `GET` request by using the parameter
 curl https://patchwork.example.com/p/a61b1f42?pubsub=true&body=hello,%20world
 ```
 
+### Request-Responder mode
+
+Patchwork supports a request-responder pattern using `/req/...` and `/res/...` subnamespaces. This enables HTTP request/response communication through the relay:
+
+```bash
+# Responder waits for requests
+curl https://patchwork.example.com/public/res/api/users
+
+# Requester sends request (blocks until response)
+curl -X POST -d '{"name":"Alice"}' https://patchwork.example.com/public/req/api/users
+```
+
+The request-responder mode supports all HTTP methods, header passthrough (including `Patch-Uri` for request path information), and a "double clutch" mode where responders can handle multiple sequential requests using `?switch=true`.
+
 ## Namespaces
 
 The server is organized by namespaces with different access patterns. Each namespace now supports structured sub-paths that determine the communication behavior:
@@ -80,6 +95,8 @@ All namespaces (public, user, etc.) now support the following sub-paths:
 - **`/./...`** → Flexible space - defaults to blocking/queue behavior, can be switched to pubsub with `?pubsub=true`
 - **`/pubsub/...`** → All requests use pubsub behavior (non-blocking, broadcast to all consumers)
 - **`/queue/...`** → All requests use blocking/queue behavior (one-to-one communication)
+- **`/req/...`** → Request side of request-responder pattern
+- **`/res/...`** → Response side of request-responder pattern (pairs with matching /req/ paths)
 
 ### Available Namespaces
 
@@ -322,6 +339,29 @@ curl https://patchwork.example.com/public/./alerts -d "server-down"
 
 # Override to pubsub
 curl https://patchwork.example.com/public/./alerts?pubsub=true -d "system-update"
+```
+
+**Request-responder pattern**:
+```bash
+# Responder waits for API requests
+curl https://patchwork.example.com/public/res/api/users
+
+# Requester sends GET request (blocks until response)
+curl https://patchwork.example.com/public/req/api/users
+
+# POST request with data and headers
+curl -X POST \
+  -H "Authorization: Bearer token123" \
+  -d '{"name":"Alice"}' \
+  https://patchwork.example.com/public/req/api/users
+
+# Responder can set status code in response
+curl -H "Patch-Status: 201" \
+  -d '{"id":123,"name":"Alice"}' \
+  https://patchwork.example.com/public/res/api/users
+
+# Double clutch mode for multiple requests
+curl "https://patchwork.example.com/public/res/api/process?switch=true"
 ```
 
 **Using passthrough headers**:
