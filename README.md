@@ -149,21 +149,21 @@ curl https://patchwork.example.com/public/./notifications?pubsub=true -d "broadc
 
 ## Passthrough Headers
 
-Patchwork supports passthrough headers using the `PH-*` prefix system, allowing you to forward original request context between clients through the relay system.
+Patchwork supports passthrough headers using the `Patch-H-*` prefix system, allowing you to forward original request context between clients through the relay system.
 
 ### How It Works
 
-- **Request Headers**: Headers starting with `PH-` represent original headers from the requester
-- **Response Headers**: `PH-*` headers are stripped of their prefix and passed through to the final receiver
-- **Automatic Headers**: Common headers like `User-Agent`, `Accept`, etc. are automatically converted to `PH-*` format
+- **Request Headers**: Headers starting with `Patch-H-` represent original headers from the requester
+- **Response Headers**: `Patch-H-*` headers are stripped of their prefix and passed through to the final receiver
+- **Automatic Headers**: Common headers like `User-Agent`, `Accept`, etc. are automatically converted to `Patch-H-*` format
 
 ### Example Usage
 
 **Producer side** (sending headers):
 ```bash
 curl -X POST \
-  -H "PH-Original-IP: 192.168.1.100" \
-  -H "PH-User-ID: alice123" \
+  -H "Patch-H-Original-IP: 192.168.1.100" \
+  -H "Patch-H-User-ID: alice123" \
   -H "User-Agent: MyApp/1.0" \
   -d "request data" \
   https://patchwork.example.com/public/queue/api
@@ -328,8 +328,8 @@ curl https://patchwork.example.com/public/./alerts?pubsub=true -d "system-update
 ```bash
 # Send with context headers
 curl -X POST \
-  -H "PH-Client-IP: 10.0.1.5" \
-  -H "PH-Trace-ID: req-12345" \
+  -H "Patch-H-Client-IP: 10.0.1.5" \
+  -H "Patch-H-Trace-ID: req-12345" \
   -d "api-request" \
   https://patchwork.example.com/public/queue/api
 

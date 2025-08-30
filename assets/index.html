@@ -94,20 +94,20 @@ curl {{.BaseURL}}/public/./notifications -d "alert"
 curl {{.BaseURL}}/public/./notifications?pubsub=true -d "broadcast"</pre>
 
   <h2>Passthrough Headers</h2>
-  <p>Patchwork supports passthrough headers using the <code>PH-*</code> prefix system, allowing you to forward original request context between clients through the relay system.</p>
+  <p>Patchwork supports passthrough headers using the <code>Patch-H-*</code> prefix system, allowing you to forward original request context between clients through the relay system.</p>
 
   <h3>How It Works</h3>
   <ul>
-    <li><strong>Request Headers:</strong> Headers starting with <code>PH-</code> represent original headers from the requester</li>
-    <li><strong>Response Headers:</strong> <code>PH-*</code> headers are stripped of their prefix and passed through to the final receiver</li>
-    <li><strong>Automatic Headers:</strong> Common headers like <code>User-Agent</code>, <code>Accept</code>, etc. are automatically converted to <code>PH-*</code> format</li>
+    <li><strong>Request Headers:</strong> Headers starting with <code>Patch-H-</code> represent original headers from the requester</li>
+    <li><strong>Response Headers:</strong> <code>Patch-H-*</code> headers are stripped of their prefix and passed through to the final receiver</li>
+    <li><strong>Automatic Headers:</strong> Common headers like <code>User-Agent</code>, <code>Accept</code>, etc. are automatically converted to <code>Patch-H-*</code> format</li>
   </ul>
 
   <h3>Example Usage</h3>
   <p><strong>Producer side</strong> (sending headers):</p>
   <pre>curl -X POST \
-  -H "PH-Original-IP: 192.168.1.100" \
-  -H "PH-User-ID: alice123" \
+  -H "Patch-H-Original-IP: 192.168.1.100" \
+  -H "Patch-H-User-ID: alice123" \
   -H "User-Agent: MyApp/1.0" \
   -d "request data" \
   {{.BaseURL}}/public/queue/api</pre>
@@ -274,8 +274,8 @@ curl {{.BaseURL}}/public/./alerts?pubsub=true -d "system-update"</pre>
   <p><strong>Using passthrough headers</strong>:</p>
   <pre># Send with context headers
 curl -X POST \
-  -H "PH-Client-IP: 10.0.1.5" \
-  -H "PH-Trace-ID: req-12345" \
+  -H "Patch-H-Client-IP: 10.0.1.5" \
+  -H "Patch-H-Trace-ID: req-12345" \
   -d "api-request" \
   {{.BaseURL}}/public/queue/api
 
