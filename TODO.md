@@ -103,6 +103,9 @@ The current manual testing approach of using separate curl commands in terminals
 - Consider adding debug endpoints to inspect channel states
 - Add metrics for request-responder success/failure rates
 
+### 3. Authentication and Access Control
+- If a request comes in for the user namespace that does not have a token set, treat it as it had a token with the value "public". This should also be documented. This allows users to selectivly open their namespace to unauthenticated outsiders
+
 ---
 
 **Last Updated**: August 30, 2025
