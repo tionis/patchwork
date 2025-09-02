@@ -313,7 +313,7 @@ curl {{.BaseURL}}/u/alice/status</pre>
 curl -X POST "{{.BaseURL}}/u/alice/_/ntfy" \
   -H "Authorization: Bearer my_token_name" \
   -H "Content-Type: application/json" \
-  -d '{"type": "markdown", "title": "Alert", "content": "Something **important** happened!"}'
+  -d '{"type": "markdown", "title": "Alert", "message": "Something **important** happened!"}'
 
 # Plain text notification  
 curl -X POST "{{.BaseURL}}/u/alice/_/ntfy" \

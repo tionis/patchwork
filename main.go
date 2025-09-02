@@ -1022,7 +1022,7 @@ func (s *server) parseNotificationFromQuery(values url.Values) (types.Notificati
 	msg := types.NotificationMessage{
 		Type:    values.Get("type"),
 		Title:   values.Get("title"),
-		Content: values.Get("content"),
+		Content: values.Get("message"),
 		Room:    values.Get("room"),
 	}
 

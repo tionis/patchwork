@@ -323,7 +323,7 @@ curl -X POST "https://patchwork.example.com/u/username/_/ntfy" \
   -d '{
     "type": "markdown",
     "title": "Alert",
-    "content": "Something **important** happened!"
+    "message": "Something **important** happened!"
   }'
 ```
 

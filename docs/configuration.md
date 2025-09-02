@@ -112,7 +112,7 @@ curl -X POST "https://patchwork.example.com/u/username/_/ntfy" \
   -d '{
     "type": "markdown",
     "title": "Alert", 
-    "content": "Something **important** happened!"
+    "message": "Something **important** happened!"
   }'
 ```
 
@@ -120,12 +120,12 @@ curl -X POST "https://patchwork.example.com/u/username/_/ntfy" \
 ```bash
 curl -X POST "https://patchwork.example.com/u/username/_/ntfy" \
   -H "Authorization: Bearer your-token" \
-  -d "type=plain&title=Alert&content=Something happened!"
+  -d "type=plain&title=Alert&message=Something happened!"
 ```
 
 #### GET Request with Query Parameters
 ```bash
-curl "https://patchwork.example.com/u/username/_/ntfy?token=your-token&type=plain&title=Alert&content=Something%20happened!"
+curl "https://patchwork.example.com/u/username/_/ntfy?token=your-token&type=plain&title=Alert&message=Something%20happened!"
 ```
 
 #### Plain Text POST
@@ -146,7 +146,7 @@ curl -X POST "https://patchwork.example.com/u/username/_/ntfy" \
 
 - `type` - Message type (plain, markdown, html)
 - `title` - Message title (optional)
-- `content` - Message content (required, can also use `body` or `message`)
+- `message` - Message content (required, can also use `body` or `message`)
 - `room` - Target room/channel (optional, backend-specific)
 
 ## Notification Backends

@@ -42,7 +42,7 @@ type MatrixConfig struct {
 type NotificationMessage struct {
 	Type    string `json:"type"`           // "plain", "markdown", "html"
 	Title   string `json:"title"`          // Message title
-	Content string `json:"content"`        // Message content
+	Content string `json:"message"`        // Message content
 	Room    string `json:"room,omitempty"` // Optional room/channel override
 }
 

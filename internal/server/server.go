@@ -395,7 +395,7 @@ func parseNotificationFromQuery(values url.Values) (types.NotificationMessage, e
 	msg := types.NotificationMessage{
 		Type:    values.Get("type"),
 		Title:   values.Get("title"),
-		Content: values.Get("content"),
+		Content: values.Get("message"),
 		Room:    values.Get("room"),
 	}
 

@@ -37,7 +37,7 @@ curl -X POST "https://patchwork.example.com/u/yourusername/_/ntfy" \
   -H "Content-Type: application/json" \
   -d '{
     "title": "Script Alert",
-    "content": "Something important happened!",
+    "message": "Something important happened!",
     "type": "markdown"
   }'
 ```
@@ -128,7 +128,7 @@ Requires a valid token with `POST` permission for `/_/ntfy`.
 {
   "type": "markdown",
   "title": "Alert Title", 
-  "content": "Message **content** here",
+  "message": "Message **content** here",
   "room": "optional-room-id"
 }
 ```
@@ -210,7 +210,7 @@ curl -X POST "https://patchwork.example.com/u/admin/_/ntfy" \
   -d '{
     "type": "markdown",
     "title": "Critical Alert",
-    "content": "Database backup **failed**! Check logs immediately.",
+    "message": "Database backup **failed**! Check logs immediately.",
     "room": "!alerts:matrix.org"
   }'
 ```
@@ -226,6 +226,6 @@ curl -X POST "https://patchwork.example.com/u/admin/_/ntfy" \
       -d '{
         "type": "markdown",
         "title": "🚀 Deploy Success",
-        "content": "Application deployed to **production**\nCommit: `${{ github.sha }}`"
+        "message": "Application deployed to **production**\nCommit: `${{ github.sha }}`"
       }'
 ```
