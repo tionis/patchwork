@@ -30,12 +30,12 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tionis/patchwork/internal/huproxy"
-	"golang.org/x/time/rate"
 	"github.com/tionis/patchwork/internal/metrics"
 	"github.com/tionis/patchwork/internal/notification"
 	"github.com/tionis/patchwork/internal/types"
 	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/urfave/cli/v2"
+	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
 )
 
@@ -875,7 +875,8 @@ func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
 	var msg types.NotificationMessage
 	var parseErr error
 
-	if r.Method == http.MethodPost {
+	switch r.Method {
+	case http.MethodPost:
 		contentType := r.Header.Get("Content-Type")
 
 		if strings.Contains(contentType, "application/json") {
@@ -922,7 +923,7 @@ func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
 				Content: string(body),
 			}
 		}
-	} else if r.Method == http.MethodGet {
+	case http.MethodGet:
 		// Parse query parameters
 		msg, parseErr = s.parseNotificationFromQuery(r.URL.Query())
 		if parseErr != nil {
@@ -1897,7 +1898,7 @@ func (s *server) rateLimitMiddleware(handler http.HandlerFunc) http.HandlerFunc 
 				"client_ip", clientIP,
 				"path", r.URL.Path,
 				"method", r.Method)
-			
+
 			// Record rate limit metric
 			if s.metrics != nil {
 				s.metrics.HTTPRequestsTotal.WithLabelValues(r.Method, "public", "429").Inc()
@@ -1919,15 +1920,15 @@ func (s *server) rateLimitMiddleware(handler http.HandlerFunc) http.HandlerFunc 
 func (s *server) metricsMiddleware(namespace string, handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		
+
 		// Create a wrapper to capture the status code
 		wrapper := &responseWrapper{ResponseWriter: w, statusCode: 200}
-		
+
 		handler(wrapper, r)
-		
+
 		duration := time.Since(start).Seconds()
 		status := fmt.Sprintf("%d", wrapper.statusCode)
-		
+
 		s.metrics.RecordHTTPRequest(r.Method, namespace, status)
 		s.metrics.RecordHTTPDuration(r.Method, namespace, duration)
 	}
@@ -1951,13 +1952,13 @@ func (rw *responseWrapper) WriteHeader(code int) {
 // handlePatch implements the core duct-like channel communication logic.
 // It handles both GET and POST requests to create producer-consumer channels
 // where data can be passed through various namespaces (public, user, hooks).
-// 
+//
 // GET requests either:
 //   - Wait for data from a producer (consumer mode)
 //   - Return immediately if data is already available
 //
 // POST requests:
-//   - Send data to waiting consumers (producer mode)  
+//   - Send data to waiting consumers (producer mode)
 //   - Store data temporarily if no consumers are waiting
 //
 // The function manages WebSocket upgrades, responder/requester semantics,
@@ -2667,7 +2668,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute) // Clean up every 5 minutes
 		defer ticker.Stop()
-		
+
 		for {
 			select {
 			case <-ctx.Done():
