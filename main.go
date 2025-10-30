@@ -392,51 +392,13 @@ func (s *server) authenticateToken(
 	return true, "authenticated", nil
 }
 
-// securedMetricsHandler creates a secured metrics endpoint that requires authentication
-func (s *server) securedMetricsHandler() http.Handler {
+// metricsHandler creates a public metrics endpoint (no authentication required).
+// Serving metrics is often useful to allow external monitoring systems to scrape
+// this endpoint without requiring credentials. If you want to restrict access
+// again later, add appropriate auth checks here.
+func (s *server) metricsHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Get Authorization header or token from query parameter
-		token := r.Header.Get("Authorization")
-		if token == "" {
-			token = r.URL.Query().Get("token")
-		}
-
-		// Handle different Authorization header formats
-		if strings.HasPrefix(token, "Bearer ") {
-			token = strings.TrimPrefix(token, "Bearer ")
-		} else if strings.HasPrefix(token, "token ") {
-			token = strings.TrimPrefix(token, "token ")
-		}
-
-		// Check if this is a local request (from localhost or 127.0.0.1)
-		clientIP := getClientIP(r)
-		isLocal := clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost"
-
-		// Allow local requests without authentication (for monitoring tools on same machine)
-		if isLocal {
-			s.logger.Debug("Metrics access granted for local request", "client_ip", clientIP)
-			promhttp.HandlerFor(s.metrics.GetRegistry(), promhttp.HandlerOpts{}).ServeHTTP(w, r)
-			return
-		}
-
-		// For remote requests, require authentication with a special metrics token
-		if token == "" {
-			s.logger.Info("Metrics access denied - no token provided", "client_ip", clientIP)
-			http.Error(w, "Authentication required for metrics endpoint", http.StatusUnauthorized)
-			return
-		}
-
-		// We need to check if this token is from an admin user with metrics access
-		// Since we don't have a username for metrics endpoint, we'll check against the Forgejo token
-		// This is a simple approach - in production you might want a dedicated metrics token
-		if token == s.forgejoToken {
-			s.logger.Info("Metrics access granted with server token", "client_ip", clientIP)
-			promhttp.HandlerFor(s.metrics.GetRegistry(), promhttp.HandlerOpts{}).ServeHTTP(w, r)
-			return
-		}
-
-		s.logger.Info("Metrics access denied - invalid token", "client_ip", clientIP)
-		http.Error(w, "Invalid authentication token", http.StatusForbidden)
+		promhttp.HandlerFor(s.metrics.GetRegistry(), promhttp.HandlerOpts{}).ServeHTTP(w, r)
 	})
 }
 
@@ -2610,7 +2572,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 
 	router.HandleFunc("/healthz", server.statusHandler)
 	router.HandleFunc("/status", server.statusHandler)
-	router.Handle("/metrics", server.securedMetricsHandler())
+	router.Handle("/metrics", server.metricsHandler())
 
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Read the template content
