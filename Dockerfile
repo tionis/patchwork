@@ -1,4 +1,4 @@
-FROM golang:1.25.0 AS build
+FROM golang:1.25.4 AS build
 WORKDIR /app
 COPY go.mod go.sum ./
 COPY ./vendor ./vendor
