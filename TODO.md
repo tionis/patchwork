@@ -1,7 +1,8 @@
 # ToDo Next
-- [ ] current forgejo based backend should be migrated to one where the tokens in the config cannot be used as is, I though of two methods, both depending on adding a new endpoint to mint tokens:
-  - option 1: generate a private token (or let the user provide it) -> feed into keyed hash function with server secret -> result is public token. When a request comes in, do the same and look at fetched config
-  - option 2: generate a private token (or let the user provide it) -> encrypt with server secret -> result is saved in the config. When fetching a new config, we decrypt the tokens in the config and then can just look up the tokens in memory for incoming requests
+- [ ] Migrate token handling to an encrypted-at-rest model (Option 2) to ensure tokens in the config cannot be used if leaked, while maintaining O(1) lookup performance on the hot path.
+  - [ ] Implement a simple, well-documented API endpoint to "mint" (encrypt) tokens using the server's secret.
+  - [ ] Update config loading logic to decrypt tokens in `config.yaml` upon fetch/refresh.
+  - [ ] Ensure request authentication remains a fast memory lookup against the decrypted tokens.
 
 
 # Ideas for the future
