@@ -10,4 +10,3 @@
 - [ ] replace ntfy endpoint abstraction with https://containrrr.dev/shoutrrr/v0.8/ to allow users to easily add many different notification services
 - [ ] look into adding data storage for small scripts (per-user or per-script databases?)
 - [ ] add web endpoints for mqtt broker (subscribe to mqtt patterns using SSE, send messages using a simple POST)
-- [ ] think about integrating simple file sharing using s3 backend with pre-signed urls etc (or direct rclone integration instead)
