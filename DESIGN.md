@@ -17,6 +17,10 @@ If naming changes later, this design remains valid and only naming strings/route
 3. Build this as a standalone Go service (not integrated into ratatoskr runtime).
 4. Reuse old Patchwork domain and fold useful Patchwork features into this server.
 5. Keep S3 as data plane for large blobs; service acts as control plane.
+6. Treat each SQLite DB as a document unit with built-in sync surfaces.
+7. Keep primary API structure DB-scoped (`db_id` first).
+8. Use OIDC for interactive web authentication.
+9. Issue scoped machine tokens from the web UI for non-interactive clients.
 
 ## Specification Approach
 
@@ -34,6 +38,14 @@ This project is intentionally developed interactively:
 - Add optional web-oriented access paths (SSE, HTTP, optional MQTT).
 - Centralize access control and auditability for these operations.
 
+## Product Focus
+
+- SQLite DBs are first-class documents.
+- Built-in sync is part of the core DB runtime model.
+- Service endpoints are structured around explicit `db_id`s.
+- Human users authenticate via OIDC in the web app.
+- Machines authenticate via scoped service tokens created from the web interface.
+
 ## Non-Goals (For Now)
 
 - No immediate unified auth fabric with ratatoskr/forge.
@@ -46,6 +58,7 @@ This project is intentionally developed interactively:
 Patchwork is a multi-tenant document backend where each document is represented by one SQLite database (`db_id`).
 
 - APIs are scoped to explicit `db_id`s.
+- Each DB runtime includes sync primitives as part of the document model.
 - ACLs are evaluated at `db_id` + action (+ optional topic/resource scope).
 - Wildcards are allowed in topic filters, but not in `db_id`.
 
@@ -236,9 +249,9 @@ END;
 
 This enables SQL-native event emission without coupling application code to transport details.
 
-## Capability: PubSub API
+## Capability: Message PubSub API
 
-Purpose: realtime fanout and queue-like messaging inside DB namespace.
+Purpose: durable message-oriented pubsub inside a DB namespace, including MQTT-compatible topic semantics.
 
 ### Publish
 
@@ -249,15 +262,24 @@ Purpose: realtime fanout and queue-like messaging inside DB namespace.
   - optional `content_type`
   - optional `dedupe_key`
 
+### Message Constraints and Semantics
+
+- Strict payload size limits are enforced for message publish APIs.
+- v1 message payload limit: 1 MiB maximum request payload.
+- Message publishes are durable: persist before successful publish acknowledgment.
+- Replay is based on persisted message IDs (`since_id`/`tail`).
+- Wildcard subscriptions are supported (`+`, `#`).
+- MQTT integration includes last-will semantics in the message capability.
+- No default TTL for retained/persistent message data; DB operators may define retention policies.
+
 ### Subscribe (SSE)
 
-- `GET /api/v1/events/stream`
-- Supports multiple selectors:
-  - `db=<db_id>&topic=<filter>`
-  - repeated selector params allowed
-- Supports replay:
-  - `since_id` (global or per selector)
+- `GET /api/v1/db/:db_id/events/stream`
+- Query params:
+  - `topic=<filter>` (repeat param allowed)
+  - `since_id` (per-DB message cursor)
   - `tail=n` (optional)
+- v1 scope is per-DB stream/replay only (no cross-DB replay cursor).
 
 ### Wildcard Semantics
 
@@ -284,35 +306,87 @@ CREATE INDEX IF NOT EXISTS idx_messages_topic_id ON messages(topic, id);
 CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
 ```
 
-## Capability: Queue and Request/Response Patterns
+## Capability: Streams (Legacy Patchwork Behavior)
 
-Patchwork v1 behavior is preserved conceptually, implemented over the pubsub/message core:
+Purpose: preserve old Patchwork bytestream relay behavior for script ergonomics and efficient data proxying.
 
-- queue (blocking-ish via long-poll/SSE worker semantics)
-- broadcast pubsub
+Streams are intentionally separate from message pubsub:
+
+- no durability/replay guarantees
+- no last-will/retained-message semantics
+- no MQTT transport mapping
+- no message wildcard subscription semantics
+- optimized for efficient byte relay and passthrough headers
+- no fixed application payload cap in v1 (service rate limits still apply)
+
+Preserved behavior from old patchwork:
+
+- blocking queue-style rendezvous
+- non-blocking broadcast mode
 - request/responder channel pattern
+- passthrough metadata headers (`Patch-H-*`, `Patch-Status`)
+- responder switch mode (`?switch=true`)
 
-Proposed API shapes:
+Proposed stream API shapes:
 
-- Queue receive: `GET /api/v1/db/:db_id/queue/:topic/next`
-- Queue send: `POST /api/v1/db/:db_id/queue/:topic`
-- Request: `POST /api/v1/db/:db_id/req/:path`
-- Response: `POST /api/v1/db/:db_id/res/:path`
+- Stream queue receive: `GET /api/v1/db/:db_id/streams/queue/:topic/next`
+- Stream queue send: `POST /api/v1/db/:db_id/streams/queue/:topic`
+- Stream request: `POST /api/v1/db/:db_id/streams/req/:path`
+- Stream response: `POST /api/v1/db/:db_id/streams/res/:path`
 
-Headers/metadata pass-through from v1 should be retained (normalized) where useful.
+Compatibility aliases should map legacy paths into this stream capability.
 
-## Capability: Hooks (from old Patchwork)
+## Capability: Webhook Ingest (DB-scoped)
 
-Optional capability for low-friction webhook-style flows:
+Purpose: accept external webhook deliveries and store them durably in the target DB.
 
-- Forward hook:
-  - generate channel+secret
-  - write requires secret, read can be public or ACL-controlled
-- Reverse hook:
-  - generate channel+secret
-  - read requires secret, writes can be public or ACL-controlled
+Design choices:
 
-Implement using scoped tokens instead of ad-hoc secrets where possible.
+- No dedicated `/h`/`/r` secret-hook behavior in v1.
+- Access control uses normal DB-scoped auth rules on webhook endpoints.
+- Webhook writers authenticate using standard `Authorization` headers and DB-scoped token scopes.
+- No webhook secret needs to be stored in plaintext; token verification uses existing hash-based token storage.
+- Webhook ingest is persist-first; there is no built-in consumer API in v1.
+- Users consume webhook data using normal query APIs from DB tables.
+
+Proposed API shape:
+
+- `POST /api/v1/db/:db_id/webhooks/:endpoint`
+
+Ingest behavior:
+
+- Accept request body and metadata (`method`, headers, query, content type).
+- Insert delivery into DB-local inbox table in one transaction.
+- Return success only after insert commit.
+- Request timeout behavior is standard HTTP server behavior; no extra webhook-specific timeout contract.
+
+Recommended minimal inbox table:
+
+```sql
+CREATE TABLE IF NOT EXISTS webhook_inbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  endpoint TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  method TEXT NOT NULL,
+  query_string TEXT,
+  headers_json TEXT NOT NULL,
+  content_type TEXT,
+  payload BLOB NOT NULL,
+  signature_valid INTEGER,
+  delivery_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_inbox_endpoint_id
+ON webhook_inbox(endpoint, id);
+```
+
+Schema extensibility requirement:
+
+- Ingest code must insert using an explicit column list for required columns.
+- Presence of extra columns in `webhook_inbox` must not break inserts.
+
+HMAC request-signature validation is not part of MVP.
+It can be added later as optional per-endpoint hardening.
 
 ## Capability: Fencing/Leases
 
@@ -341,6 +415,7 @@ CREATE TABLE IF NOT EXISTS fencing_tokens (
 Consistency constraints:
 
 - Lease authority must be single-writer and linearizable.
+- Lease authority is backed by local SQLite state for this service deployment (no external coordinator in MVP).
 - Do not run fencing authority on multi-master CRDT replication.
 - Use transactional SQLite lock discipline (`BEGIN IMMEDIATE`).
 
@@ -380,6 +455,7 @@ Purpose: remove raw S3 credentials from forge/related clients while preserving S
   2. Server returns pre-signed URL (or multipart plan).
   3. Client uploads object bytes directly.
   4. Client calls complete endpoint with hash + size metadata.
+  5. Server verifies uploaded object content hash matches declared blob hash before marking complete.
 
 ### DB-Scoped Blob References
 
@@ -436,6 +512,11 @@ Optional hardening (future):
 
 ## Auth and ACL
 
+Identity and credential paths:
+
+- Human/web authentication: OIDC-backed login/session in the web interface.
+- Machine authentication: DB-scoped service tokens issued via the web interface.
+
 Token model (local to this service for now):
 
 - Token secret: random 128-bit minimum.
@@ -445,6 +526,7 @@ Token model (local to this service for now):
   - action (query/pubsub/lease/blob/etc.)
   - optional `topic_prefix` or resource prefix
   - optional expiry
+- Legacy Forgejo `.patchwork/config.yaml` ACL loading is not part of this service.
 
 Suggested action set:
 
@@ -452,6 +534,9 @@ Suggested action set:
 - `query.write`
 - `pub.publish`
 - `pub.subscribe`
+- `stream.read`
+- `stream.write`
+- `webhook.ingest`
 - `queue.send`
 - `queue.recv`
 - `req.send`
@@ -468,36 +553,42 @@ Suggested action set:
 
 - HTTP/JSON for control plane APIs.
 - SSE for server-to-client realtime streams and replay.
-- MQTT (optional adapter) mapped to same ACL/namespace engine.
+- MQTT (optional adapter) for message pubsub capability.
 
 MQTT mapping rule:
 
 - Topic shape includes explicit DB scope (for example `db/<db_id>/<topic...>`).
 - Wildcard evaluation remains confined inside `db_id` scope.
+- Last-will behavior is handled in the message pubsub path, not the stream path.
 
 ## Compatibility with Old Patchwork
 
 The old service provided valuable operational patterns that should be retained:
 
 - channel-style script ergonomics
-- pubsub and queue semantics
+- stream semantics (blocking relay, broadcast mode, req/res)
 - request/responder flow
 - passthrough metadata headers
-- hook shortcuts
 
 Migration approach:
 
 1. Preserve `patch.tionis.dev`.
-2. Provide compatibility routes for high-value legacy paths.
-3. Move auth from Forgejo ACL-file dependency toward native service tokens.
+2. Provide compatibility routes for high-value legacy paths with behavior parity for core flows.
+3. Use native service tokens from day one (no legacy `config.yaml` auth compatibility layer).
 4. Keep old behavior available during migration window.
+
+Compatibility parity targets for v1:
+
+- stream script ergonomics (blocking relay + broadcast mode)
+- request/responder flow including passthrough header behavior
+- `Patch-H-*` passthrough and `Patch-Status` response status override
+- responder switch (`?switch=true`) behavior
 
 Potential compatibility route mapping:
 
 - `/public/*` -> default `db_id=public` namespace routes.
 - `/p/*` -> alias to `/public/*`.
 - `/u/{user}/*` -> maps to user-owned DB namespace.
-- `/h/*`, `/r/*` -> hook capability routes.
 
 Out-of-scope compatibility for MVP:
 
@@ -571,8 +662,8 @@ Recommended metrics:
 
 1. Finalize naming and repo rename (`skald` -> `patchwork` if confirmed).
 2. Implement core auth + capability activation + query read.
-3. Implement pubsub publish + SSE subscribe + replay.
-4. Add queue and req/res compatibility endpoints.
+3. Implement message pubsub publish + SSE subscribe + replay.
+4. Add stream (queue/req/res/broadcast) compatibility endpoints.
 5. Add lease/fencing API with single-writer authority.
 6. Add blob control plane with pre-signed URL flows.
 7. Migrate key script endpoints from old patchwork.
@@ -580,10 +671,10 @@ Recommended metrics:
 
 ## Open Questions
 
-1. Do we keep `config.yaml` ACL compatibility temporarily, or fully switch to native token storage from day one?
-2. Should compatibility routes be full behavior parity or only a "most used paths" subset?
-3. Which capabilities are mandatory in v1 (`query + pubsub + lease`) and which are optional (`hooks`, `blob`)?
-4. What retention policy is desired for `messages` per DB (size/time/count)?
-5. Reactive query invalidation phase target at launch: v0 (global), v1 (table-aware), or mixed?
+1. Should compatibility routes be strict parity for all legacy path variants, or only parity for the most-used subset?
+2. Which capabilities are mandatory in v1 (`query + message pubsub + streams + lease`) and which are optional (`blob`)?
+3. What retention policy is desired for `messages` per DB (size/time/count)?
+4. Reactive query invalidation phase target at launch: v0 (global), v1 (table-aware), or mixed?
+5. Do we keep/reintroduce the old webhook-proxy feature, and if yes should it be implemented as a stream capability or separate adapter?
 6. If HuProxy is enabled, which OIDC claim name should be canonical for SSH keys (`sshpubkey` default?) and is signature challenge mandatory?
 7. Should SQL extension bridge be in MVP, or staged after core query/pubsub/fencing APIs?
