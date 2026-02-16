@@ -57,6 +57,11 @@ Blob GC:
 - `PATCHWORK_BLOB_GC_INTERVAL`
 - `PATCHWORK_BLOB_GC_GRACE_PERIOD`
 
+Blob signed URLs (optional):
+
+- `PATCHWORK_BLOB_SIGNING_KEY`
+- `PATCHWORK_BLOB_SIGNED_URL_TTL`
+
 ## Common Troubleshooting
 
 `401/403`:

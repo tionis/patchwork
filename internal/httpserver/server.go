@@ -314,12 +314,16 @@ type Server struct {
 	lastTokenLimiterSweep time.Time
 	blobGCInterval        time.Duration
 	blobGCGracePeriod     time.Duration
+	blobSigningKey        []byte
+	blobSignedURLTTL      time.Duration
 	started               time.Time
 	metrics               *metricStore
 }
 
 // New constructs a new API server.
 func New(cfg config.Config, logger *slog.Logger, runtimes *docruntime.Manager, authSvc *auth.Service) *Server {
+	blobSigningKey := []byte(strings.TrimSpace(cfg.BlobSigningKey))
+
 	return &Server{
 		cfg:                   cfg,
 		logger:                logger.With("component", "httpserver"),
@@ -333,6 +337,8 @@ func New(cfg config.Config, logger *slog.Logger, runtimes *docruntime.Manager, a
 		lastTokenLimiterSweep: time.Now(),
 		blobGCInterval:        cfg.BlobGCInterval,
 		blobGCGracePeriod:     cfg.BlobGCGracePeriod,
+		blobSigningKey:        blobSigningKey,
+		blobSignedURLTTL:      cfg.BlobSignedURLTTL,
 		started:               time.Now().UTC(),
 		metrics:               newMetricStore(),
 	}

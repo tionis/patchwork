@@ -111,7 +111,8 @@ func (s *Server) handleBlobInitUpload(w http.ResponseWriter, r *http.Request, db
 		return
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	nowTime := time.Now().UTC()
+	now := nowTime.Format(time.RFC3339Nano)
 	contentType := strings.TrimSpace(req.ContentType)
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -141,13 +142,21 @@ func (s *Server) handleBlobInitUpload(w http.ResponseWriter, r *http.Request, db
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	uploadURLPath := fmt.Sprintf("/api/v1/db/%s/blobs/upload/%s", dbID, blobID)
+	uploadURL, uploadExpiresAt := s.signBlobPath(http.MethodPut, uploadURLPath, nowTime)
+
+	resp := map[string]any{
 		"blob_id":      blobID,
-		"upload_url":   fmt.Sprintf("/api/v1/db/%s/blobs/upload/%s", dbID, blobID),
+		"upload_url":   uploadURL,
 		"complete_url": fmt.Sprintf("/api/v1/db/%s/blobs/complete-upload", dbID),
 		"read_url_api": fmt.Sprintf("/api/v1/db/%s/blobs/%s/read-url", dbID, blobID),
-	})
+	}
+	if uploadExpiresAt != "" {
+		resp["upload_url_expires_at"] = uploadExpiresAt
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleBlobUpload(w http.ResponseWriter, r *http.Request, dbID, blobID string) {
@@ -163,8 +172,7 @@ func (s *Server) handleBlobUpload(w http.ResponseWriter, r *http.Request, dbID, 
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.upload", blobID); err != nil {
-		s.writeAuthError(w, err)
+	if ok := s.authorizeBlobDataPlaneRequest(w, r, dbID, "blob.upload", blobID); !ok {
 		return
 	}
 
@@ -307,11 +315,19 @@ func (s *Server) handleBlobReadURL(w http.ResponseWriter, r *http.Request, dbID,
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	readURLPath := fmt.Sprintf("/api/v1/db/%s/blobs/object/%s", dbID, blobID)
+	readURL, readExpiresAt := s.signBlobPath(http.MethodGet, readURLPath, time.Now().UTC())
+
+	resp := map[string]any{
 		"blob_id":  blobID,
-		"read_url": fmt.Sprintf("/api/v1/db/%s/blobs/object/%s", dbID, blobID),
-	})
+		"read_url": readURL,
+	}
+	if readExpiresAt != "" {
+		resp["read_url_expires_at"] = readExpiresAt
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleBlobObjectRead(w http.ResponseWriter, r *http.Request, dbID, blobID string) {
@@ -327,8 +343,7 @@ func (s *Server) handleBlobObjectRead(w http.ResponseWriter, r *http.Request, db
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.read", blobID); err != nil {
-		s.writeAuthError(w, err)
+	if ok := s.authorizeBlobDataPlaneRequest(w, r, dbID, "blob.read", blobID); !ok {
 		return
 	}
 

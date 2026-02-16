@@ -197,14 +197,12 @@ Behavior:
   - `DELETE /api/v1/admin/tokens/:id`
 - Plaintext token is only shown in the create response payload.
 
-### Blob Metadata Groundwork
+### Blob Control Plane
 
 Document migration now includes initial blob-control tables:
 
 - `blob_metadata`
 - `blob_claims`
-
-This establishes DB schema for upcoming blob APIs (`init-upload`, `complete-upload`, claim/release, GC).
 
 Current blob API routes:
 
@@ -217,7 +215,14 @@ Current blob API routes:
 - `POST /api/v1/db/:db_id/blobs/:blob_id/release`
 
 `complete-upload` verifies the staged blob hash before marking metadata as `complete`.
-Current implementation uses local disk paths under the service data dir; object-storage pre-signing remains TODO.
+
+Blob signed URL support:
+
+- If `PATCHWORK_BLOB_SIGNING_KEY` is configured, `init-upload` and `read-url` return signed data-plane URLs.
+- Signed upload/object URLs can be used without a bearer token until `PATCHWORK_BLOB_SIGNED_URL_TTL` expires.
+- If blob signing is not configured, upload/object routes require normal bearer-token authorization.
+
+Current storage backend uses local disk paths under the service data dir (`blobs/` and `blob-staging/`) with signed URL semantics layered on top of those routes.
 
 Background GC:
 

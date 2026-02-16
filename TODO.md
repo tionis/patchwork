@@ -198,7 +198,7 @@ Exit criteria:
   - [x] read-url
   - [x] claim
   - [x] release
-- [ ] Integrate object storage pre-signing.
+- [x] Integrate object storage pre-signing.
 - [x] Enforce hash verification in `complete-upload`.
 - [x] Add global GC job:
   - [x] union references from DB `blobs` tables

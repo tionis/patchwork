@@ -18,6 +18,7 @@ const (
 	defaultCleanupInterval   = 1 * time.Minute
 	defaultBlobGCInterval    = 1 * time.Hour
 	defaultBlobGCGracePeriod = 24 * time.Hour
+	defaultBlobSignedURLTTL  = 15 * time.Minute
 	defaultGlobalRateRPS     = 200.0
 	defaultGlobalRateBurst   = 400
 	defaultTokenRateRPS      = 50.0
@@ -38,6 +39,8 @@ type Config struct {
 	CleanupInterval      time.Duration
 	BlobGCInterval       time.Duration
 	BlobGCGracePeriod    time.Duration
+	BlobSigningKey       string
+	BlobSignedURLTTL     time.Duration
 	GlobalRateLimitRPS   float64
 	GlobalRateLimitBurst int
 	TokenRateLimitRPS    float64
@@ -53,6 +56,7 @@ func Load() (Config, error) {
 	cfg.DocumentsDir = filepath.Join(cfg.DataDir, "documents")
 	cfg.ServiceDBPath = filepath.Join(cfg.DataDir, "service.db")
 	cfg.BootstrapAdminToken = os.Getenv("PATCHWORK_BOOTSTRAP_ADMIN_TOKEN")
+	cfg.BlobSigningKey = os.Getenv("PATCHWORK_BLOB_SIGNING_KEY")
 
 	var err error
 
@@ -87,6 +91,11 @@ func Load() (Config, error) {
 	}
 
 	cfg.BlobGCGracePeriod, err = durationFromEnv("PATCHWORK_BLOB_GC_GRACE_PERIOD", defaultBlobGCGracePeriod)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.BlobSignedURLTTL, err = durationFromEnv("PATCHWORK_BLOB_SIGNED_URL_TTL", defaultBlobSignedURLTTL)
 	if err != nil {
 		return Config{}, err
 	}
@@ -133,6 +142,10 @@ func Load() (Config, error) {
 
 	if cfg.BlobGCGracePeriod <= 0 {
 		return Config{}, fmt.Errorf("blob gc grace period must be > 0")
+	}
+
+	if cfg.BlobSignedURLTTL <= 0 {
+		return Config{}, fmt.Errorf("blob signed url ttl must be > 0")
 	}
 
 	if cfg.GlobalRateLimitRPS < 0 {
