@@ -312,6 +312,8 @@ type Server struct {
 	tokenLimitersMu       sync.Mutex
 	tokenLimiters         map[string]*tokenLimiterEntry
 	lastTokenLimiterSweep time.Time
+	blobGCInterval        time.Duration
+	blobGCGracePeriod     time.Duration
 	started               time.Time
 	metrics               *metricStore
 }
@@ -329,6 +331,8 @@ func New(cfg config.Config, logger *slog.Logger, runtimes *docruntime.Manager, a
 		tokenLimiterBurst:     cfg.TokenRateLimitBurst,
 		tokenLimiters:         make(map[string]*tokenLimiterEntry),
 		lastTokenLimiterSweep: time.Now(),
+		blobGCInterval:        cfg.BlobGCInterval,
+		blobGCGracePeriod:     cfg.BlobGCGracePeriod,
 		started:               time.Now().UTC(),
 		metrics:               newMetricStore(),
 	}
@@ -2828,6 +2832,20 @@ func (s *Server) writeAuthError(w http.ResponseWriter, err error) {
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
+}
+
+// StartBackgroundJobs starts maintenance loops and returns immediately.
+func (s *Server) StartBackgroundJobs(ctx context.Context) {
+	interval := s.blobGCInterval
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	grace := s.blobGCGracePeriod
+	if grace <= 0 {
+		grace = 24 * time.Hour
+	}
+
+	go s.runBlobGCLoop(ctx, interval, grace)
 }
 
 type statusWriter struct {

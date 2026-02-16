@@ -47,6 +47,7 @@ func main() {
 	defer authSvc.Close()
 
 	api := httpserver.New(cfg, logger, runtimes, authSvc)
+	api.StartBackgroundJobs(ctx)
 	httpSrv := &http.Server{
 		Addr:              cfg.BindAddr,
 		Handler:           api.Handler(),

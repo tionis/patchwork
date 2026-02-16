@@ -218,6 +218,12 @@ Current blob API routes:
 `complete-upload` verifies the staged blob hash before marking metadata as `complete`.
 Current implementation uses local disk paths under the service data dir; object-storage pre-signing remains TODO.
 
+Background GC:
+
+- started automatically with the server process
+- unions live hashes from per-DB `blobs` tables and active `blob_claims`
+- removes unreferenced object files older than configured grace period
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:

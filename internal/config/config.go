@@ -16,6 +16,8 @@ const (
 	defaultWriteTimeout      = 30 * time.Second
 	defaultIdleTimeout       = 10 * time.Minute
 	defaultCleanupInterval   = 1 * time.Minute
+	defaultBlobGCInterval    = 1 * time.Hour
+	defaultBlobGCGracePeriod = 24 * time.Hour
 	defaultGlobalRateRPS     = 200.0
 	defaultGlobalRateBurst   = 400
 	defaultTokenRateRPS      = 50.0
@@ -34,6 +36,8 @@ type Config struct {
 	WriteTimeout         time.Duration
 	IdleWorkerTimeout    time.Duration
 	CleanupInterval      time.Duration
+	BlobGCInterval       time.Duration
+	BlobGCGracePeriod    time.Duration
 	GlobalRateLimitRPS   float64
 	GlobalRateLimitBurst int
 	TokenRateLimitRPS    float64
@@ -77,6 +81,16 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	cfg.BlobGCInterval, err = durationFromEnv("PATCHWORK_BLOB_GC_INTERVAL", defaultBlobGCInterval)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.BlobGCGracePeriod, err = durationFromEnv("PATCHWORK_BLOB_GC_GRACE_PERIOD", defaultBlobGCGracePeriod)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg.GlobalRateLimitRPS, err = floatFromEnv("PATCHWORK_RATE_LIMIT_GLOBAL_RPS", defaultGlobalRateRPS)
 	if err != nil {
 		return Config{}, err
@@ -111,6 +125,14 @@ func Load() (Config, error) {
 
 	if cfg.CleanupInterval > cfg.IdleWorkerTimeout {
 		return Config{}, fmt.Errorf("cleanup interval (%s) must be <= idle worker timeout (%s)", cfg.CleanupInterval, cfg.IdleWorkerTimeout)
+	}
+
+	if cfg.BlobGCInterval <= 0 {
+		return Config{}, fmt.Errorf("blob gc interval must be > 0")
+	}
+
+	if cfg.BlobGCGracePeriod <= 0 {
+		return Config{}, fmt.Errorf("blob gc grace period must be > 0")
 	}
 
 	if cfg.GlobalRateLimitRPS < 0 {

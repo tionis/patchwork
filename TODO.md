@@ -200,9 +200,9 @@ Exit criteria:
   - [x] release
 - [ ] Integrate object storage pre-signing.
 - [x] Enforce hash verification in `complete-upload`.
-- [ ] Add global GC job:
-  - [ ] union references from DB `blobs` tables
-  - [ ] grace-period deletion rules
+- [x] Add global GC job:
+  - [x] union references from DB `blobs` tables
+  - [x] grace-period deletion rules
 
 Exit criteria:
 - end-to-end upload/finalize/read flow passes, including hash mismatch rejection.
