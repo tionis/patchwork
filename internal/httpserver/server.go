@@ -28,6 +28,7 @@ type Server struct {
 	runtimes *docruntime.Manager
 	auth     *auth.Service
 	streams  *streams.Manager
+	webhooks WebhookValidationHook
 	started  time.Time
 	metrics  *metricStore
 }
@@ -43,6 +44,10 @@ func New(cfg config.Config, logger *slog.Logger, runtimes *docruntime.Manager, a
 		started:  time.Now().UTC(),
 		metrics:  newMetricStore(),
 	}
+}
+
+func (s *Server) SetWebhookValidationHook(hook WebhookValidationHook) {
+	s.webhooks = hook
 }
 
 // Handler returns the root HTTP handler with instrumentation middleware.
@@ -316,6 +321,17 @@ func (s *Server) handleWebhookIngest(w http.ResponseWriter, r *http.Request, dbI
 	receivedAtRaw := receivedAt.Format(time.RFC3339Nano)
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
 	deliveryID := extractDeliveryID(r.Header)
+	signatureValid := nullableBoolInt(nil)
+
+	if s.webhooks != nil {
+		valid, err := s.webhooks.Validate(r.Context(), r, dbID, endpoint, payload)
+		if err != nil {
+			s.logger.Warn("webhook validation failed", "db_id", dbID, "endpoint", endpoint, "error", err)
+			http.Error(w, "webhook validation failed", http.StatusUnauthorized)
+			return
+		}
+		signatureValid = nullableBoolInt(valid)
+	}
 
 	err = s.runtimes.WithDB(r.Context(), dbID, func(ctx context.Context, db *sql.DB) error {
 		tx, err := db.BeginTx(ctx, nil)
@@ -349,7 +365,7 @@ func (s *Server) handleWebhookIngest(w http.ResponseWriter, r *http.Request, dbI
 			headersJSON,
 			nullableString(contentType),
 			payload,
-			nil,
+			signatureValid,
 			nullableString(deliveryID),
 		)
 		if err != nil {
@@ -942,6 +958,16 @@ func nullableString(value string) any {
 		return nil
 	}
 	return trimmed
+}
+
+func nullableBoolInt(value *bool) any {
+	if value == nil {
+		return nil
+	}
+	if *value {
+		return 1
+	}
+	return 0
 }
 
 func (s *Server) instrument(next http.Handler) http.Handler {

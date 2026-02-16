@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -158,6 +159,76 @@ func TestWebhookIngestWorksWithExtraColumns(t *testing.T) {
 	}
 }
 
+func TestWebhookIngestValidationHookStoresSignatureState(t *testing.T) {
+	env := newWebhookTestEnv(t)
+	defer env.close()
+
+	valid := true
+	env.server.SetWebhookValidationHook(webhookValidationFunc(func(_ context.Context, _ *http.Request, _ string, _ string, _ []byte) (*bool, error) {
+		return &valid, nil
+	}))
+
+	token := env.issueWebhookToken(t, "customer-d")
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/db/customer-d/webhooks/vendor/event",
+		strings.NewReader(`{"ok":true}`),
+	)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	rr := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d: %s", http.StatusCreated, rr.Code, rr.Body.String())
+	}
+
+	var signature sql.NullInt64
+	if err := env.runtimes.WithDB(context.Background(), "customer-d", func(ctx context.Context, db *sql.DB) error {
+		return db.QueryRowContext(ctx, `SELECT signature_valid FROM webhook_inbox ORDER BY id DESC LIMIT 1`).Scan(&signature)
+	}); err != nil {
+		t.Fatalf("query signature_valid: %v", err)
+	}
+
+	if !signature.Valid || signature.Int64 != 1 {
+		t.Fatalf("expected signature_valid=1, got %+v", signature)
+	}
+}
+
+func TestWebhookIngestValidationHookRejectsRequest(t *testing.T) {
+	env := newWebhookTestEnv(t)
+	defer env.close()
+
+	env.server.SetWebhookValidationHook(webhookValidationFunc(func(_ context.Context, _ *http.Request, _ string, _ string, _ []byte) (*bool, error) {
+		return nil, errors.New("invalid signature")
+	}))
+
+	token := env.issueWebhookToken(t, "customer-e")
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/db/customer-e/webhooks/vendor/event",
+		strings.NewReader(`{"ok":true}`),
+	)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	rr := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected %d, got %d: %s", http.StatusUnauthorized, rr.Code, rr.Body.String())
+	}
+
+	var count int
+	if err := env.runtimes.WithDB(context.Background(), "customer-e", func(ctx context.Context, db *sql.DB) error {
+		return db.QueryRowContext(ctx, `SELECT COUNT(*) FROM webhook_inbox`).Scan(&count)
+	}); err != nil {
+		t.Fatalf("count webhook rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 rows after failed validation, got %d", count)
+	}
+}
+
 type webhookTestEnv struct {
 	server   *Server
 	runtimes *docruntime.Manager
@@ -226,4 +297,10 @@ func (e *webhookTestEnv) issueTokenWithScopes(t *testing.T, label string, scopes
 	}
 
 	return issued.Token
+}
+
+type webhookValidationFunc func(ctx context.Context, r *http.Request, dbID, endpoint string, payload []byte) (*bool, error)
+
+func (f webhookValidationFunc) Validate(ctx context.Context, r *http.Request, dbID, endpoint string, payload []byte) (*bool, error) {
+	return f(ctx, r, dbID, endpoint, payload)
 }

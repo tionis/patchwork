@@ -170,7 +170,7 @@ Exit criteria:
   - [x] persist in one transaction and return success after commit
 - [x] Ensure inserts use explicit column lists so extra columns in `webhook_inbox` do not break writes.
 - [x] Add docs/examples for query-based consumption pattern.
-- [ ] Keep HMAC verification out of MVP; add extension hooks for future implementation.
+- [x] Keep HMAC verification out of MVP; add extension hooks for future implementation.
 
 Exit criteria:
 - webhook ingest remains correct when `webhook_inbox` includes additional user-defined columns.

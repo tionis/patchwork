@@ -24,6 +24,7 @@ That document includes:
 - Route: `POST /api/v1/db/:db_id/webhooks/:endpoint`
 - Auth: bearer token with `webhook.ingest` scope for the target `db_id`
 - Behavior: request is persisted to `webhook_inbox` in the document DB and only acknowledged after commit
+- HMAC/signature checks are not enforced by default in MVP, but a server-side validation hook exists for future provider-specific verification.
 
 Stored columns (explicit insert list):
 
