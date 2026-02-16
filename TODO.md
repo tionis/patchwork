@@ -210,10 +210,10 @@ Exit criteria:
 ## Phase 8: Compatibility and Hardening
 
 - [x] Build explicit legacy compatibility matrix (`kept / changed / dropped`) in docs.
-- [ ] Add load tests for:
-  - [ ] query watch under write load
-  - [ ] message fanout/replay
-  - [ ] high-concurrency streams
+- [x] Add load tests for:
+  - [x] query watch under write load
+  - [x] message fanout/replay
+  - [x] high-concurrency streams
 - [ ] Add chaos/failure tests:
   - [ ] DB worker restart
   - [ ] partial webhook writes

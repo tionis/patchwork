@@ -224,6 +224,12 @@ Background GC:
 - unions live hashes from per-DB `blobs` tables and active `blob_claims`
 - removes unreferenced object files older than configured grace period
 
+Load-oriented integration tests now cover:
+
+- query-watch behavior under concurrent write churn
+- durable message replay fanout across multiple subscribers
+- high-concurrency stream queue producer/consumer flow
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:
