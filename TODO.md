@@ -114,11 +114,11 @@ Exit criteria:
   - [x] `query.write`
   - [x] `query.admin`
 - [x] Add query resource bounds (time/rows/result bytes).
-- [ ] Implement reactive query watch SSE endpoint:
-  - [ ] `POST /api/v1/db/:db_id/query/watch`
-  - [ ] events: `snapshot`, `update`, `heartbeat`, `error`
-  - [ ] deterministic `result_hash`
-- [ ] Implement invalidation `v0`: reevaluate all active watches on successful write commit.
+- [x] Implement reactive query watch SSE endpoint:
+  - [x] `POST /api/v1/db/:db_id/query/watch`
+  - [x] events: `snapshot`, `update`, `heartbeat`, `error`
+  - [x] deterministic `result_hash`
+- [x] Implement invalidation `v0`: reevaluate all active watches on successful write commit.
 
 Exit criteria:
 - deterministic watch update behavior under concurrent read/write tests.

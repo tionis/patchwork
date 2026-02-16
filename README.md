@@ -141,6 +141,29 @@ Current resource bounds:
 - max JSON result bytes: `1 MiB`
 - multiple SQL statements in one request are rejected
 
+### Query API (Reactive Watch)
+
+- Route: `POST /api/v1/db/:db_id/query/watch`
+- Request shape:
+
+```json
+{
+  "sql": "SELECT id, name FROM items ORDER BY id",
+  "args": [],
+  "options": {
+    "heartbeat_seconds": 15,
+    "max_rows": 5000
+  }
+}
+```
+
+Behavior:
+
+- read-only statements only
+- SSE events: `snapshot`, `update`, `heartbeat`, `error`
+- `result_hash` is deterministic (hash over canonical `columns + rows` JSON)
+- v0 invalidation: active watches are reevaluated on committed document writes
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:

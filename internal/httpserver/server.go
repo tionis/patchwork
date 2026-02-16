@@ -2,8 +2,10 @@ package httpserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,6 +70,22 @@ type sseMessageEvent struct {
 type queryExecRequest struct {
 	SQL  string `json:"sql"`
 	Args []any  `json:"args,omitempty"`
+}
+
+type queryWatchRequest struct {
+	SQL     string `json:"sql"`
+	Args    []any  `json:"args,omitempty"`
+	Options struct {
+		HeartbeatSeconds int `json:"heartbeat_seconds,omitempty"`
+		MaxRows          int `json:"max_rows,omitempty"`
+	} `json:"options,omitempty"`
+}
+
+type queryWatchEvent struct {
+	Columns    []string `json:"columns"`
+	Rows       [][]any  `json:"rows"`
+	RowCount   int      `json:"row_count"`
+	ResultHash string   `json:"result_hash"`
 }
 
 // Server provides the baseline HTTP API surface for the patchwork service.
@@ -451,6 +469,15 @@ func (s *Server) handleMessagePublish(w http.ResponseWriter, r *http.Request, db
 	}
 
 	s.logger.Info("message published", "db_id", dbID, "topic", topic, "message_id", messageID, "size_bytes", len(payload))
+	_ = s.runtimes.EmitChangeEvent(r.Context(), docruntime.ChangeEvent{
+		DBID:      dbID,
+		Kind:      "messages.publish.committed",
+		Timestamp: time.Now().UTC(),
+		Metadata: map[string]string{
+			"topic":      topic,
+			"message_id": strconv.FormatInt(messageID, 10),
+		},
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -585,6 +612,8 @@ func (s *Server) handleQueryAPI(w http.ResponseWriter, r *http.Request, dbID, ac
 	switch action {
 	case "query/exec":
 		s.handleQueryExec(w, r, dbID)
+	case "query/watch":
+		s.handleQueryWatch(w, r, dbID)
 	default:
 		http.NotFound(w, r)
 	}
@@ -659,6 +688,16 @@ func (s *Server) handleQueryExec(w http.ResponseWriter, r *http.Request, dbID st
 			return
 		}
 
+		_ = s.runtimes.EmitChangeEvent(r.Context(), docruntime.ChangeEvent{
+			DBID:      dbID,
+			Kind:      "query.write.committed",
+			Timestamp: time.Now().UTC(),
+			Metadata: map[string]string{
+				"class":         statementClass,
+				"rows_affected": strconv.FormatInt(rowsAffected, 10),
+			},
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"class":          statementClass,
@@ -668,7 +707,158 @@ func (s *Server) handleQueryExec(w http.ResponseWriter, r *http.Request, dbID st
 	}
 }
 
+func (s *Server) handleQueryWatch(w http.ResponseWriter, r *http.Request, dbID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req queryWatchRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, "invalid JSON request body", http.StatusBadRequest)
+		return
+	}
+
+	sqlText := strings.TrimSpace(req.SQL)
+	if sqlText == "" {
+		http.Error(w, "sql is required", http.StatusBadRequest)
+		return
+	}
+
+	if hasMultipleStatements(sqlText) {
+		http.Error(w, "multiple SQL statements are not allowed", http.StatusBadRequest)
+		return
+	}
+
+	if classifyStatementClass(sqlText) != "read" {
+		http.Error(w, "query watch only supports read statements", http.StatusBadRequest)
+		return
+	}
+
+	if _, err := s.auth.AuthorizeRequest(r, dbID, "query.read", "/query/watch"); err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+
+	if err := s.runtimes.EnsureDocument(r.Context(), dbID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	maxRows := queryMaxRows
+	if req.Options.MaxRows > 0 && req.Options.MaxRows < maxRows {
+		maxRows = req.Options.MaxRows
+	}
+
+	heartbeatInterval := messageHeartbeatInterval
+	if req.Options.HeartbeatSeconds > 0 {
+		heartbeatInterval = time.Duration(req.Options.HeartbeatSeconds) * time.Second
+	}
+	if heartbeatInterval < time.Second {
+		heartbeatInterval = time.Second
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		flusher = noopFlusher{}
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	evaluate := func() (queryWatchEvent, error) {
+		columns, rows, _, err := s.runReadQueryWithLimits(r.Context(), dbID, sqlText, req.Args, maxRows, queryMaxResultBytes)
+		if err != nil {
+			return queryWatchEvent{}, err
+		}
+
+		resultHash, err := hashQueryResult(columns, rows)
+		if err != nil {
+			return queryWatchEvent{}, err
+		}
+
+		return queryWatchEvent{
+			Columns:    columns,
+			Rows:       rows,
+			RowCount:   len(rows),
+			ResultHash: resultHash,
+		}, nil
+	}
+
+	initial, err := evaluate()
+	if err != nil {
+		_ = writeSSEEvent(w, flusher, "error", "", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	if err := writeSSEEvent(w, flusher, "snapshot", "", initial); err != nil {
+		return
+	}
+
+	lastHash := initial.ResultHash
+
+	changeCtx, changeCancel := context.WithCancel(r.Context())
+	defer changeCancel()
+
+	changes, unsubscribe, err := s.runtimes.SubscribeChanges(changeCtx, dbID, 64)
+	if err != nil {
+		_ = writeSSEEvent(w, flusher, "error", "", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+	defer unsubscribe()
+
+	heartbeatTicker := time.NewTicker(heartbeatInterval)
+	defer heartbeatTicker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-changes:
+			current, err := evaluate()
+			if err != nil {
+				_ = writeSSEEvent(w, flusher, "error", "", map[string]string{
+					"error": err.Error(),
+				})
+				return
+			}
+			if current.ResultHash == lastHash {
+				continue
+			}
+			if err := writeSSEEvent(w, flusher, "update", "", current); err != nil {
+				return
+			}
+			lastHash = current.ResultHash
+		case <-heartbeatTicker.C:
+			if err := writeSSEEvent(w, flusher, "heartbeat", "", map[string]string{
+				"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			}); err != nil {
+				return
+			}
+		}
+	}
+}
+
 func (s *Server) runReadQuery(ctx context.Context, dbID, sqlText string, args []any) ([]string, [][]any, int, error) {
+	return s.runReadQueryWithLimits(ctx, dbID, sqlText, args, queryMaxRows, queryMaxResultBytes)
+}
+
+func (s *Server) runReadQueryWithLimits(
+	ctx context.Context,
+	dbID,
+	sqlText string,
+	args []any,
+	maxRows,
+	maxResultBytes int,
+) ([]string, [][]any, int, error) {
 	var (
 		columns    []string
 		resultRows [][]any
@@ -688,7 +878,7 @@ func (s *Server) runReadQuery(ctx context.Context, dbID, sqlText string, args []
 		}
 
 		for rows.Next() {
-			if len(resultRows) >= queryMaxRows {
+			if len(resultRows) >= maxRows {
 				return errQueryRowsLimitExceeded
 			}
 
@@ -712,7 +902,7 @@ func (s *Server) runReadQuery(ctx context.Context, dbID, sqlText string, args []
 				return err
 			}
 			totalBytes += len(rowJSON)
-			if totalBytes > queryMaxResultBytes {
+			if totalBytes > maxResultBytes {
 				return errQueryResultTooLarge
 			}
 
@@ -855,6 +1045,14 @@ func (s *Server) handleWebhookIngest(w http.ResponseWriter, r *http.Request, dbI
 	}
 
 	s.logger.Info("webhook ingested", "db_id", dbID, "endpoint", endpoint, "size_bytes", len(payload))
+	_ = s.runtimes.EmitChangeEvent(r.Context(), docruntime.ChangeEvent{
+		DBID:      dbID,
+		Kind:      "webhook.ingest.committed",
+		Timestamp: time.Now().UTC(),
+		Metadata: map[string]string{
+			"endpoint": endpoint,
+		},
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -1617,6 +1815,24 @@ func normalizeQueryValue(v any) any {
 	default:
 		return fmt.Sprintf("%v", value)
 	}
+}
+
+func hashQueryResult(columns []string, rows [][]any) (string, error) {
+	payload := struct {
+		Columns []string `json:"columns"`
+		Rows    [][]any  `json:"rows"`
+	}{
+		Columns: columns,
+		Rows:    rows,
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func parseQueueTopicPath(topicPath string) (topic string, isNext bool, ok bool) {
