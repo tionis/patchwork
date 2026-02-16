@@ -154,7 +154,7 @@ Exit criteria:
   - [x] `POST /api/v1/db/:db_id/streams/queue/:topic`
   - [x] `POST /api/v1/db/:db_id/streams/req/:path`
   - [x] `POST /api/v1/db/:db_id/streams/res/:path`
-- [ ] Add compatibility aliases for legacy route shapes (`/public/*`, `/p/*`, `/u/{user}/*` mapping policy).
+- [x] Add compatibility aliases for legacy route shapes (`/public/*`, `/p/*`, `/u/{user}/*` mapping policy).
 - [x] Enforce stream auth scopes (`stream.read`, `stream.write`).
 
 Exit criteria:

@@ -72,3 +72,9 @@ Supported stream behaviors:
 - request/responder flow with `Patch-H-*` passthrough + `Patch-Status`
 - switch mode on responder (`?switch=true`) for dynamic response channel handoff
 - optional non-blocking broadcast on queue send via `?pubsub=true`
+
+Legacy compatibility aliases:
+
+- `/public/*` -> `db_id=public`
+- `/p/*` -> `db_id=public`
+- `/u/{user}/*` -> `db_id={user}`

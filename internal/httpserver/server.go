@@ -56,6 +56,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/admin/tokens", s.handleAdminTokens)
 	mux.HandleFunc("/api/v1/admin/tokens/", s.handleAdminTokenByID)
 	mux.HandleFunc("/api/v1/db/", s.handleDBAPI)
+	mux.HandleFunc("/public/", s.handleLegacyPublicAlias)
+	mux.HandleFunc("/p/", s.handleLegacyShortAlias)
+	mux.HandleFunc("/u/", s.handleLegacyUserAlias)
 
 	return s.instrument(mux)
 }
@@ -378,6 +381,63 @@ func (s *Server) handleWebhookIngest(w http.ResponseWriter, r *http.Request, dbI
 	})
 }
 
+func (s *Server) handleLegacyPublicAlias(w http.ResponseWriter, r *http.Request) {
+	rawPath := strings.TrimPrefix(r.URL.Path, "/public/")
+	s.handleLegacyStreamAlias(w, r, "public", rawPath)
+}
+
+func (s *Server) handleLegacyShortAlias(w http.ResponseWriter, r *http.Request) {
+	rawPath := strings.TrimPrefix(r.URL.Path, "/p/")
+	s.handleLegacyStreamAlias(w, r, "public", rawPath)
+}
+
+func (s *Server) handleLegacyUserAlias(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/u/")
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) != 2 {
+		http.NotFound(w, r)
+		return
+	}
+
+	dbID := strings.TrimSpace(parts[0])
+	rawPath := strings.TrimSpace(parts[1])
+	if dbID == "" || rawPath == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	s.handleLegacyStreamAlias(w, r, dbID, rawPath)
+}
+
+func (s *Server) handleLegacyStreamAlias(w http.ResponseWriter, r *http.Request, dbID, rawPath string) {
+	rawPath = strings.TrimSpace(strings.Trim(rawPath, "/"))
+	if rawPath == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch {
+	case strings.HasPrefix(rawPath, "req/"):
+		reqPath := strings.TrimPrefix(rawPath, "req/")
+		s.handleStreamRequester(w, r, dbID, reqPath)
+	case strings.HasPrefix(rawPath, "res/"):
+		resPath := strings.TrimPrefix(rawPath, "res/")
+		s.handleStreamResponder(w, r, dbID, resPath)
+	case strings.HasPrefix(rawPath, "queue/"):
+		topic := strings.TrimPrefix(rawPath, "queue/")
+		s.handleStreamQueue(w, r, dbID, legacyQueueTopicPath(topic, r.Method))
+	case strings.HasPrefix(rawPath, "pubsub/"):
+		topic := strings.TrimPrefix(rawPath, "pubsub/")
+		reqWithPubsub := requestWithQueryFlag(r, "pubsub", "true")
+		s.handleStreamQueue(w, reqWithPubsub, dbID, legacyQueueTopicPath(topic, r.Method))
+	case strings.HasPrefix(rawPath, "./"):
+		topic := strings.TrimPrefix(rawPath, "./")
+		s.handleStreamQueue(w, r, dbID, legacyQueueTopicPath(topic, r.Method))
+	default:
+		s.handleStreamQueue(w, r, dbID, legacyQueueTopicPath(rawPath, r.Method))
+	}
+}
+
 func (s *Server) handleStreamQueue(w http.ResponseWriter, r *http.Request, dbID, topicPath string) {
 	topic, isNext, ok := parseQueueTopicPath(topicPath)
 	if !ok {
@@ -688,6 +748,27 @@ func normalizeSwitchChannelID(channelID string) string {
 		return ""
 	}
 	return channelID
+}
+
+func legacyQueueTopicPath(topic, method string) string {
+	normalized := normalizeStreamPath(topic)
+	if normalized == "" {
+		return ""
+	}
+	if method == http.MethodGet && !strings.HasSuffix(normalized, "/next") {
+		return normalized + "/next"
+	}
+	return normalized
+}
+
+func requestWithQueryFlag(r *http.Request, key, value string) *http.Request {
+	cloned := r.Clone(r.Context())
+	query := cloned.URL.Query()
+	if strings.TrimSpace(query.Get(key)) == "" {
+		query.Set(key, value)
+		cloned.URL.RawQuery = query.Encode()
+	}
+	return cloned
 }
 
 func prepareStreamHeaders(r *http.Request) map[string]string {
