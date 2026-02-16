@@ -135,8 +135,8 @@ Exit criteria:
   - [x] repeated `topic` filters
   - [x] replay via `since_id` and `tail`
   - [x] wildcard topic matching (`+`, `#`) scoped to DB
-- [ ] Add retained/queued-message groundwork needed for future persistent session support.
-- [ ] Ensure no default TTL is applied unless DB/operator policy defines one.
+- [x] Add retained/queued-message groundwork needed for future persistent session support.
+- [x] Ensure no default TTL is applied unless DB/operator policy defines one.
 
 Exit criteria:
 - publish + replay + wildcard filters validated by integration tests.

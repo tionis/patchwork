@@ -139,6 +139,34 @@ func BootstrapDocument(ctx context.Context, dbPath string) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_topic_id ON messages(topic, id);`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);`,
+		`CREATE TABLE IF NOT EXISTS retained_messages (
+			topic TEXT PRIMARY KEY,
+			message_id INTEGER,
+			payload BLOB NOT NULL,
+			content_type TEXT NOT NULL DEFAULT 'application/json',
+			producer TEXT,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE SET NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_retained_messages_updated_at
+		 ON retained_messages(updated_at);`,
+		`CREATE TABLE IF NOT EXISTS queued_session_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			topic TEXT NOT NULL,
+			payload BLOB NOT NULL,
+			content_type TEXT NOT NULL DEFAULT 'application/json',
+			producer TEXT,
+			dedupe_key TEXT,
+			qos INTEGER NOT NULL DEFAULT 0,
+			queued_at TEXT NOT NULL,
+			expires_at TEXT,
+			delivered_at TEXT
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_queued_session_messages_session_id_id
+		 ON queued_session_messages(session_id, id);`,
+		`CREATE INDEX IF NOT EXISTS idx_queued_session_messages_expires_at
+		 ON queued_session_messages(expires_at);`,
 	}
 
 	for _, stmt := range stmts {

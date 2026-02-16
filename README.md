@@ -107,6 +107,15 @@ SSE event types:
 - `message` (contains persisted message metadata + base64 payload)
 - `heartbeat` (keepalive)
 
+### Persistent Session Groundwork
+
+The document migration now includes schema groundwork for future MQTT/session durability:
+
+- `retained_messages`
+- `queued_session_messages`
+
+No default TTL policy is applied by the service. `expires_at` is nullable and retention remains operator/DB-defined.
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:
