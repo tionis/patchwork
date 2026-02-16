@@ -520,6 +520,8 @@ func (s *Server) handleDBAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleQueryAPI(w, r, dbID, action)
 	case strings.HasPrefix(action, "leases/"):
 		s.handleLeaseAPI(w, r, dbID, action)
+	case strings.HasPrefix(action, "blobs/"):
+		s.handleBlobAPI(w, r, dbID, action)
 	case strings.HasPrefix(action, "streams/queue/"):
 		topicPath := strings.TrimPrefix(action, "streams/queue/")
 		s.handleStreamQueue(w, r, dbID, topicPath)

@@ -205,6 +205,19 @@ Document migration now includes initial blob-control tables:
 
 This establishes DB schema for upcoming blob APIs (`init-upload`, `complete-upload`, claim/release, GC).
 
+Current blob API routes:
+
+- `POST /api/v1/db/:db_id/blobs/init-upload`
+- `PUT /api/v1/db/:db_id/blobs/upload/:blob_id`
+- `POST /api/v1/db/:db_id/blobs/complete-upload`
+- `GET /api/v1/db/:db_id/blobs/:blob_id/read-url`
+- `GET /api/v1/db/:db_id/blobs/object/:blob_id`
+- `POST /api/v1/db/:db_id/blobs/:blob_id/claim`
+- `POST /api/v1/db/:db_id/blobs/:blob_id/release`
+
+`complete-upload` verifies the staged blob hash before marking metadata as `complete`.
+Current implementation uses local disk paths under the service data dir; object-storage pre-signing remains TODO.
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:

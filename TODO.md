@@ -192,14 +192,14 @@ Exit criteria:
 ## Phase 7: Blob Control Plane
 
 - [x] Implement blob metadata schema.
-- [ ] Implement APIs:
-  - [ ] init-upload
-  - [ ] complete-upload
-  - [ ] read-url
-  - [ ] claim
-  - [ ] release
+- [x] Implement APIs:
+  - [x] init-upload
+  - [x] complete-upload
+  - [x] read-url
+  - [x] claim
+  - [x] release
 - [ ] Integrate object storage pre-signing.
-- [ ] Enforce hash verification in `complete-upload`.
+- [x] Enforce hash verification in `complete-upload`.
 - [ ] Add global GC job:
   - [ ] union references from DB `blobs` tables
   - [ ] grace-period deletion rules
