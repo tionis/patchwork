@@ -116,6 +116,31 @@ The document migration now includes schema groundwork for future MQTT/session du
 
 No default TTL policy is applied by the service. `expires_at` is nullable and retention remains operator/DB-defined.
 
+### Query API (Exec)
+
+- Route: `POST /api/v1/db/:db_id/query/exec`
+- Request shape:
+
+```json
+{
+  "sql": "SELECT id, name FROM items WHERE id = ?",
+  "args": [123]
+}
+```
+
+Statement class to scope mapping:
+
+- read statements (`SELECT`, `EXPLAIN`, `WITH`) -> `query.read`
+- write statements (`INSERT`, `UPDATE`, `DELETE`, `REPLACE`) -> `query.write`
+- admin statements (`CREATE`, `ALTER`, `DROP`, `PRAGMA`, etc.) -> `query.admin`
+
+Current resource bounds:
+
+- max execution time: `5s`
+- max rows returned: `5000`
+- max JSON result bytes: `1 MiB`
+- multiple SQL statements in one request are rejected
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:

@@ -108,12 +108,12 @@ Exit criteria:
 
 ## Phase 2: Query API + Reactive Query Watch
 
-- [ ] Implement query execute endpoint(s) under `/api/v1/db/:db_id/query/*`.
-- [ ] Enforce parameterized SQL contract and statement class restrictions by scope:
-  - [ ] `query.read`
-  - [ ] `query.write`
-  - [ ] `query.admin`
-- [ ] Add query resource bounds (time/rows/result bytes).
+- [x] Implement query execute endpoint(s) under `/api/v1/db/:db_id/query/*`.
+- [x] Enforce parameterized SQL contract and statement class restrictions by scope:
+  - [x] `query.read`
+  - [x] `query.write`
+  - [x] `query.admin`
+- [x] Add query resource bounds (time/rows/result bytes).
 - [ ] Implement reactive query watch SSE endpoint:
   - [ ] `POST /api/v1/db/:db_id/query/watch`
   - [ ] events: `snapshot`, `update`, `heartbeat`, `error`

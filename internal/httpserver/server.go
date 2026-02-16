@@ -30,6 +30,9 @@ const (
 	messagePollBatchSize     = 256
 	messageTailMax           = 1000
 	messageHeartbeatInterval = 15 * time.Second
+	queryExecutionTimeout    = 5 * time.Second
+	queryMaxRows             = 5000
+	queryMaxResultBytes      = 1 << 20 // 1 MiB
 )
 
 type publishMessageRequest struct {
@@ -60,6 +63,11 @@ type sseMessageEvent struct {
 	Producer      *string `json:"producer,omitempty"`
 	DedupeKey     *string `json:"dedupe_key,omitempty"`
 	CreatedAt     string  `json:"created_at"`
+}
+
+type queryExecRequest struct {
+	SQL  string `json:"sql"`
+	Args []any  `json:"args,omitempty"`
 }
 
 // Server provides the baseline HTTP API surface for the patchwork service.
@@ -269,6 +277,8 @@ func (s *Server) handleDBAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleMessagePublish(w, r, dbID)
 	case action == "events/stream":
 		s.handleMessageSubscribe(w, r, dbID)
+	case strings.HasPrefix(action, "query/"):
+		s.handleQueryAPI(w, r, dbID, action)
 	case strings.HasPrefix(action, "streams/queue/"):
 		topicPath := strings.TrimPrefix(action, "streams/queue/")
 		s.handleStreamQueue(w, r, dbID, topicPath)
@@ -569,6 +579,182 @@ func (s *Server) handleMessageSubscribe(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 	}
+}
+
+func (s *Server) handleQueryAPI(w http.ResponseWriter, r *http.Request, dbID, action string) {
+	switch action {
+	case "query/exec":
+		s.handleQueryExec(w, r, dbID)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (s *Server) handleQueryExec(w http.ResponseWriter, r *http.Request, dbID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req queryExecRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, "invalid JSON request body", http.StatusBadRequest)
+		return
+	}
+
+	sqlText := strings.TrimSpace(req.SQL)
+	if sqlText == "" {
+		http.Error(w, "sql is required", http.StatusBadRequest)
+		return
+	}
+
+	if hasMultipleStatements(sqlText) {
+		http.Error(w, "multiple SQL statements are not allowed", http.StatusBadRequest)
+		return
+	}
+
+	statementClass := classifyStatementClass(sqlText)
+	requiredAction := queryActionForClass(statementClass)
+
+	if _, err := s.auth.AuthorizeRequest(r, dbID, requiredAction, "/query/exec"); err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+
+	if err := s.runtimes.EnsureDocument(r.Context(), dbID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	execCtx, cancel := context.WithTimeout(r.Context(), queryExecutionTimeout)
+	defer cancel()
+
+	switch statementClass {
+	case "read":
+		columns, rows, bytesCount, err := s.runReadQuery(execCtx, dbID, sqlText, req.Args)
+		if err != nil {
+			switch {
+			case errors.Is(err, errQueryRowsLimitExceeded), errors.Is(err, errQueryResultTooLarge):
+				http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+			default:
+				http.Error(w, err.Error(), http.StatusBadRequest)
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"class":        statementClass,
+			"columns":      columns,
+			"rows":         rows,
+			"row_count":    len(rows),
+			"result_bytes": bytesCount,
+		})
+	default:
+		rowsAffected, lastInsertID, err := s.runExecQuery(execCtx, dbID, sqlText, req.Args)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"class":          statementClass,
+			"rows_affected":  rowsAffected,
+			"last_insert_id": lastInsertID,
+		})
+	}
+}
+
+func (s *Server) runReadQuery(ctx context.Context, dbID, sqlText string, args []any) ([]string, [][]any, int, error) {
+	var (
+		columns    []string
+		resultRows [][]any
+		totalBytes int
+	)
+
+	err := s.runtimes.WithDB(ctx, dbID, func(ctx context.Context, db *sql.DB) error {
+		rows, err := db.QueryContext(ctx, sqlText, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		columns, err = rows.Columns()
+		if err != nil {
+			return err
+		}
+
+		for rows.Next() {
+			if len(resultRows) >= queryMaxRows {
+				return errQueryRowsLimitExceeded
+			}
+
+			scanTargets := make([]any, len(columns))
+			scanHolders := make([]any, len(columns))
+			for i := range scanTargets {
+				scanTargets[i] = &scanHolders[i]
+			}
+
+			if err := rows.Scan(scanTargets...); err != nil {
+				return err
+			}
+
+			rowValues := make([]any, len(columns))
+			for i := range scanHolders {
+				rowValues[i] = normalizeQueryValue(scanHolders[i])
+			}
+
+			rowJSON, err := json.Marshal(rowValues)
+			if err != nil {
+				return err
+			}
+			totalBytes += len(rowJSON)
+			if totalBytes > queryMaxResultBytes {
+				return errQueryResultTooLarge
+			}
+
+			resultRows = append(resultRows, rowValues)
+		}
+
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	return columns, resultRows, totalBytes, nil
+}
+
+func (s *Server) runExecQuery(ctx context.Context, dbID, sqlText string, args []any) (int64, int64, error) {
+	var rowsAffected int64
+	var lastInsertID int64
+
+	err := s.runtimes.WithDB(ctx, dbID, func(ctx context.Context, db *sql.DB) error {
+		result, err := db.ExecContext(ctx, sqlText, args...)
+		if err != nil {
+			return err
+		}
+
+		rowsAffected, err = result.RowsAffected()
+		if err != nil {
+			return err
+		}
+
+		lastInsertID, err = result.LastInsertId()
+		if err != nil {
+			lastInsertID = 0
+		}
+
+		return nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return rowsAffected, lastInsertID, nil
 }
 
 func (s *Server) handleWebhookIngest(w http.ResponseWriter, r *http.Request, dbID, endpoint string) {
@@ -1347,6 +1533,90 @@ func decodeBase64Payload(input string) ([]byte, error) {
 	}
 
 	return nil, err
+}
+
+var (
+	errQueryRowsLimitExceeded = errors.New("query result row limit exceeded")
+	errQueryResultTooLarge    = errors.New("query result byte limit exceeded")
+)
+
+func hasMultipleStatements(sqlText string) bool {
+	trimmed := strings.TrimSpace(sqlText)
+	if trimmed == "" {
+		return false
+	}
+
+	if strings.HasSuffix(trimmed, ";") {
+		trimmed = strings.TrimSuffix(trimmed, ";")
+	}
+
+	return strings.Contains(trimmed, ";")
+}
+
+func classifyStatementClass(sqlText string) string {
+	firstToken := firstSQLToken(sqlText)
+
+	switch firstToken {
+	case "SELECT", "EXPLAIN", "WITH":
+		return "read"
+	case "INSERT", "UPDATE", "DELETE", "REPLACE":
+		return "write"
+	case "CREATE", "ALTER", "DROP", "VACUUM", "PRAGMA", "ATTACH", "DETACH", "REINDEX", "ANALYZE":
+		return "admin"
+	default:
+		return "admin"
+	}
+}
+
+func queryActionForClass(class string) string {
+	switch class {
+	case "read":
+		return "query.read"
+	case "write":
+		return "query.write"
+	default:
+		return "query.admin"
+	}
+}
+
+func firstSQLToken(sqlText string) string {
+	trimmed := strings.TrimSpace(sqlText)
+	if trimmed == "" {
+		return ""
+	}
+
+	for i := 0; i < len(trimmed); i++ {
+		switch trimmed[i] {
+		case ' ', '\n', '\r', '\t', '(':
+			if i == 0 {
+				continue
+			}
+			return strings.ToUpper(strings.TrimSpace(trimmed[:i]))
+		}
+	}
+
+	return strings.ToUpper(trimmed)
+}
+
+func normalizeQueryValue(v any) any {
+	switch value := v.(type) {
+	case nil:
+		return nil
+	case []byte:
+		return base64.StdEncoding.EncodeToString(value)
+	case string:
+		return value
+	case bool:
+		return value
+	case int64:
+		return value
+	case float64:
+		return value
+	case time.Time:
+		return value.UTC().Format(time.RFC3339Nano)
+	default:
+		return fmt.Sprintf("%v", value)
+	}
 }
 
 func parseQueueTopicPath(topicPath string) (topic string, isNext bool, ok bool) {
