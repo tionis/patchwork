@@ -80,6 +80,19 @@ Legacy compatibility aliases:
 - `/p/*` -> `db_id=public`
 - `/u/{user}/*` -> `db_id={user}`
 
+### Durable Messages (Publish)
+
+- Route: `POST /api/v1/db/:db_id/messages`
+- Auth: bearer token with `pub.publish` scope for target `db_id`
+- Durability: message is inserted into SQLite `messages` table before `201 Created` is returned
+- Payload limit: `1 MiB` maximum payload bytes
+
+Accepted payload shapes (exactly one):
+
+- `payload` (raw JSON value, stored as bytes)
+- `payload_base64` (decoded to bytes)
+- `payload_text` (stored as UTF-8 text bytes)
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:

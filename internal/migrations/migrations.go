@@ -128,6 +128,17 @@ func BootstrapDocument(ctx context.Context, dbPath string) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_webhook_inbox_endpoint_id
 		 ON webhook_inbox(endpoint, id);`,
+		`CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			topic TEXT NOT NULL,
+			payload BLOB NOT NULL,
+			content_type TEXT NOT NULL DEFAULT 'application/json',
+			producer TEXT,
+			dedupe_key TEXT,
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_topic_id ON messages(topic, id);`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);`,
 	}
 
 	for _, stmt := range stmts {

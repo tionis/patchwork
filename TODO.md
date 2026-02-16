@@ -125,11 +125,11 @@ Exit criteria:
 
 ## Phase 3: Message PubSub (Durable)
 
-- [ ] Add `messages` storage schema and indexes.
-- [ ] Implement publish endpoint:
-  - [ ] `POST /api/v1/db/:db_id/messages`
-  - [ ] enforce `1 MiB` payload limit
-  - [ ] persist-before-ack behavior
+- [x] Add `messages` storage schema and indexes.
+- [x] Implement publish endpoint:
+  - [x] `POST /api/v1/db/:db_id/messages`
+  - [x] enforce `1 MiB` payload limit
+  - [x] persist-before-ack behavior
 - [ ] Implement SSE subscribe endpoint:
   - [ ] `GET /api/v1/db/:db_id/events/stream`
   - [ ] repeated `topic` filters

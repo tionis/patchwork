@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,21 @@ import (
 	"github.com/tionis/patchwork/internal/docruntime"
 	"github.com/tionis/patchwork/internal/streams"
 )
+
+const (
+	messagePayloadLimitBytes = 1 << 20 // 1 MiB
+	messageBodyLimitBytes    = messagePayloadLimitBytes + (256 << 10)
+)
+
+type publishMessageRequest struct {
+	Topic         string          `json:"topic"`
+	Payload       json.RawMessage `json:"payload,omitempty"`
+	PayloadBase64 string          `json:"payload_base64,omitempty"`
+	PayloadText   string          `json:"payload_text,omitempty"`
+	ContentType   string          `json:"content_type,omitempty"`
+	Producer      string          `json:"producer,omitempty"`
+	DedupeKey     string          `json:"dedupe_key,omitempty"`
+}
 
 // Server provides the baseline HTTP API surface for the patchwork service.
 type Server struct {
@@ -224,6 +240,8 @@ func (s *Server) handleDBAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleDBOpen(w, r, dbID)
 	case action == "_status":
 		s.handleDBStatus(w, r, dbID)
+	case action == "messages":
+		s.handleMessagePublish(w, r, dbID)
 	case strings.HasPrefix(action, "streams/queue/"):
 		topicPath := strings.TrimPrefix(action, "streams/queue/")
 		s.handleStreamQueue(w, r, dbID, topicPath)
@@ -295,6 +313,117 @@ func (s *Server) handleDBStatus(w http.ResponseWriter, r *http.Request, dbID str
 		"path":      path,
 		"healthy":   true,
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+	})
+}
+
+func (s *Server) handleMessagePublish(w http.ResponseWriter, r *http.Request, dbID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, messageBodyLimitBytes)
+
+	var req publishMessageRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, "invalid JSON request body", http.StatusBadRequest)
+		return
+	}
+
+	topic, err := normalizeMessageTopic(req.Topic)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	payload, contentType, err := buildPublishPayload(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if len(payload) > messagePayloadLimitBytes {
+		http.Error(w, "payload exceeds 1 MiB limit", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	if _, err := s.auth.AuthorizeRequest(r, dbID, "pub.publish", topic); err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+
+	if err := s.runtimes.EnsureDocument(r.Context(), dbID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var messageID int64
+
+	err = s.runtimes.WithDB(r.Context(), dbID, func(ctx context.Context, db *sql.DB) error {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin publish tx: %w", err)
+		}
+
+		defer func() {
+			if tx != nil {
+				_ = tx.Rollback()
+			}
+		}()
+
+		result, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO messages (
+				topic,
+				payload,
+				content_type,
+				producer,
+				dedupe_key,
+				created_at
+			) VALUES (?, ?, ?, ?, ?, ?)`,
+			topic,
+			payload,
+			contentType,
+			nullableString(req.Producer),
+			nullableString(req.DedupeKey),
+			now,
+		)
+		if err != nil {
+			return fmt.Errorf("insert message: %w", err)
+		}
+
+		messageID, err = result.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("read message id: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit publish tx: %w", err)
+		}
+		tx = nil
+
+		return nil
+	})
+	if err != nil {
+		s.logger.Warn("failed to persist message", "db_id", dbID, "topic", topic, "error", err)
+		http.Error(w, "failed to persist message", http.StatusInternalServerError)
+		return
+	}
+
+	s.logger.Info("message published", "db_id", dbID, "topic", topic, "message_id", messageID, "size_bytes", len(payload))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":           messageID,
+		"db_id":        dbID,
+		"topic":        topic,
+		"content_type": contentType,
+		"size_bytes":   len(payload),
+		"created_at":   now,
 	})
 }
 
@@ -728,6 +857,81 @@ func (s *Server) forwardSwitchResponse(dbID, responsePath, switchedChannelID, re
 		)
 		return
 	}
+}
+
+func normalizeMessageTopic(topic string) (string, error) {
+	topic = strings.TrimSpace(topic)
+	if topic == "" {
+		return "", fmt.Errorf("topic is required")
+	}
+	if len(topic) > 255 {
+		return "", fmt.Errorf("topic is too long")
+	}
+	if strings.HasPrefix(topic, "/") || strings.HasSuffix(topic, "/") {
+		return "", fmt.Errorf("topic must not start or end with '/'")
+	}
+	return topic, nil
+}
+
+func buildPublishPayload(req publishMessageRequest) ([]byte, string, error) {
+	payloadFields := 0
+	if len(req.Payload) > 0 {
+		payloadFields++
+	}
+	if strings.TrimSpace(req.PayloadBase64) != "" {
+		payloadFields++
+	}
+	if req.PayloadText != "" {
+		payloadFields++
+	}
+
+	if payloadFields != 1 {
+		return nil, "", fmt.Errorf("exactly one payload field is required: payload, payload_base64, or payload_text")
+	}
+
+	contentType := strings.TrimSpace(req.ContentType)
+
+	if len(req.Payload) > 0 {
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		return append([]byte(nil), req.Payload...), contentType, nil
+	}
+
+	if strings.TrimSpace(req.PayloadBase64) != "" {
+		payload, err := decodeBase64Payload(req.PayloadBase64)
+		if err != nil {
+			return nil, "", fmt.Errorf("invalid payload_base64: %w", err)
+		}
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		return payload, contentType, nil
+	}
+
+	if contentType == "" {
+		contentType = "text/plain; charset=utf-8"
+	}
+	return []byte(req.PayloadText), contentType, nil
+}
+
+func decodeBase64Payload(input string) ([]byte, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return nil, fmt.Errorf("empty input")
+	}
+
+	payload, err := base64.StdEncoding.DecodeString(trimmed)
+	if err == nil {
+		return payload, nil
+	}
+
+	payload, rawErr := base64.RawStdEncoding.DecodeString(trimmed)
+	if rawErr == nil {
+		return payload, nil
+	}
+
+	return nil, err
 }
 
 func parseQueueTopicPath(topicPath string) (topic string, isNext bool, ok bool) {
