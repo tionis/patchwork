@@ -130,11 +130,11 @@ Exit criteria:
   - [x] `POST /api/v1/db/:db_id/messages`
   - [x] enforce `1 MiB` payload limit
   - [x] persist-before-ack behavior
-- [ ] Implement SSE subscribe endpoint:
-  - [ ] `GET /api/v1/db/:db_id/events/stream`
-  - [ ] repeated `topic` filters
-  - [ ] replay via `since_id` and `tail`
-  - [ ] wildcard topic matching (`+`, `#`) scoped to DB
+- [x] Implement SSE subscribe endpoint:
+  - [x] `GET /api/v1/db/:db_id/events/stream`
+  - [x] repeated `topic` filters
+  - [x] replay via `since_id` and `tail`
+  - [x] wildcard topic matching (`+`, `#`) scoped to DB
 - [ ] Add retained/queued-message groundwork needed for future persistent session support.
 - [ ] Ensure no default TTL is applied unless DB/operator policy defines one.
 

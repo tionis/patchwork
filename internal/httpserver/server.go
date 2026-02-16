@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,10 @@ import (
 const (
 	messagePayloadLimitBytes = 1 << 20 // 1 MiB
 	messageBodyLimitBytes    = messagePayloadLimitBytes + (256 << 10)
+	messagePollInterval      = 100 * time.Millisecond
+	messagePollBatchSize     = 256
+	messageTailMax           = 1000
+	messageHeartbeatInterval = 15 * time.Second
 )
 
 type publishMessageRequest struct {
@@ -35,6 +40,26 @@ type publishMessageRequest struct {
 	ContentType   string          `json:"content_type,omitempty"`
 	Producer      string          `json:"producer,omitempty"`
 	DedupeKey     string          `json:"dedupe_key,omitempty"`
+}
+
+type storedMessage struct {
+	ID          int64
+	Topic       string
+	Payload     []byte
+	ContentType string
+	Producer    sql.NullString
+	DedupeKey   sql.NullString
+	CreatedAt   string
+}
+
+type sseMessageEvent struct {
+	ID            int64   `json:"id"`
+	Topic         string  `json:"topic"`
+	ContentType   string  `json:"content_type"`
+	PayloadBase64 string  `json:"payload_base64"`
+	Producer      *string `json:"producer,omitempty"`
+	DedupeKey     *string `json:"dedupe_key,omitempty"`
+	CreatedAt     string  `json:"created_at"`
 }
 
 // Server provides the baseline HTTP API surface for the patchwork service.
@@ -242,6 +267,8 @@ func (s *Server) handleDBAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleDBStatus(w, r, dbID)
 	case action == "messages":
 		s.handleMessagePublish(w, r, dbID)
+	case action == "events/stream":
+		s.handleMessageSubscribe(w, r, dbID)
 	case strings.HasPrefix(action, "streams/queue/"):
 		topicPath := strings.TrimPrefix(action, "streams/queue/")
 		s.handleStreamQueue(w, r, dbID, topicPath)
@@ -425,6 +452,123 @@ func (s *Server) handleMessagePublish(w http.ResponseWriter, r *http.Request, db
 		"size_bytes":   len(payload),
 		"created_at":   now,
 	})
+}
+
+func (s *Server) handleMessageSubscribe(w http.ResponseWriter, r *http.Request, dbID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	filters, err := parseTopicFilters(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	replaySinceID, hasSinceID, tail, err := parseReplayParams(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := authorizeSubscribeRequest(s, w, r, dbID, filters); err != nil {
+		return
+	}
+
+	if err := s.runtimes.EnsureDocument(r.Context(), dbID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		flusher = noopFlusher{}
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	lastID := int64(0)
+
+	if hasSinceID {
+		lastID = replaySinceID
+		replayMessages, err := s.queryMessagesSince(r.Context(), dbID, replaySinceID, messageTailMax)
+		if err != nil {
+			s.logger.Warn("query replay messages failed", "db_id", dbID, "error", err)
+			http.Error(w, "failed to query replay messages", http.StatusInternalServerError)
+			return
+		}
+
+		for _, msg := range replayMessages {
+			if msg.ID > lastID {
+				lastID = msg.ID
+			}
+			if !topicMatchesAnyFilter(msg.Topic, filters) {
+				continue
+			}
+			if err := writeMessageSSEEvent(w, flusher, msg); err != nil {
+				return
+			}
+		}
+	} else if tail > 0 {
+		tailMessages, err := s.queryMessagesTail(r.Context(), dbID, tail)
+		if err != nil {
+			s.logger.Warn("query tail messages failed", "db_id", dbID, "error", err)
+			http.Error(w, "failed to query replay messages", http.StatusInternalServerError)
+			return
+		}
+
+		for _, msg := range tailMessages {
+			if msg.ID > lastID {
+				lastID = msg.ID
+			}
+			if !topicMatchesAnyFilter(msg.Topic, filters) {
+				continue
+			}
+			if err := writeMessageSSEEvent(w, flusher, msg); err != nil {
+				return
+			}
+		}
+	}
+
+	pollTicker := time.NewTicker(messagePollInterval)
+	heartbeatTicker := time.NewTicker(messageHeartbeatInterval)
+	defer pollTicker.Stop()
+	defer heartbeatTicker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-pollTicker.C:
+			messages, err := s.queryMessagesSince(r.Context(), dbID, lastID, messagePollBatchSize)
+			if err != nil {
+				s.logger.Warn("query live messages failed", "db_id", dbID, "error", err)
+				return
+			}
+
+			for _, msg := range messages {
+				if msg.ID > lastID {
+					lastID = msg.ID
+				}
+				if !topicMatchesAnyFilter(msg.Topic, filters) {
+					continue
+				}
+				if err := writeMessageSSEEvent(w, flusher, msg); err != nil {
+					return
+				}
+			}
+		case <-heartbeatTicker.C:
+			if err := writeSSEEvent(w, flusher, "heartbeat", "", map[string]string{
+				"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			}); err != nil {
+				return
+			}
+		}
+	}
 }
 
 func (s *Server) handleWebhookIngest(w http.ResponseWriter, r *http.Request, dbID, endpoint string) {
@@ -859,6 +1003,274 @@ func (s *Server) forwardSwitchResponse(dbID, responsePath, switchedChannelID, re
 	}
 }
 
+func parseTopicFilters(values url.Values) ([]string, error) {
+	rawFilters := values["topic"]
+	filters := make([]string, 0, len(rawFilters))
+
+	for _, raw := range rawFilters {
+		filter := strings.TrimSpace(raw)
+		if filter == "" {
+			return nil, fmt.Errorf("topic filter cannot be empty")
+		}
+		if err := validateTopicFilter(filter); err != nil {
+			return nil, err
+		}
+		filters = append(filters, filter)
+	}
+
+	return filters, nil
+}
+
+func parseReplayParams(values url.Values) (sinceID int64, hasSinceID bool, tail int, err error) {
+	sinceRaw := strings.TrimSpace(values.Get("since_id"))
+	tailRaw := strings.TrimSpace(values.Get("tail"))
+
+	if sinceRaw != "" {
+		sinceID, err = strconv.ParseInt(sinceRaw, 10, 64)
+		if err != nil || sinceID < 0 {
+			return 0, false, 0, fmt.Errorf("since_id must be a non-negative integer")
+		}
+		hasSinceID = true
+	}
+
+	if tailRaw != "" {
+		tail, err = strconv.Atoi(tailRaw)
+		if err != nil || tail < 0 {
+			return 0, false, 0, fmt.Errorf("tail must be a non-negative integer")
+		}
+		if tail > messageTailMax {
+			return 0, false, 0, fmt.Errorf("tail must be <= %d", messageTailMax)
+		}
+	}
+
+	if hasSinceID && tail > 0 {
+		return 0, false, 0, fmt.Errorf("since_id and tail cannot be combined")
+	}
+
+	return sinceID, hasSinceID, tail, nil
+}
+
+func authorizeSubscribeRequest(s *Server, w http.ResponseWriter, r *http.Request, dbID string, filters []string) error {
+	if len(filters) == 0 {
+		if _, err := s.auth.AuthorizeRequest(r, dbID, "pub.subscribe", ""); err != nil {
+			s.writeAuthError(w, err)
+			return err
+		}
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(filters))
+	for _, filter := range filters {
+		if _, ok := seen[filter]; ok {
+			continue
+		}
+		seen[filter] = struct{}{}
+		if _, err := s.auth.AuthorizeRequest(r, dbID, "pub.subscribe", filter); err != nil {
+			s.writeAuthError(w, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateTopicFilter(filter string) error {
+	parts := strings.Split(filter, "/")
+	for i, part := range parts {
+		if part == "#" {
+			if i != len(parts)-1 {
+				return fmt.Errorf("topic filter '#' wildcard must be last segment")
+			}
+			continue
+		}
+		if strings.Contains(part, "#") {
+			return fmt.Errorf("topic filter contains invalid '#' wildcard placement")
+		}
+		if part == "+" {
+			continue
+		}
+		if strings.Contains(part, "+") {
+			return fmt.Errorf("topic filter contains invalid '+' wildcard placement")
+		}
+	}
+
+	return nil
+}
+
+func topicMatchesAnyFilter(topic string, filters []string) bool {
+	if len(filters) == 0 {
+		return true
+	}
+
+	for _, filter := range filters {
+		if topicMatchesFilter(topic, filter) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func topicMatchesFilter(topic, filter string) bool {
+	topicParts := strings.Split(topic, "/")
+	filterParts := strings.Split(filter, "/")
+
+	topicIndex := 0
+	filterIndex := 0
+
+	for filterIndex < len(filterParts) {
+		part := filterParts[filterIndex]
+		if part == "#" {
+			return filterIndex == len(filterParts)-1
+		}
+
+		if topicIndex >= len(topicParts) {
+			return false
+		}
+
+		if part != "+" && part != topicParts[topicIndex] {
+			return false
+		}
+
+		topicIndex++
+		filterIndex++
+	}
+
+	return topicIndex == len(topicParts)
+}
+
+func (s *Server) queryMessagesSince(ctx context.Context, dbID string, sinceID int64, limit int) ([]storedMessage, error) {
+	if limit <= 0 {
+		limit = messagePollBatchSize
+	}
+
+	var messages []storedMessage
+	err := s.runtimes.WithDB(ctx, dbID, func(ctx context.Context, db *sql.DB) error {
+		rows, err := db.QueryContext(
+			ctx,
+			`SELECT id, topic, payload, content_type, producer, dedupe_key, created_at
+			 FROM messages
+			 WHERE id > ?
+			 ORDER BY id ASC
+			 LIMIT ?`,
+			sinceID,
+			limit,
+		)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var msg storedMessage
+			if err := rows.Scan(&msg.ID, &msg.Topic, &msg.Payload, &msg.ContentType, &msg.Producer, &msg.DedupeKey, &msg.CreatedAt); err != nil {
+				return err
+			}
+			messages = append(messages, msg)
+		}
+
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
+func (s *Server) queryMessagesTail(ctx context.Context, dbID string, tail int) ([]storedMessage, error) {
+	if tail <= 0 {
+		return []storedMessage{}, nil
+	}
+
+	messages := make([]storedMessage, 0, tail)
+	err := s.runtimes.WithDB(ctx, dbID, func(ctx context.Context, db *sql.DB) error {
+		rows, err := db.QueryContext(
+			ctx,
+			`SELECT id, topic, payload, content_type, producer, dedupe_key, created_at
+			 FROM messages
+			 ORDER BY id DESC
+			 LIMIT ?`,
+			tail,
+		)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var msg storedMessage
+			if err := rows.Scan(&msg.ID, &msg.Topic, &msg.Payload, &msg.ContentType, &msg.Producer, &msg.DedupeKey, &msg.CreatedAt); err != nil {
+				return err
+			}
+			messages = append(messages, msg)
+		}
+
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	return messages, nil
+}
+
+func writeMessageSSEEvent(w http.ResponseWriter, flusher http.Flusher, msg storedMessage) error {
+	event := sseMessageEvent{
+		ID:            msg.ID,
+		Topic:         msg.Topic,
+		ContentType:   msg.ContentType,
+		PayloadBase64: base64.StdEncoding.EncodeToString(msg.Payload),
+		CreatedAt:     msg.CreatedAt,
+	}
+
+	if msg.Producer.Valid {
+		value := msg.Producer.String
+		event.Producer = &value
+	}
+
+	if msg.DedupeKey.Valid {
+		value := msg.DedupeKey.String
+		event.DedupeKey = &value
+	}
+
+	return writeSSEEvent(w, flusher, "message", strconv.FormatInt(msg.ID, 10), event)
+}
+
+func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType, eventID string, data any) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	if eventType != "" {
+		if _, err := fmt.Fprintf(w, "event: %s\n", eventType); err != nil {
+			return err
+		}
+	}
+
+	if eventID != "" {
+		if _, err := fmt.Fprintf(w, "id: %s\n", eventID); err != nil {
+			return err
+		}
+	}
+
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
+		return err
+	}
+
+	flusher.Flush()
+	return nil
+}
+
+type noopFlusher struct{}
+
+func (noopFlusher) Flush() {}
+
 func normalizeMessageTopic(topic string) (string, error) {
 	topic = strings.TrimSpace(topic)
 	if topic == "" {
@@ -869,6 +1281,9 @@ func normalizeMessageTopic(topic string) (string, error) {
 	}
 	if strings.HasPrefix(topic, "/") || strings.HasSuffix(topic, "/") {
 		return "", fmt.Errorf("topic must not start or end with '/'")
+	}
+	if strings.Contains(topic, "+") || strings.Contains(topic, "#") {
+		return "", fmt.Errorf("topic must not contain '+' or '#' wildcards")
 	}
 	return topic, nil
 }

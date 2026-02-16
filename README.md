@@ -93,6 +93,20 @@ Accepted payload shapes (exactly one):
 - `payload_base64` (decoded to bytes)
 - `payload_text` (stored as UTF-8 text bytes)
 
+### Durable Messages (SSE Subscribe)
+
+- Route: `GET /api/v1/db/:db_id/events/stream`
+- Auth: bearer token with `pub.subscribe` scope for target `db_id`
+- Query parameters:
+  - repeated `topic=<filter>` (MQTT wildcards supported: `+`, `#`)
+  - `since_id=<message_id>` for replay from a cursor
+  - `tail=<n>` for replay of the latest `n` messages (max `1000`)
+
+SSE event types:
+
+- `message` (contains persisted message metadata + base64 payload)
+- `heartbeat` (keepalive)
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:
