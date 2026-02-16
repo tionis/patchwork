@@ -209,7 +209,7 @@ Exit criteria:
 
 ## Phase 8: Compatibility and Hardening
 
-- [ ] Build explicit legacy compatibility matrix (`kept / changed / dropped`) in docs.
+- [x] Build explicit legacy compatibility matrix (`kept / changed / dropped`) in docs.
 - [ ] Add load tests for:
   - [ ] query watch under write load
   - [ ] message fanout/replay
