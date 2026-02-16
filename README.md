@@ -90,3 +90,11 @@ Rate limiting middleware is enabled with configurable global and per-token bucke
 - `PATCHWORK_RATE_LIMIT_TOKEN_BURST`
 
 Set an `*_RPS` value to `0` to disable that limiter.
+
+### Sync Scaffolding
+
+The document runtime now exposes minimal sync boundaries for future transport work:
+
+- `ExportSnapshot(ctx, dbID, writer)` on `docruntime.Manager`
+- `SubscribeChanges(ctx, dbID, buffer)` change-feed subscription
+- `RegisterSyncTransportHook(hook)` for adapter-specific event forwarding

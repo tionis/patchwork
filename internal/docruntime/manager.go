@@ -27,6 +27,11 @@ type Manager struct {
 	mu      sync.Mutex
 	workers map[string]*worker
 	closed  bool
+
+	syncMu            sync.Mutex
+	syncSubscribers   map[string]map[uint64]chan ChangeEvent
+	nextSubscriberID  uint64
+	syncTransportHook []SyncTransportHook
 }
 
 type worker struct {
@@ -52,9 +57,10 @@ type request struct {
 // NewManager creates a document runtime manager.
 func NewManager(cfg config.Config, logger *slog.Logger) *Manager {
 	return &Manager{
-		cfg:     cfg,
-		logger:  logger.With("component", "docruntime"),
-		workers: make(map[string]*worker),
+		cfg:             cfg,
+		logger:          logger.With("component", "docruntime"),
+		workers:         make(map[string]*worker),
+		syncSubscribers: make(map[string]map[uint64]chan ChangeEvent),
 	}
 }
 
@@ -160,6 +166,8 @@ func (m *Manager) Close() {
 	for _, w := range workers {
 		<-w.done
 	}
+
+	m.closeSyncSubscribers()
 }
 
 func (m *Manager) getOrCreateWorker(ctx context.Context, dbID string) (*worker, error) {

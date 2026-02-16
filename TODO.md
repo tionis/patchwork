@@ -74,10 +74,10 @@ Prioritize document runtime + sync + OIDC/token UX before secondary capability b
   - [x] one DB worker goroutine per `db_id`
   - [x] channel-based operation dispatch (no connection pool)
   - [x] idle DB worker cleanup policy
-- [ ] Add sync scaffolding per DB document:
-  - [ ] snapshot/export interface
-  - [ ] change-feed/sync event interface
-  - [ ] sync transport hooks (implementation can start minimal, but API boundary must exist)
+- [x] Add sync scaffolding per DB document:
+  - [x] snapshot/export interface
+  - [x] change-feed/sync event interface
+  - [x] sync transport hooks (implementation can start minimal, but API boundary must exist)
 - [x] Add migration runner for service/global metadata and per-DB schema bootstrapping.
 - [x] Add structured logging and baseline Prometheus metrics wiring.
 
