@@ -16,20 +16,28 @@ const (
 	defaultWriteTimeout      = 30 * time.Second
 	defaultIdleTimeout       = 10 * time.Minute
 	defaultCleanupInterval   = 1 * time.Minute
+	defaultGlobalRateRPS     = 200.0
+	defaultGlobalRateBurst   = 400
+	defaultTokenRateRPS      = 50.0
+	defaultTokenRateBurst    = 100
 )
 
 // Config holds process configuration for the patchwork service.
 type Config struct {
-	BindAddr            string
-	DataDir             string
-	DocumentsDir        string
-	ServiceDBPath       string
-	BootstrapAdminToken string
-	ReadHeaderTimeout   time.Duration
-	ReadTimeout         time.Duration
-	WriteTimeout        time.Duration
-	IdleWorkerTimeout   time.Duration
-	CleanupInterval     time.Duration
+	BindAddr             string
+	DataDir              string
+	DocumentsDir         string
+	ServiceDBPath        string
+	BootstrapAdminToken  string
+	ReadHeaderTimeout    time.Duration
+	ReadTimeout          time.Duration
+	WriteTimeout         time.Duration
+	IdleWorkerTimeout    time.Duration
+	CleanupInterval      time.Duration
+	GlobalRateLimitRPS   float64
+	GlobalRateLimitBurst int
+	TokenRateLimitRPS    float64
+	TokenRateLimitBurst  int
 }
 
 // Load reads configuration from environment variables.
@@ -69,6 +77,26 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	cfg.GlobalRateLimitRPS, err = floatFromEnv("PATCHWORK_RATE_LIMIT_GLOBAL_RPS", defaultGlobalRateRPS)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.GlobalRateLimitBurst, err = intFromEnv("PATCHWORK_RATE_LIMIT_GLOBAL_BURST", defaultGlobalRateBurst)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.TokenRateLimitRPS, err = floatFromEnv("PATCHWORK_RATE_LIMIT_TOKEN_RPS", defaultTokenRateRPS)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.TokenRateLimitBurst, err = intFromEnv("PATCHWORK_RATE_LIMIT_TOKEN_BURST", defaultTokenRateBurst)
+	if err != nil {
+		return Config{}, err
+	}
+
 	if cfg.BindAddr == "" {
 		return Config{}, fmt.Errorf("bind address cannot be empty")
 	}
@@ -83,6 +111,30 @@ func Load() (Config, error) {
 
 	if cfg.CleanupInterval > cfg.IdleWorkerTimeout {
 		return Config{}, fmt.Errorf("cleanup interval (%s) must be <= idle worker timeout (%s)", cfg.CleanupInterval, cfg.IdleWorkerTimeout)
+	}
+
+	if cfg.GlobalRateLimitRPS < 0 {
+		return Config{}, fmt.Errorf("global rate limit rps must be >= 0")
+	}
+
+	if cfg.GlobalRateLimitBurst < 0 {
+		return Config{}, fmt.Errorf("global rate limit burst must be >= 0")
+	}
+
+	if cfg.GlobalRateLimitRPS > 0 && cfg.GlobalRateLimitBurst == 0 {
+		return Config{}, fmt.Errorf("global rate limit burst must be > 0 when global rps is enabled")
+	}
+
+	if cfg.TokenRateLimitRPS < 0 {
+		return Config{}, fmt.Errorf("token rate limit rps must be >= 0")
+	}
+
+	if cfg.TokenRateLimitBurst < 0 {
+		return Config{}, fmt.Errorf("token rate limit burst must be >= 0")
+	}
+
+	if cfg.TokenRateLimitRPS > 0 && cfg.TokenRateLimitBurst == 0 {
+		return Config{}, fmt.Errorf("token rate limit burst must be > 0 when token rps is enabled")
 	}
 
 	return cfg, nil
@@ -114,4 +166,32 @@ func durationFromEnv(key string, fallback time.Duration) (time.Duration, error) 
 	}
 
 	return time.Duration(seconds) * time.Second, nil
+}
+
+func intFromEnv(key string, fallback int) (int, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid int for %s: %q", key, value)
+	}
+
+	return parsed, nil
+}
+
+func floatFromEnv(key string, fallback float64) (float64, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid float for %s: %q", key, value)
+	}
+
+	return parsed, nil
 }

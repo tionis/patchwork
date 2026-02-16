@@ -236,16 +236,27 @@ type webhookTestEnv struct {
 }
 
 func newWebhookTestEnv(t *testing.T) *webhookTestEnv {
+	return newWebhookTestEnvWithConfig(t, nil)
+}
+
+func newWebhookTestEnvWithConfig(t *testing.T, mutate func(*config.Config)) *webhookTestEnv {
 	t.Helper()
 
 	baseDir := t.TempDir()
 	cfg := config.Config{
-		BindAddr:          ":0",
-		DataDir:           baseDir,
-		DocumentsDir:      filepath.Join(baseDir, "documents"),
-		ServiceDBPath:     filepath.Join(baseDir, "service.db"),
-		IdleWorkerTimeout: time.Minute,
-		CleanupInterval:   10 * time.Second,
+		BindAddr:             ":0",
+		DataDir:              baseDir,
+		DocumentsDir:         filepath.Join(baseDir, "documents"),
+		ServiceDBPath:        filepath.Join(baseDir, "service.db"),
+		IdleWorkerTimeout:    time.Minute,
+		CleanupInterval:      10 * time.Second,
+		GlobalRateLimitRPS:   1000,
+		GlobalRateLimitBurst: 1000,
+		TokenRateLimitRPS:    1000,
+		TokenRateLimitBurst:  1000,
+	}
+	if mutate != nil {
+		mutate(&cfg)
 	}
 
 	if err := migrations.BootstrapService(context.Background(), cfg.DataDir, cfg.DocumentsDir, cfg.ServiceDBPath); err != nil {

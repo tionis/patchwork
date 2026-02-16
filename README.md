@@ -79,3 +79,14 @@ Legacy compatibility aliases:
 - `/public/*` -> `db_id=public`
 - `/p/*` -> `db_id=public`
 - `/u/{user}/*` -> `db_id={user}`
+
+### Request Rate Limiting
+
+Rate limiting middleware is enabled with configurable global and per-token buckets:
+
+- `PATCHWORK_RATE_LIMIT_GLOBAL_RPS`
+- `PATCHWORK_RATE_LIMIT_GLOBAL_BURST`
+- `PATCHWORK_RATE_LIMIT_TOKEN_RPS`
+- `PATCHWORK_RATE_LIMIT_TOKEN_BURST`
+
+Set an `*_RPS` value to `0` to disable that limiter.

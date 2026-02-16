@@ -101,7 +101,7 @@ Exit criteria:
   - [x] token hash validation
   - [x] expiry checks
 - [x] Implement ACL evaluator for DB-scoped actions and optional topic/resource prefixes.
-- [ ] Add request rate limiting (global + per-token hooks for future tuning).
+- [x] Add request rate limiting (global + per-token hooks for future tuning).
 
 Exit criteria:
 - OIDC web login works, machine tokens can be minted in UI, and auth/ACL behavior is tested for all MVP actions.

@@ -23,26 +23,37 @@ import (
 
 // Server provides the baseline HTTP API surface for the patchwork service.
 type Server struct {
-	cfg      config.Config
-	logger   *slog.Logger
-	runtimes *docruntime.Manager
-	auth     *auth.Service
-	streams  *streams.Manager
-	webhooks WebhookValidationHook
-	started  time.Time
-	metrics  *metricStore
+	cfg                   config.Config
+	logger                *slog.Logger
+	runtimes              *docruntime.Manager
+	auth                  *auth.Service
+	streams               *streams.Manager
+	webhooks              WebhookValidationHook
+	globalLimiter         *simpleLimiter
+	tokenLimiterRPS       float64
+	tokenLimiterBurst     int
+	tokenLimitersMu       sync.Mutex
+	tokenLimiters         map[string]*tokenLimiterEntry
+	lastTokenLimiterSweep time.Time
+	started               time.Time
+	metrics               *metricStore
 }
 
 // New constructs a new API server.
 func New(cfg config.Config, logger *slog.Logger, runtimes *docruntime.Manager, authSvc *auth.Service) *Server {
 	return &Server{
-		cfg:      cfg,
-		logger:   logger.With("component", "httpserver"),
-		runtimes: runtimes,
-		auth:     authSvc,
-		streams:  streams.NewManager(logger),
-		started:  time.Now().UTC(),
-		metrics:  newMetricStore(),
+		cfg:                   cfg,
+		logger:                logger.With("component", "httpserver"),
+		runtimes:              runtimes,
+		auth:                  authSvc,
+		streams:               streams.NewManager(logger),
+		globalLimiter:         newSimpleLimiter(cfg.GlobalRateLimitRPS, cfg.GlobalRateLimitBurst),
+		tokenLimiterRPS:       cfg.TokenRateLimitRPS,
+		tokenLimiterBurst:     cfg.TokenRateLimitBurst,
+		tokenLimiters:         make(map[string]*tokenLimiterEntry),
+		lastTokenLimiterSweep: time.Now(),
+		started:               time.Now().UTC(),
+		metrics:               newMetricStore(),
 	}
 }
 
@@ -65,7 +76,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/p/", s.handleLegacyShortAlias)
 	mux.HandleFunc("/u/", s.handleLegacyUserAlias)
 
-	return s.instrument(mux)
+	return s.instrument(s.rateLimit(mux))
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
