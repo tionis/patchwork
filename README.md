@@ -187,6 +187,15 @@ Behavior:
 - transactional lease updates use `BEGIN IMMEDIATE` lock discipline
 - `ValidateLeaseFence(...)` exists as an internal hook for protected operations
 
+### Token Management UI
+
+- Route: `GET /ui/tokens`
+- Provides a lightweight admin page for machine token create/list/revoke flows against:
+  - `GET /api/v1/admin/tokens`
+  - `POST /api/v1/admin/tokens`
+  - `DELETE /api/v1/admin/tokens/:id`
+- Plaintext token is only shown in the create response payload.
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:

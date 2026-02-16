@@ -120,6 +120,184 @@ type leaseRecord struct {
 	UpdatedAt time.Time
 }
 
+const tokenUIHTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Patchwork Token Admin</title>
+  <style>
+    :root { color-scheme: light; }
+    body { font-family: "IBM Plex Sans", "Segoe UI", sans-serif; margin: 24px; background: #f7f8fb; color: #162033; }
+    h1 { margin-top: 0; }
+    .card { background: white; border: 1px solid #d5dbe8; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    label { display: block; margin-top: 8px; font-weight: 600; }
+    input, textarea { width: 100%; box-sizing: border-box; margin-top: 4px; border: 1px solid #b8c0d5; border-radius: 6px; padding: 8px; }
+    textarea { min-height: 90px; font-family: "IBM Plex Mono", monospace; }
+    button { margin-top: 12px; background: #1449d6; color: white; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+    button.secondary { background: #516080; }
+    pre { background: #0f172a; color: #e5e7eb; padding: 12px; border-radius: 8px; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #e2e8f0; text-align: left; padding: 8px; vertical-align: top; }
+    code { background: #eef2ff; padding: 2px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Patchwork Machine Tokens</h1>
+
+  <div class="card">
+    <label for="authToken">Admin Token</label>
+    <input id="authToken" type="password" placeholder="Paste an admin token (scope: admin.token)" />
+    <button class="secondary" onclick="loadTokens()">Load Tokens</button>
+  </div>
+
+  <div class="card">
+    <h2>Create Token</h2>
+    <label for="label">Label</label>
+    <input id="label" placeholder="worker-a" />
+    <label><input id="isAdmin" type="checkbox" /> Is Admin</label>
+    <label for="expiresAt">Expires At (RFC3339, optional)</label>
+    <input id="expiresAt" placeholder="2026-12-31T23:59:59Z" />
+    <label for="scopes">Scopes (one per line: db_id,action,resource_prefix)</label>
+    <textarea id="scopes" placeholder="public,query.read,&#10;public,stream.write,jobs/"></textarea>
+    <button onclick="createToken()">Create Token</button>
+    <pre id="createResult">No token created yet.</pre>
+  </div>
+
+  <div class="card">
+    <h2>Token List</h2>
+    <button class="secondary" onclick="loadTokens()">Refresh</button>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Label</th>
+          <th>Admin</th>
+          <th>Expires</th>
+          <th>Revoked</th>
+          <th>Scopes</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="tokenRows"></tbody>
+    </table>
+  </div>
+
+  <script>
+    function getAuthHeader() {
+      var token = document.getElementById("authToken").value.trim();
+      if (!token) {
+        throw new Error("Admin token is required");
+      }
+      return { "Authorization": "Bearer " + token };
+    }
+
+    function parseScopesInput() {
+      var raw = document.getElementById("scopes").value.trim();
+      if (!raw) return [];
+      var lines = raw.split("\n");
+      var scopes = [];
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (!line) continue;
+        var parts = line.split(",");
+        if (parts.length < 2) {
+          throw new Error("Invalid scope line: " + line);
+        }
+        scopes.push({
+          db_id: parts[0].trim(),
+          action: parts[1].trim(),
+          resource_prefix: (parts[2] || "").trim()
+        });
+      }
+      return scopes;
+    }
+
+    async function createToken() {
+      try {
+        var headers = Object.assign({ "Content-Type": "application/json" }, getAuthHeader());
+        var body = {
+          label: document.getElementById("label").value.trim(),
+          is_admin: document.getElementById("isAdmin").checked,
+          scopes: parseScopesInput()
+        };
+        var expiresAt = document.getElementById("expiresAt").value.trim();
+        if (expiresAt) body.expires_at = expiresAt;
+
+        var res = await fetch("/api/v1/admin/tokens", {
+          method: "POST",
+          headers: headers,
+          body: JSON.stringify(body)
+        });
+
+        var text = await res.text();
+        if (!res.ok) {
+          throw new Error("Create failed: " + text);
+        }
+
+        document.getElementById("createResult").textContent = text;
+        await loadTokens();
+      } catch (err) {
+        document.getElementById("createResult").textContent = String(err);
+      }
+    }
+
+    async function loadTokens() {
+      var tbody = document.getElementById("tokenRows");
+      tbody.innerHTML = "";
+      try {
+        var res = await fetch("/api/v1/admin/tokens", { headers: getAuthHeader() });
+        var text = await res.text();
+        if (!res.ok) {
+          throw new Error("Load failed: " + text);
+        }
+        var data = JSON.parse(text);
+        var tokens = data.tokens || [];
+        for (var i = 0; i < tokens.length; i++) {
+          var token = tokens[i];
+          var tr = document.createElement("tr");
+
+          var scopes = (token.scopes || []).map(function(s) {
+            return s.db_id + ":" + s.action + (s.resource_prefix ? ":" + s.resource_prefix : "");
+          }).join("\n");
+
+          tr.innerHTML =
+            "<td><code>" + token.id + "</code></td>" +
+            "<td>" + token.label + "</td>" +
+            "<td>" + String(!!token.is_admin) + "</td>" +
+            "<td>" + (token.expires_at || "") + "</td>" +
+            "<td>" + (token.revoked_at || "") + "</td>" +
+            "<td><pre>" + scopes + "</pre></td>" +
+            "<td><button onclick=\"revokeToken('" + token.id + "')\">Revoke</button></td>";
+          tbody.appendChild(tr);
+        }
+      } catch (err) {
+        var tr = document.createElement("tr");
+        tr.innerHTML = "<td colspan=\"7\">" + String(err) + "</td>";
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function revokeToken(tokenID) {
+      if (!confirm("Revoke token " + tokenID + "?")) return;
+      try {
+        var res = await fetch("/api/v1/admin/tokens/" + encodeURIComponent(tokenID), {
+          method: "DELETE",
+          headers: getAuthHeader()
+        });
+        if (!res.ok && res.status !== 204) {
+          var text = await res.text();
+          throw new Error("Revoke failed: " + text);
+        }
+        await loadTokens();
+      } catch (err) {
+        alert(String(err));
+      }
+    }
+  </script>
+</body>
+</html>`
+
 // Server provides the baseline HTTP API surface for the patchwork service.
 type Server struct {
 	cfg                   config.Config
@@ -170,6 +348,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/api/v1/admin/tokens", s.handleAdminTokens)
 	mux.HandleFunc("/api/v1/admin/tokens/", s.handleAdminTokenByID)
+	mux.HandleFunc("/ui/tokens", s.handleTokenUI)
 	mux.HandleFunc("/api/v1/db/", s.handleDBAPI)
 	mux.HandleFunc("/public/", s.handleLegacyPublicAlias)
 	mux.HandleFunc("/p/", s.handleLegacyShortAlias)
@@ -309,6 +488,16 @@ func (s *Server) handleAdminTokenByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleTokenUI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = io.WriteString(w, tokenUIHTML)
 }
 
 func (s *Server) handleDBAPI(w http.ResponseWriter, r *http.Request) {

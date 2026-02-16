@@ -92,10 +92,10 @@ Exit criteria:
   - [ ] user identity binding for ownership/audit
 - [x] Implement token storage schema with hashed token secrets.
 - [x] Implement token issue/revoke/list endpoints for machine credentials (`admin.token` scope).
-- [ ] Implement web UI/API for machine token management:
-  - [ ] create token with DB/action scopes
-  - [ ] list/revoke token metadata
-  - [ ] show plaintext token only at creation time
+- [x] Implement web UI/API for machine token management:
+  - [x] create token with DB/action scopes
+  - [x] list/revoke token metadata
+  - [x] show plaintext token only at creation time
 - [x] Implement auth middleware:
   - [x] parse `Authorization` header
   - [x] token hash validation
