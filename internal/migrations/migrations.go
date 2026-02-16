@@ -167,6 +167,16 @@ func BootstrapDocument(ctx context.Context, dbPath string) error {
 		 ON queued_session_messages(session_id, id);`,
 		`CREATE INDEX IF NOT EXISTS idx_queued_session_messages_expires_at
 		 ON queued_session_messages(expires_at);`,
+		`CREATE TABLE IF NOT EXISTS fencing_tokens (
+			resource TEXT PRIMARY KEY,
+			owner TEXT NOT NULL,
+			token_hash BLOB NOT NULL,
+			fence INTEGER NOT NULL,
+			expires_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_fencing_tokens_expires_at
+		 ON fencing_tokens(expires_at);`,
 	}
 
 	for _, stmt := range stmts {

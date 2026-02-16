@@ -164,6 +164,28 @@ Behavior:
 - `result_hash` is deterministic (hash over canonical `columns + rows` JSON)
 - v0 invalidation: active watches are reevaluated on committed document writes
 
+### Lease / Fencing API
+
+Routes:
+
+- `POST /api/v1/db/:db_id/leases/acquire`
+- `POST /api/v1/db/:db_id/leases/renew`
+- `POST /api/v1/db/:db_id/leases/release`
+
+Auth scopes:
+
+- `lease.acquire`
+- `lease.renew`
+- `lease.release`
+
+Behavior:
+
+- acquire returns a monotonic `fence` and a lease token (token hash persisted)
+- renew keeps the same fence and extends expiry when owner+token match
+- release requires owner+token match
+- transactional lease updates use `BEGIN IMMEDIATE` lock discipline
+- `ValidateLeaseFence(...)` exists as an internal hook for protected operations
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:

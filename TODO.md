@@ -177,14 +177,14 @@ Exit criteria:
 
 ## Phase 6: Lease/Fencing API
 
-- [ ] Implement `fencing_tokens` schema bootstrap.
-- [ ] Implement endpoints:
-  - [ ] acquire
-  - [ ] renew
-  - [ ] release
-- [ ] Enforce monotonic fence behavior and owner checks.
-- [ ] Use transactional lock discipline (`BEGIN IMMEDIATE`) in DB worker.
-- [ ] Add fence validation hooks for protected operations.
+- [x] Implement `fencing_tokens` schema bootstrap.
+- [x] Implement endpoints:
+  - [x] acquire
+  - [x] renew
+  - [x] release
+- [x] Enforce monotonic fence behavior and owner checks.
+- [x] Use transactional lock discipline (`BEGIN IMMEDIATE`) in DB worker.
+- [x] Add fence validation hooks for protected operations.
 
 Exit criteria:
 - concurrent lease tests verify monotonicity and conflict correctness.

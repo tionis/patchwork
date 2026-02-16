@@ -34,6 +34,7 @@ func TestBootstrapDocumentCreatesMessageGroundworkTables(t *testing.T) {
 		"messages",
 		"retained_messages",
 		"queued_session_messages",
+		"fencing_tokens",
 	}
 
 	for _, table := range requiredTables {

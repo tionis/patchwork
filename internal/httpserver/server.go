@@ -2,7 +2,9 @@ package httpserver
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
@@ -35,6 +37,8 @@ const (
 	queryExecutionTimeout    = 5 * time.Second
 	queryMaxRows             = 5000
 	queryMaxResultBytes      = 1 << 20 // 1 MiB
+	leaseDefaultTTLSeconds   = 30
+	leaseMaxTTLSeconds       = 3600
 )
 
 type publishMessageRequest struct {
@@ -86,6 +90,34 @@ type queryWatchEvent struct {
 	Rows       [][]any  `json:"rows"`
 	RowCount   int      `json:"row_count"`
 	ResultHash string   `json:"result_hash"`
+}
+
+type leaseAcquireRequest struct {
+	Resource   string `json:"resource"`
+	Owner      string `json:"owner"`
+	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+}
+
+type leaseRenewRequest struct {
+	Resource   string `json:"resource"`
+	Owner      string `json:"owner"`
+	Token      string `json:"token"`
+	TTLSeconds int    `json:"ttl_seconds,omitempty"`
+}
+
+type leaseReleaseRequest struct {
+	Resource string `json:"resource"`
+	Owner    string `json:"owner"`
+	Token    string `json:"token"`
+}
+
+type leaseRecord struct {
+	Resource  string
+	Owner     string
+	TokenHash []byte
+	Fence     int64
+	ExpiresAt time.Time
+	UpdatedAt time.Time
 }
 
 // Server provides the baseline HTTP API surface for the patchwork service.
@@ -297,6 +329,8 @@ func (s *Server) handleDBAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleMessageSubscribe(w, r, dbID)
 	case strings.HasPrefix(action, "query/"):
 		s.handleQueryAPI(w, r, dbID, action)
+	case strings.HasPrefix(action, "leases/"):
+		s.handleLeaseAPI(w, r, dbID, action)
 	case strings.HasPrefix(action, "streams/queue/"):
 		topicPath := strings.TrimPrefix(action, "streams/queue/")
 		s.handleStreamQueue(w, r, dbID, topicPath)
@@ -945,6 +979,274 @@ func (s *Server) runExecQuery(ctx context.Context, dbID, sqlText string, args []
 	}
 
 	return rowsAffected, lastInsertID, nil
+}
+
+func (s *Server) handleLeaseAPI(w http.ResponseWriter, r *http.Request, dbID, action string) {
+	switch action {
+	case "leases/acquire":
+		s.handleLeaseAcquire(w, r, dbID)
+	case "leases/renew":
+		s.handleLeaseRenew(w, r, dbID)
+	case "leases/release":
+		s.handleLeaseRelease(w, r, dbID)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (s *Server) handleLeaseAcquire(w http.ResponseWriter, r *http.Request, dbID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req leaseAcquireRequest
+	if err := decodeRequestJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	resource, owner, ttlSeconds, err := normalizeLeaseAcquireInput(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if _, err := s.auth.AuthorizeRequest(r, dbID, "lease.acquire", resource); err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+
+	if err := s.runtimes.EnsureDocument(r.Context(), dbID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	token, tokenHash, err := generateLeaseToken()
+	if err != nil {
+		http.Error(w, "failed to generate lease token", http.StatusInternalServerError)
+		return
+	}
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Duration(ttlSeconds) * time.Second)
+
+	var fence int64
+	err = s.runtimes.WithDB(r.Context(), dbID, func(ctx context.Context, db *sql.DB) error {
+		return withImmediateTx(ctx, db, func(conn dbExecutor) error {
+			record, err := selectLeaseRecord(ctx, conn, resource)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+
+			if err == nil && record.ExpiresAt.After(now) {
+				return errLeaseConflict
+			}
+
+			if err == nil {
+				fence = record.Fence + 1
+			} else {
+				fence = 1
+			}
+
+			_, err = conn.ExecContext(
+				ctx,
+				`INSERT INTO fencing_tokens(resource, owner, token_hash, fence, expires_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?)
+				 ON CONFLICT(resource) DO UPDATE SET
+				   owner = excluded.owner,
+				   token_hash = excluded.token_hash,
+				   fence = excluded.fence,
+				   expires_at = excluded.expires_at,
+				   updated_at = excluded.updated_at`,
+				resource,
+				owner,
+				tokenHash[:],
+				fence,
+				expiresAt.Format(time.RFC3339Nano),
+				now.Format(time.RFC3339Nano),
+			)
+			return err
+		})
+	})
+	if err != nil {
+		if errors.Is(err, errLeaseConflict) {
+			http.Error(w, "lease is currently held by another owner", http.StatusConflict)
+			return
+		}
+		http.Error(w, "failed to acquire lease", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"resource":   resource,
+		"owner":      owner,
+		"fence":      fence,
+		"token":      token,
+		"expires_at": expiresAt.Format(time.RFC3339Nano),
+	})
+}
+
+func (s *Server) handleLeaseRenew(w http.ResponseWriter, r *http.Request, dbID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req leaseRenewRequest
+	if err := decodeRequestJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	resource, owner, token, ttlSeconds, err := normalizeLeaseRenewInput(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if _, err := s.auth.AuthorizeRequest(r, dbID, "lease.renew", resource); err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+
+	if err := s.runtimes.EnsureDocument(r.Context(), dbID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Duration(ttlSeconds) * time.Second)
+	tokenHash := sha256.Sum256([]byte(token))
+
+	var fence int64
+	err = s.runtimes.WithDB(r.Context(), dbID, func(ctx context.Context, db *sql.DB) error {
+		return withImmediateTx(ctx, db, func(conn dbExecutor) error {
+			record, err := selectLeaseRecord(ctx, conn, resource)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return errLeaseNotFound
+				}
+				return err
+			}
+
+			if record.ExpiresAt.Before(now) {
+				return errLeaseNotFound
+			}
+
+			if record.Owner != owner {
+				return errLeaseConflict
+			}
+
+			if subtle.ConstantTimeCompare(record.TokenHash, tokenHash[:]) != 1 {
+				return errLeaseUnauthorized
+			}
+
+			fence = record.Fence
+
+			_, err = conn.ExecContext(
+				ctx,
+				`UPDATE fencing_tokens
+				 SET expires_at = ?, updated_at = ?
+				 WHERE resource = ?`,
+				expiresAt.Format(time.RFC3339Nano),
+				now.Format(time.RFC3339Nano),
+				resource,
+			)
+			return err
+		})
+	})
+	if err != nil {
+		s.writeLeaseError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"resource":   resource,
+		"owner":      owner,
+		"fence":      fence,
+		"expires_at": expiresAt.Format(time.RFC3339Nano),
+		"renewed":    true,
+	})
+}
+
+func (s *Server) handleLeaseRelease(w http.ResponseWriter, r *http.Request, dbID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req leaseReleaseRequest
+	if err := decodeRequestJSON(r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	resource, owner, token, err := normalizeLeaseReleaseInput(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if _, err := s.auth.AuthorizeRequest(r, dbID, "lease.release", resource); err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+
+	if err := s.runtimes.EnsureDocument(r.Context(), dbID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	tokenHash := sha256.Sum256([]byte(token))
+	now := time.Now().UTC()
+	releasedHash := sha256.Sum256([]byte(resource + "|" + owner + "|" + now.Format(time.RFC3339Nano)))
+
+	err = s.runtimes.WithDB(r.Context(), dbID, func(ctx context.Context, db *sql.DB) error {
+		return withImmediateTx(ctx, db, func(conn dbExecutor) error {
+			record, err := selectLeaseRecord(ctx, conn, resource)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return errLeaseNotFound
+				}
+				return err
+			}
+
+			if record.Owner != owner {
+				return errLeaseConflict
+			}
+
+			if subtle.ConstantTimeCompare(record.TokenHash, tokenHash[:]) != 1 {
+				return errLeaseUnauthorized
+			}
+
+			_, err = conn.ExecContext(
+				ctx,
+				`UPDATE fencing_tokens
+				 SET owner = ?, token_hash = ?, expires_at = ?, updated_at = ?
+				 WHERE resource = ?`,
+				"released",
+				releasedHash[:],
+				now.Format(time.RFC3339Nano),
+				now.Format(time.RFC3339Nano),
+				resource,
+			)
+			return err
+		})
+	})
+	if err != nil {
+		s.writeLeaseError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"resource": resource,
+		"owner":    owner,
+		"released": true,
+	})
 }
 
 func (s *Server) handleWebhookIngest(w http.ResponseWriter, r *http.Request, dbID, endpoint string) {
@@ -1736,7 +2038,219 @@ func decodeBase64Payload(input string) ([]byte, error) {
 var (
 	errQueryRowsLimitExceeded = errors.New("query result row limit exceeded")
 	errQueryResultTooLarge    = errors.New("query result byte limit exceeded")
+	errLeaseConflict          = errors.New("lease conflict")
+	errLeaseNotFound          = errors.New("lease not found")
+	errLeaseUnauthorized      = errors.New("lease token mismatch")
+	errLeaseFenceMismatch     = errors.New("lease fence mismatch")
 )
+
+func decodeRequestJSON(r *http.Request, out any) error {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return fmt.Errorf("invalid JSON request body")
+	}
+	return nil
+}
+
+func normalizeLeaseAcquireInput(req leaseAcquireRequest) (resource, owner string, ttlSeconds int, err error) {
+	resource = strings.TrimSpace(req.Resource)
+	owner = strings.TrimSpace(req.Owner)
+	ttlSeconds = req.TTLSeconds
+	if ttlSeconds == 0 {
+		ttlSeconds = leaseDefaultTTLSeconds
+	}
+
+	if resource == "" {
+		return "", "", 0, fmt.Errorf("resource is required")
+	}
+	if owner == "" {
+		return "", "", 0, fmt.Errorf("owner is required")
+	}
+	if ttlSeconds <= 0 || ttlSeconds > leaseMaxTTLSeconds {
+		return "", "", 0, fmt.Errorf("ttl_seconds must be between 1 and %d", leaseMaxTTLSeconds)
+	}
+
+	return resource, owner, ttlSeconds, nil
+}
+
+func normalizeLeaseRenewInput(req leaseRenewRequest) (resource, owner, token string, ttlSeconds int, err error) {
+	resource = strings.TrimSpace(req.Resource)
+	owner = strings.TrimSpace(req.Owner)
+	token = strings.TrimSpace(req.Token)
+	ttlSeconds = req.TTLSeconds
+	if ttlSeconds == 0 {
+		ttlSeconds = leaseDefaultTTLSeconds
+	}
+
+	if resource == "" {
+		return "", "", "", 0, fmt.Errorf("resource is required")
+	}
+	if owner == "" {
+		return "", "", "", 0, fmt.Errorf("owner is required")
+	}
+	if token == "" {
+		return "", "", "", 0, fmt.Errorf("token is required")
+	}
+	if ttlSeconds <= 0 || ttlSeconds > leaseMaxTTLSeconds {
+		return "", "", "", 0, fmt.Errorf("ttl_seconds must be between 1 and %d", leaseMaxTTLSeconds)
+	}
+
+	return resource, owner, token, ttlSeconds, nil
+}
+
+func normalizeLeaseReleaseInput(req leaseReleaseRequest) (resource, owner, token string, err error) {
+	resource = strings.TrimSpace(req.Resource)
+	owner = strings.TrimSpace(req.Owner)
+	token = strings.TrimSpace(req.Token)
+
+	if resource == "" {
+		return "", "", "", fmt.Errorf("resource is required")
+	}
+	if owner == "" {
+		return "", "", "", fmt.Errorf("owner is required")
+	}
+	if token == "" {
+		return "", "", "", fmt.Errorf("token is required")
+	}
+
+	return resource, owner, token, nil
+}
+
+func generateLeaseToken() (string, [32]byte, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", [32]byte{}, err
+	}
+
+	token := "ltk_" + base64.RawURLEncoding.EncodeToString(raw)
+	return token, sha256.Sum256([]byte(token)), nil
+}
+
+type dbExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func withImmediateTx(ctx context.Context, db *sql.DB, fn func(dbExecutor) error) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return err
+	}
+
+	if err := fn(conn); err != nil {
+		return err
+	}
+
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func selectLeaseRecord(ctx context.Context, exec dbExecutor, resource string) (leaseRecord, error) {
+	var record leaseRecord
+	var expiresAtRaw string
+	var updatedAtRaw string
+
+	err := exec.QueryRowContext(
+		ctx,
+		`SELECT resource, owner, token_hash, fence, expires_at, updated_at
+		 FROM fencing_tokens
+		 WHERE resource = ?`,
+		resource,
+	).Scan(&record.Resource, &record.Owner, &record.TokenHash, &record.Fence, &expiresAtRaw, &updatedAtRaw)
+	if err != nil {
+		return leaseRecord{}, err
+	}
+
+	expiresAt, err := time.Parse(time.RFC3339Nano, expiresAtRaw)
+	if err != nil {
+		return leaseRecord{}, err
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, updatedAtRaw)
+	if err != nil {
+		return leaseRecord{}, err
+	}
+
+	record.ExpiresAt = expiresAt
+	record.UpdatedAt = updatedAt
+
+	return record, nil
+}
+
+func (s *Server) writeLeaseError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errLeaseNotFound):
+		http.Error(w, "lease not found", http.StatusNotFound)
+	case errors.Is(err, errLeaseConflict):
+		http.Error(w, "lease conflict", http.StatusConflict)
+	case errors.Is(err, errLeaseUnauthorized):
+		http.Error(w, "lease token mismatch", http.StatusUnauthorized)
+	default:
+		http.Error(w, "lease operation failed", http.StatusInternalServerError)
+	}
+}
+
+// ValidateLeaseFence is a hook for protected operations that need fencing checks.
+func (s *Server) ValidateLeaseFence(ctx context.Context, dbID, resource string, fence int64, token string) error {
+	if fence <= 0 {
+		return errLeaseFenceMismatch
+	}
+	if strings.TrimSpace(resource) == "" || strings.TrimSpace(token) == "" {
+		return errLeaseUnauthorized
+	}
+
+	tokenHash := sha256.Sum256([]byte(strings.TrimSpace(token)))
+	now := time.Now().UTC()
+
+	var validateErr error
+	err := s.runtimes.WithDB(ctx, dbID, func(ctx context.Context, db *sql.DB) error {
+		record, err := selectLeaseRecord(ctx, db, resource)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				validateErr = errLeaseNotFound
+				return nil
+			}
+			return err
+		}
+
+		if record.ExpiresAt.Before(now) {
+			validateErr = errLeaseNotFound
+			return nil
+		}
+
+		if subtle.ConstantTimeCompare(record.TokenHash, tokenHash[:]) != 1 {
+			validateErr = errLeaseUnauthorized
+			return nil
+		}
+
+		if record.Fence != fence {
+			validateErr = errLeaseFenceMismatch
+			return nil
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	return validateErr
+}
 
 func hasMultipleStatements(sqlText string) bool {
 	trimmed := strings.TrimSpace(sqlText)
