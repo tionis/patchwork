@@ -34,6 +34,7 @@ func BootstrapService(ctx context.Context, dataDir, documentsDir, serviceDBPath 
 	stmts := []string{
 		`PRAGMA journal_mode=WAL;`,
 		`PRAGMA synchronous=NORMAL;`,
+		`PRAGMA foreign_keys=ON;`,
 		`CREATE TABLE IF NOT EXISTS service_metadata (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL,
@@ -68,6 +69,30 @@ func BootstrapService(ctx context.Context, dataDir, documentsDir, serviceDBPath 
 		 ON auth_token_scopes(token_id, db_id, action, resource_prefix);`,
 		`CREATE INDEX IF NOT EXISTS idx_auth_token_scopes_token_id
 		 ON auth_token_scopes(token_id);`,
+		`CREATE TABLE IF NOT EXISTS web_identities (
+			issuer TEXT NOT NULL,
+			subject TEXT NOT NULL,
+			email TEXT,
+			display_name TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			last_login_at TEXT NOT NULL,
+			PRIMARY KEY (issuer, subject)
+		);`,
+		`CREATE TABLE IF NOT EXISTS web_sessions (
+			id TEXT PRIMARY KEY,
+			session_hash BLOB NOT NULL UNIQUE,
+			issuer TEXT NOT NULL,
+			subject TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			revoked_at TEXT,
+			FOREIGN KEY(issuer, subject) REFERENCES web_identities(issuer, subject) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_web_sessions_subject
+		 ON web_sessions(issuer, subject);`,
+		`CREATE INDEX IF NOT EXISTS idx_web_sessions_expires_at
+		 ON web_sessions(expires_at);`,
 	}
 
 	for _, stmt := range stmts {

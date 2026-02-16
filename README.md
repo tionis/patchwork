@@ -196,6 +196,11 @@ Behavior:
   - `POST /api/v1/admin/tokens`
   - `DELETE /api/v1/admin/tokens/:id`
 - Plaintext token is only shown in the create response payload.
+- OIDC login flow is available via:
+  - `GET /auth/oidc/login`
+  - `GET /auth/oidc/callback`
+  - `GET /auth/logout`
+- When OIDC is configured, web sessions are stored in `web_sessions` and allowed OIDC subjects can manage machine tokens without pasting a bearer token in the UI.
 
 ### Blob Control Plane
 

@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,6 +21,7 @@ const (
 	defaultBlobGCInterval    = 1 * time.Hour
 	defaultBlobGCGracePeriod = 24 * time.Hour
 	defaultBlobSignedURLTTL  = 15 * time.Minute
+	defaultWebSessionTTL     = 12 * time.Hour
 	defaultGlobalRateRPS     = 200.0
 	defaultGlobalRateBurst   = 400
 	defaultTokenRateRPS      = 50.0
@@ -32,6 +35,13 @@ type Config struct {
 	DocumentsDir         string
 	ServiceDBPath        string
 	BootstrapAdminToken  string
+	OIDCIssuerURL        string
+	OIDCClientID         string
+	OIDCClientSecret     string
+	OIDCRedirectURL      string
+	OIDCScopes           []string
+	OIDCAdminSubjects    []string
+	WebSessionTTL        time.Duration
 	ReadHeaderTimeout    time.Duration
 	ReadTimeout          time.Duration
 	WriteTimeout         time.Duration
@@ -56,6 +66,12 @@ func Load() (Config, error) {
 	cfg.DocumentsDir = filepath.Join(cfg.DataDir, "documents")
 	cfg.ServiceDBPath = filepath.Join(cfg.DataDir, "service.db")
 	cfg.BootstrapAdminToken = os.Getenv("PATCHWORK_BOOTSTRAP_ADMIN_TOKEN")
+	cfg.OIDCIssuerURL = strings.TrimSpace(os.Getenv("PATCHWORK_OIDC_ISSUER"))
+	cfg.OIDCClientID = strings.TrimSpace(os.Getenv("PATCHWORK_OIDC_CLIENT_ID"))
+	cfg.OIDCClientSecret = strings.TrimSpace(os.Getenv("PATCHWORK_OIDC_CLIENT_SECRET"))
+	cfg.OIDCRedirectURL = strings.TrimSpace(os.Getenv("PATCHWORK_OIDC_REDIRECT_URL"))
+	cfg.OIDCScopes = splitScopes(os.Getenv("PATCHWORK_OIDC_SCOPES"))
+	cfg.OIDCAdminSubjects = splitCSV(os.Getenv("PATCHWORK_OIDC_ADMIN_SUBJECTS"))
 	cfg.BlobSigningKey = os.Getenv("PATCHWORK_BLOB_SIGNING_KEY")
 
 	var err error
@@ -96,6 +112,11 @@ func Load() (Config, error) {
 	}
 
 	cfg.BlobSignedURLTTL, err = durationFromEnv("PATCHWORK_BLOB_SIGNED_URL_TTL", defaultBlobSignedURLTTL)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.WebSessionTTL, err = durationFromEnv("PATCHWORK_WEB_SESSION_TTL", defaultWebSessionTTL)
 	if err != nil {
 		return Config{}, err
 	}
@@ -146,6 +167,32 @@ func Load() (Config, error) {
 
 	if cfg.BlobSignedURLTTL <= 0 {
 		return Config{}, fmt.Errorf("blob signed url ttl must be > 0")
+	}
+
+	if cfg.WebSessionTTL <= 0 {
+		return Config{}, fmt.Errorf("web session ttl must be > 0")
+	}
+
+	oidcEnabled := cfg.OIDCIssuerURL != "" || cfg.OIDCClientID != "" || cfg.OIDCClientSecret != "" || cfg.OIDCRedirectURL != ""
+	if oidcEnabled {
+		if cfg.OIDCIssuerURL == "" {
+			return Config{}, fmt.Errorf("oidc issuer is required when oidc is enabled")
+		}
+		if cfg.OIDCClientID == "" {
+			return Config{}, fmt.Errorf("oidc client id is required when oidc is enabled")
+		}
+		if cfg.OIDCClientSecret == "" {
+			return Config{}, fmt.Errorf("oidc client secret is required when oidc is enabled")
+		}
+		if cfg.OIDCRedirectURL == "" {
+			return Config{}, fmt.Errorf("oidc redirect url is required when oidc is enabled")
+		}
+		if _, err := url.ParseRequestURI(cfg.OIDCRedirectURL); err != nil {
+			return Config{}, fmt.Errorf("invalid oidc redirect url: %w", err)
+		}
+		if len(cfg.OIDCScopes) == 0 {
+			cfg.OIDCScopes = []string{"openid", "profile", "email"}
+		}
 	}
 
 	if cfg.GlobalRateLimitRPS < 0 {
@@ -229,4 +276,32 @@ func floatFromEnv(key string, fallback float64) (float64, error) {
 	}
 
 	return parsed, nil
+}
+
+func splitScopes(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	raw = strings.ReplaceAll(raw, ",", " ")
+	return strings.Fields(raw)
+}
+
+func splitCSV(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		values = append(values, value)
+	}
+	return values
 }

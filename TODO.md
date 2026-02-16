@@ -86,10 +86,10 @@ Exit criteria:
 
 ## Phase 1: Web Identity, Token Issuance, and Authorization Core
 
-- [ ] Implement OIDC login flow for web users:
-  - [ ] auth redirect + callback
-  - [ ] secure web session handling
-  - [ ] user identity binding for ownership/audit
+- [x] Implement OIDC login flow for web users:
+  - [x] auth redirect + callback
+  - [x] secure web session handling
+  - [x] user identity binding for ownership/audit
 - [x] Implement token storage schema with hashed token secrets.
 - [x] Implement token issue/revoke/list endpoints for machine credentials (`admin.token` scope).
 - [x] Implement web UI/API for machine token management:

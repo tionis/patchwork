@@ -147,8 +147,9 @@ const tokenUIHTML = `<!doctype html>
 
   <div class="card">
     <label for="authToken">Admin Token</label>
-    <input id="authToken" type="password" placeholder="Paste an admin token (scope: admin.token)" />
+    <input id="authToken" type="password" placeholder="Optional when logged in via OIDC" />
     <button class="secondary" onclick="loadTokens()">Load Tokens</button>
+    <p><a href="/auth/oidc/login?next=/ui/tokens">OIDC Login</a> | <a href="/auth/logout">Logout</a></p>
   </div>
 
   <div class="card">
@@ -187,7 +188,7 @@ const tokenUIHTML = `<!doctype html>
     function getAuthHeader() {
       var token = document.getElementById("authToken").value.trim();
       if (!token) {
-        throw new Error("Admin token is required");
+        return {};
       }
       return { "Authorization": "Bearer " + token };
     }
@@ -316,6 +317,7 @@ type Server struct {
 	blobGCGracePeriod     time.Duration
 	blobSigningKey        []byte
 	blobSignedURLTTL      time.Duration
+	oidc                  *oidcAuth
 	started               time.Time
 	metrics               *metricStore
 }
@@ -339,6 +341,7 @@ func New(cfg config.Config, logger *slog.Logger, runtimes *docruntime.Manager, a
 		blobGCGracePeriod:     cfg.BlobGCGracePeriod,
 		blobSigningKey:        blobSigningKey,
 		blobSignedURLTTL:      cfg.BlobSignedURLTTL,
+		oidc:                  newOIDCAuth(cfg),
 		started:               time.Now().UTC(),
 		metrics:               newMetricStore(),
 	}
@@ -359,6 +362,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/admin/tokens", s.handleAdminTokens)
 	mux.HandleFunc("/api/v1/admin/tokens/", s.handleAdminTokenByID)
 	mux.HandleFunc("/ui/tokens", s.handleTokenUI)
+	mux.HandleFunc("/auth/oidc/login", s.handleOIDCLogin)
+	mux.HandleFunc("/auth/oidc/callback", s.handleOIDCCallback)
+	mux.HandleFunc("/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("/api/v1/db/", s.handleDBAPI)
 	mux.HandleFunc("/public/", s.handleLegacyPublicAlias)
 	mux.HandleFunc("/p/", s.handleLegacyShortAlias)
@@ -421,13 +427,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminTokens(w http.ResponseWriter, r *http.Request) {
-	principal, err := s.auth.AuthenticateRequest(r)
+	_, err := s.authenticateAdminPrincipal(r)
 	if err != nil {
-		s.writeAuthError(w, err)
-		return
-	}
-
-	if err := principal.Authorize("*", "admin.token", ""); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -464,13 +465,8 @@ func (s *Server) handleAdminTokens(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminTokenByID(w http.ResponseWriter, r *http.Request) {
-	principal, err := s.auth.AuthenticateRequest(r)
+	_, err := s.authenticateAdminPrincipal(r)
 	if err != nil {
-		s.writeAuthError(w, err)
-		return
-	}
-
-	if err := principal.Authorize("*", "admin.token", ""); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
