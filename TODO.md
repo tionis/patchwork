@@ -63,23 +63,23 @@ Prioritize document runtime + sync + OIDC/token UX before secondary capability b
 
 ## Phase 0: Project Skeleton, Document Runtime, and Sync Core
 
-- [ ] Create Go service skeleton and module structure (`cmd/`, `internal/`, `migrations/`).
-- [ ] Add config loading for bind address, data dir, logging, limits, and feature flags.
-- [ ] Define document registry model for `db_id` lifecycle (open/create/lookup).
-- [ ] Add HTTP router baseline and required operational endpoints:
-  - [ ] `/healthz`
-  - [ ] `/status`
-  - [ ] `/metrics`
-- [ ] Implement DB runtime manager:
-  - [ ] one DB worker goroutine per `db_id`
-  - [ ] channel-based operation dispatch (no connection pool)
-  - [ ] idle DB worker cleanup policy
+- [x] Create Go service skeleton and module structure (`cmd/`, `internal/`, `migrations/`).
+- [x] Add config loading for bind address, data dir, logging, limits, and feature flags.
+- [x] Define document registry model for `db_id` lifecycle (open/create/lookup).
+- [x] Add HTTP router baseline and required operational endpoints:
+  - [x] `/healthz`
+  - [x] `/status`
+  - [x] `/metrics`
+- [x] Implement DB runtime manager:
+  - [x] one DB worker goroutine per `db_id`
+  - [x] channel-based operation dispatch (no connection pool)
+  - [x] idle DB worker cleanup policy
 - [ ] Add sync scaffolding per DB document:
   - [ ] snapshot/export interface
   - [ ] change-feed/sync event interface
   - [ ] sync transport hooks (implementation can start minimal, but API boundary must exist)
-- [ ] Add migration runner for service/global metadata and per-DB schema bootstrapping.
-- [ ] Add structured logging and baseline Prometheus metrics wiring.
+- [x] Add migration runner for service/global metadata and per-DB schema bootstrapping.
+- [x] Add structured logging and baseline Prometheus metrics wiring.
 
 Exit criteria:
 - service starts, serves health endpoints, can open/create DB runtime by `db_id`, and exposes a minimal sync boundary.
@@ -90,17 +90,17 @@ Exit criteria:
   - [ ] auth redirect + callback
   - [ ] secure web session handling
   - [ ] user identity binding for ownership/audit
-- [ ] Implement token storage schema with hashed token secrets.
-- [ ] Implement token issue/revoke/list endpoints for machine credentials (`admin.token` scope).
+- [x] Implement token storage schema with hashed token secrets.
+- [x] Implement token issue/revoke/list endpoints for machine credentials (`admin.token` scope).
 - [ ] Implement web UI/API for machine token management:
   - [ ] create token with DB/action scopes
   - [ ] list/revoke token metadata
   - [ ] show plaintext token only at creation time
-- [ ] Implement auth middleware:
-  - [ ] parse `Authorization` header
-  - [ ] token hash validation
-  - [ ] expiry checks
-- [ ] Implement ACL evaluator for DB-scoped actions and optional topic/resource prefixes.
+- [x] Implement auth middleware:
+  - [x] parse `Authorization` header
+  - [x] token hash validation
+  - [x] expiry checks
+- [x] Implement ACL evaluator for DB-scoped actions and optional topic/resource prefixes.
 - [ ] Add request rate limiting (global + per-token hooks for future tuning).
 
 Exit criteria:
@@ -143,33 +143,33 @@ Exit criteria:
 
 ## Phase 4: Streams Capability (Legacy Behavior Parity)
 
-- [ ] Port/adapt core stream behavior from `../patchwork`:
-  - [ ] blocking rendezvous queue
-  - [ ] non-blocking broadcast mode
-  - [ ] request/responder (`/req`, `/res`)
-  - [ ] responder switch mode (`?switch=true`)
-  - [ ] passthrough headers (`Patch-H-*`) and `Patch-Status`
-- [ ] Implement stream API routes:
-  - [ ] `GET /api/v1/db/:db_id/streams/queue/:topic/next`
-  - [ ] `POST /api/v1/db/:db_id/streams/queue/:topic`
-  - [ ] `POST /api/v1/db/:db_id/streams/req/:path`
-  - [ ] `POST /api/v1/db/:db_id/streams/res/:path`
+- [x] Port/adapt core stream behavior from `../patchwork`:
+  - [x] blocking rendezvous queue
+  - [x] non-blocking broadcast mode
+  - [x] request/responder (`/req`, `/res`)
+  - [x] responder switch mode (`?switch=true`)
+  - [x] passthrough headers (`Patch-H-*`) and `Patch-Status`
+- [x] Implement stream API routes:
+  - [x] `GET /api/v1/db/:db_id/streams/queue/:topic/next`
+  - [x] `POST /api/v1/db/:db_id/streams/queue/:topic`
+  - [x] `POST /api/v1/db/:db_id/streams/req/:path`
+  - [x] `POST /api/v1/db/:db_id/streams/res/:path`
 - [ ] Add compatibility aliases for legacy route shapes (`/public/*`, `/p/*`, `/u/{user}/*` mapping policy).
-- [ ] Enforce stream auth scopes (`stream.read`, `stream.write`).
+- [x] Enforce stream auth scopes (`stream.read`, `stream.write`).
 
 Exit criteria:
 - parity tests for known old patchwork stream scripts pass against compatibility routes.
 
 ## Phase 5: Webhook Ingest (Persist-First)
 
-- [ ] Create/verify `webhook_inbox` table and index bootstrap.
-- [ ] Implement webhook ingest endpoint:
-  - [ ] `POST /api/v1/db/:db_id/webhooks/:endpoint`
-  - [ ] auth scope: `webhook.ingest`
-  - [ ] capture payload + method + headers + query + content type + timestamp
-  - [ ] persist in one transaction and return success after commit
-- [ ] Ensure inserts use explicit column lists so extra columns in `webhook_inbox` do not break writes.
-- [ ] Add docs/examples for query-based consumption pattern.
+- [x] Create/verify `webhook_inbox` table and index bootstrap.
+- [x] Implement webhook ingest endpoint:
+  - [x] `POST /api/v1/db/:db_id/webhooks/:endpoint`
+  - [x] auth scope: `webhook.ingest`
+  - [x] capture payload + method + headers + query + content type + timestamp
+  - [x] persist in one transaction and return success after commit
+- [x] Ensure inserts use explicit column lists so extra columns in `webhook_inbox` do not break writes.
+- [x] Add docs/examples for query-based consumption pattern.
 - [ ] Keep HMAC verification out of MVP; add extension hooks for future implementation.
 
 Exit criteria:
