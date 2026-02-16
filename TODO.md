@@ -214,11 +214,11 @@ Exit criteria:
   - [x] query watch under write load
   - [x] message fanout/replay
   - [x] high-concurrency streams
-- [ ] Add chaos/failure tests:
-  - [ ] DB worker restart
-  - [ ] partial webhook writes
-  - [ ] lease renewal contention
-  - [ ] blob finalize/GC race windows
+- [x] Add chaos/failure tests:
+  - [x] DB worker restart
+  - [x] partial webhook writes
+  - [x] lease renewal contention
+  - [x] blob finalize/GC race windows
 - [ ] Add deployment artifacts and operational runbooks.
 
 Exit criteria:

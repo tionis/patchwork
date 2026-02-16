@@ -98,8 +98,12 @@ func (m *Manager) DocumentPath(dbID string) (string, error) {
 
 // EnsureDocument ensures the db runtime exists and is initialized.
 func (m *Manager) EnsureDocument(ctx context.Context, dbID string) error {
-	_, err := m.getOrCreateWorker(ctx, dbID)
-	return err
+	w, err := m.getOrCreateWorker(ctx, dbID)
+	if err != nil {
+		return err
+	}
+	m.releaseWorker(w)
+	return nil
 }
 
 // Ping executes a simple round-trip query on the target document.

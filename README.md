@@ -230,6 +230,13 @@ Load-oriented integration tests now cover:
 - durable message replay fanout across multiple subscribers
 - high-concurrency stream queue producer/consumer flow
 
+Chaos-oriented integration tests now cover:
+
+- DB runtime idle cleanup and restart
+- webhook transaction rollback on forced insert failure
+- lease renew contention behavior
+- blob finalize vs GC safety window
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:
