@@ -9,6 +9,7 @@ Canonical design and migration notes live in:
 - `projects/skald/DESIGN.md`
 - `projects/skald/FUTURE_CONSIDERATIONS.md` (deferred decisions/checklist)
 - `projects/skald/COMPATIBILITY.md` (legacy kept/changed/dropped matrix)
+- `projects/skald/ops/RUNBOOK.md` (operations runbook)
 
 That document includes:
 

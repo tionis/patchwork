@@ -219,7 +219,7 @@ Exit criteria:
   - [x] partial webhook writes
   - [x] lease renewal contention
   - [x] blob finalize/GC race windows
-- [ ] Add deployment artifacts and operational runbooks.
+- [x] Add deployment artifacts and operational runbooks.
 
 Exit criteria:
 - MVP feature set is stable under target concurrency and failure scenarios.

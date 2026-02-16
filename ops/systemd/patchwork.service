@@ -1,0 +1,17 @@
+[Unit]
+Description=Patchwork Service
+After=network.target
+
+[Service]
+Type=simple
+User=patchwork
+Group=patchwork
+WorkingDirectory=/opt/patchwork
+EnvironmentFile=/etc/patchwork/patchwork.env
+ExecStart=/opt/patchwork/patchwork
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
