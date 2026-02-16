@@ -196,6 +196,15 @@ Behavior:
   - `DELETE /api/v1/admin/tokens/:id`
 - Plaintext token is only shown in the create response payload.
 
+### Blob Metadata Groundwork
+
+Document migration now includes initial blob-control tables:
+
+- `blob_metadata`
+- `blob_claims`
+
+This establishes DB schema for upcoming blob APIs (`init-upload`, `complete-upload`, claim/release, GC).
+
 ### Request Rate Limiting
 
 Rate limiting middleware is enabled with configurable global and per-token buckets:

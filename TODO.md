@@ -191,7 +191,7 @@ Exit criteria:
 
 ## Phase 7: Blob Control Plane
 
-- [ ] Implement blob metadata schema.
+- [x] Implement blob metadata schema.
 - [ ] Implement APIs:
   - [ ] init-upload
   - [ ] complete-upload

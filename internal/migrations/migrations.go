@@ -177,6 +177,30 @@ func BootstrapDocument(ctx context.Context, dbPath string) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_fencing_tokens_expires_at
 		 ON fencing_tokens(expires_at);`,
+		`CREATE TABLE IF NOT EXISTS blob_metadata (
+			hash TEXT PRIMARY KEY,
+			storage_key TEXT NOT NULL,
+			size_bytes INTEGER,
+			status TEXT NOT NULL DEFAULT 'pending', -- pending | complete | failed
+			content_type TEXT,
+			first_seen TEXT NOT NULL,
+			last_seen TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_blob_metadata_status ON blob_metadata(status);`,
+		`CREATE INDEX IF NOT EXISTS idx_blob_metadata_last_seen ON blob_metadata(last_seen);`,
+		`CREATE TABLE IF NOT EXISTS blob_claims (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			db_id TEXT NOT NULL,
+			hash TEXT NOT NULL,
+			claim_ref TEXT,
+			claimed_at TEXT NOT NULL,
+			released_at TEXT,
+			FOREIGN KEY(hash) REFERENCES blob_metadata(hash) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_blob_claims_db_id_hash
+		 ON blob_claims(db_id, hash);`,
+		`CREATE INDEX IF NOT EXISTS idx_blob_claims_released_at
+		 ON blob_claims(released_at);`,
 	}
 
 	for _, stmt := range stmts {
