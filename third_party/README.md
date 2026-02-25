@@ -11,6 +11,14 @@ Included trees:
 
 These are source-only imports. Compiled artifacts are built into `build/extensions/` and are not committed.
 
+Sqlean notes:
+
+- `third_party/sqlean/src/crypto/xxhash.impl.h`
+- `third_party/sqlean/src/test_windirent.h`
+
+are cached build inputs normally fetched by sqlean's `download-external` target.
+They are kept in-tree so `make build-extensions` can run without network access.
+
 ## Update Commands
 
 From the repository root:

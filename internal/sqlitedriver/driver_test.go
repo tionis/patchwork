@@ -80,7 +80,7 @@ func TestCRSQLiteExtensionLoadAndFunctionality(t *testing.T) {
 		t.Fatalf("ping temp db: %v", err)
 	}
 
-	if _, err := db.Exec(`CREATE TABLE foo(id INTEGER PRIMARY KEY, val TEXT);`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE foo(id INTEGER NOT NULL PRIMARY KEY, val TEXT);`); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 	if _, err := db.Exec(`SELECT crsql_as_crr('foo');`); err != nil {

@@ -2,6 +2,7 @@ SHELL := /bin/bash
 
 GO ?= go
 MAKE ?= make
+CC ?= cc
 
 OUT_DIR ?= build
 OUT_BIN ?= $(OUT_DIR)/patchwork
@@ -13,17 +14,27 @@ SQLITE_CFLAGS ?= -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_SNAPSHOT -DSQLITE_ENABL
 SQLITE_LDFLAGS ?=
 
 CRSQLITE_TOOLCHAIN ?= nightly-2023-10-05
+SQLITE_VEC_SQLITE_INCLUDE ?= $(abspath third_party/cr-sqlite/core/src/sqlite)
+SQLITE_VEC_CFLAGS ?= -I$(SQLITE_VEC_SQLITE_INCLUDE)
+SQLEAN_SQLITE_INCLUDE ?= $(abspath third_party/cr-sqlite/core/src/sqlite)
+SQLEAN_CFLAGS ?= -I$(SQLEAN_SQLITE_INCLUDE)
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
 LIB_EXT := dylib
 SQLEAN_COMPILE_TARGET := compile-macos
+SQLITE_VEC_PLATFORM_CFLAGS :=
+SQLITE_VEC_PLATFORM_LDFLAGS :=
 else ifeq ($(OS),Windows_NT)
 LIB_EXT := dll
 SQLEAN_COMPILE_TARGET := compile-windows
+SQLITE_VEC_PLATFORM_CFLAGS :=
+SQLITE_VEC_PLATFORM_LDFLAGS :=
 else
 LIB_EXT := so
 SQLEAN_COMPILE_TARGET := compile-linux
+SQLITE_VEC_PLATFORM_CFLAGS :=
+SQLITE_VEC_PLATFORM_LDFLAGS := -lm
 endif
 
 CRSQLITE_LIB := third_party/cr-sqlite/core/dist/crsqlite.$(LIB_EXT)
@@ -67,13 +78,32 @@ build-extension-crsqlite: $(OUT_EXT_DIR)
 
 .PHONY: build-extension-vec
 build-extension-vec: $(OUT_EXT_DIR)
-	$(MAKE) -C third_party/sqlite-vec loadable
-	cp "$(VEC_LIB)" "$(OUT_EXT_DIR)/vec0.$(LIB_EXT)"
+	@if [ ! -f "$(SQLITE_VEC_SQLITE_INCLUDE)/sqlite3ext.h" ]; then \
+		echo "missing sqlite3ext.h at $(SQLITE_VEC_SQLITE_INCLUDE)"; \
+		echo "expected from vendored third_party/cr-sqlite tree"; \
+		exit 1; \
+	fi
+	@if [ ! -f third_party/sqlite-vec/sqlite-vec.h ]; then \
+		$(MAKE) -C third_party/sqlite-vec sqlite-vec.h; \
+	fi
+	$(CC) -fPIC -shared -Wall -Wextra -O3 \
+		$(SQLITE_VEC_CFLAGS) $(SQLITE_VEC_PLATFORM_CFLAGS) \
+		third_party/sqlite-vec/sqlite-vec.c \
+		-o "$(OUT_EXT_DIR)/vec0.$(LIB_EXT)" \
+		$(SQLITE_VEC_PLATFORM_LDFLAGS)
 
 .PHONY: build-extension-sqlean
 build-extension-sqlean: $(OUT_EXT_DIR) $(OUT_SQLEAN_DIR)
+	@if [ ! -f "$(SQLEAN_SQLITE_INCLUDE)/sqlite3ext.h" ]; then \
+		echo "missing sqlite3ext.h at $(SQLEAN_SQLITE_INCLUDE)"; \
+		echo "expected from vendored third_party/cr-sqlite tree"; \
+		exit 1; \
+	fi
+	@if [ ! -f "third_party/sqlean/src/crypto/xxhash.impl.h" ]; then \
+		$(MAKE) -C third_party/sqlean download-external; \
+	fi
 	$(MAKE) -C third_party/sqlean prepare-dist
-	$(MAKE) -C third_party/sqlean "$(SQLEAN_COMPILE_TARGET)"
+	$(MAKE) -C third_party/sqlean "$(SQLEAN_COMPILE_TARGET)" CFLAGS="$(SQLEAN_CFLAGS)"
 	cp "$(SQLEAN_BUNDLE_LIB)" "$(OUT_EXT_DIR)/sqlean.$(LIB_EXT)"
 	for mod in $(SQLEAN_SAFE_MODULES); do \
 		cp "third_party/sqlean/dist/$${mod}.$(LIB_EXT)" "$(OUT_SQLEAN_DIR)/$${mod}.$(LIB_EXT)"; \
@@ -86,8 +116,8 @@ test:
 .PHONY: test-sqlitedriver-ext
 test-sqlitedriver-ext: build-extensions
 	PATCHWORK_SQLITE_TEST_CRSQLITE_PATH="$$(pwd)/$(OUT_EXT_DIR)/crsqlite.$(LIB_EXT)" \
-	PATCHWORK_SQLITE_TEST_VEC_PATH="$$(pwd)/$(OUT_EXT_DIR)/vec0.$(LIB_EXT)" \
-	PATCHWORK_SQLITE_TEST_SQLEAN_PATH="$$(pwd)/$(OUT_EXT_DIR)/sqlean.$(LIB_EXT)" \
+	PATCHWORK_SQLITE_TEST_VEC_PATH="$$(pwd)/$(OUT_EXT_DIR)/vec0" \
+	PATCHWORK_SQLITE_TEST_SQLEAN_PATH="$$(pwd)/$(OUT_EXT_DIR)/sqlean" \
 	PATCHWORK_SQLITE_TEST_SQLEAN_DIR="$$(pwd)/$(OUT_SQLEAN_DIR)" \
 	$(GO) test ./internal/sqlitedriver -v
 

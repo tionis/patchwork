@@ -38,10 +38,11 @@ var recommendedCompileOptions = []string{
 }
 
 type extensionGroup struct {
-	label      string
-	entrypoint string
-	candidates []string
-	required   bool
+	label             string
+	entrypoint        string
+	defaultEntrypoint string
+	candidates        []string
+	required          bool
 }
 
 func init() {
@@ -167,8 +168,9 @@ func extensionGroupsFromEnv() []extensionGroup {
 	groups := make([]extensionGroup, 0, 8)
 
 	groups = append(groups, extensionGroup{
-		label:      "crsqlite",
-		entrypoint: strings.TrimSpace(os.Getenv("PATCHWORK_SQLITE_EXTENSION_CRSQLITE_ENTRYPOINT")),
+		label:             "crsqlite",
+		entrypoint:        strings.TrimSpace(os.Getenv("PATCHWORK_SQLITE_EXTENSION_CRSQLITE_ENTRYPOINT")),
+		defaultEntrypoint: "sqlite3_crsqlite_init",
 		candidates: explicitOrDefaultCandidates(
 			strings.TrimSpace(os.Getenv("PATCHWORK_SQLITE_EXTENSION_CRSQLITE")),
 			"crsqlite",
@@ -178,8 +180,9 @@ func extensionGroupsFromEnv() []extensionGroup {
 	})
 
 	groups = append(groups, extensionGroup{
-		label:      "sqlite-vec",
-		entrypoint: strings.TrimSpace(os.Getenv("PATCHWORK_SQLITE_EXTENSION_VEC_ENTRYPOINT")),
+		label:             "sqlite-vec",
+		entrypoint:        strings.TrimSpace(os.Getenv("PATCHWORK_SQLITE_EXTENSION_VEC_ENTRYPOINT")),
+		defaultEntrypoint: "sqlite3_vec_init",
 		candidates: explicitOrDefaultCandidates(
 			strings.TrimSpace(os.Getenv("PATCHWORK_SQLITE_EXTENSION_VEC")),
 			"vec0",
@@ -190,19 +193,21 @@ func extensionGroupsFromEnv() []extensionGroup {
 
 	sqleanExplicit := strings.TrimSpace(os.Getenv("PATCHWORK_SQLITE_EXTENSION_SQLEAN"))
 	groups = append(groups, extensionGroup{
-		label:      "sqlean",
-		entrypoint: strings.TrimSpace(os.Getenv("PATCHWORK_SQLITE_EXTENSION_SQLEAN_ENTRYPOINT")),
-		candidates: explicitOrDefaultCandidates(sqleanExplicit, "sqlean"),
-		required:   sqleanExplicit != "",
+		label:             "sqlean",
+		entrypoint:        strings.TrimSpace(os.Getenv("PATCHWORK_SQLITE_EXTENSION_SQLEAN_ENTRYPOINT")),
+		defaultEntrypoint: "sqlite3_sqlean_init",
+		candidates:        explicitOrDefaultCandidates(sqleanExplicit, "sqlean"),
+		required:          sqleanExplicit != "",
 	})
 
 	if sqleanDir := strings.TrimSpace(os.Getenv("PATCHWORK_SQLITE_EXTENSION_SQLEAN_DIR")); sqleanDir != "" {
 		for _, module := range []string{"crypto", "math", "regexp", "stats", "text", "time", "unicode", "uuid"} {
 			groups = append(groups, extensionGroup{
-				label:      "sqlean-" + module,
-				entrypoint: "",
-				candidates: moduleFileCandidates(filepath.Join(sqleanDir, module)),
-				required:   true,
+				label:             "sqlean-" + module,
+				entrypoint:        "",
+				defaultEntrypoint: "sqlite3_" + module + "_init",
+				candidates:        moduleFileCandidates(filepath.Join(sqleanDir, module)),
+				required:          true,
 			})
 		}
 	}
@@ -241,10 +246,11 @@ func parseExtensionEnv(key string) []extensionGroup {
 		}
 
 		groups = append(groups, extensionGroup{
-			label:      "custom",
-			entrypoint: entrypoint,
-			candidates: moduleFileCandidates(path),
-			required:   true,
+			label:             "custom",
+			entrypoint:        entrypoint,
+			defaultEntrypoint: inferEntrypointFromPath(path),
+			candidates:        moduleFileCandidates(path),
+			required:          true,
 		})
 	}
 
@@ -273,7 +279,8 @@ func loadExtensionGroup(conn *sqlite3.SQLiteConn, group extensionGroup) error {
 		seen[candidate] = struct{}{}
 		triedUnique = append(triedUnique, candidate)
 
-		if err := conn.LoadExtension(candidate, group.entrypoint); err != nil {
+		entrypoint := resolvedEntrypoint(group, candidate)
+		if err := conn.LoadExtension(candidate, entrypoint); err != nil {
 			if isMissingExtensionError(err) {
 				continue
 			}
@@ -355,6 +362,40 @@ func moduleFileCandidates(path string) []string {
 		path,
 		path + suffix,
 	}
+}
+
+func resolvedEntrypoint(group extensionGroup, candidate string) string {
+	if entrypoint := strings.TrimSpace(group.entrypoint); entrypoint != "" {
+		return entrypoint
+	}
+	if entrypoint := strings.TrimSpace(group.defaultEntrypoint); entrypoint != "" {
+		return entrypoint
+	}
+	if inferred := inferEntrypointFromPath(candidate); inferred != "" {
+		return inferred
+	}
+	return "sqlite3_extension_init"
+}
+
+func inferEntrypointFromPath(path string) string {
+	base := strings.TrimSpace(filepath.Base(path))
+	if base == "" {
+		return ""
+	}
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	base = strings.TrimPrefix(base, "lib")
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return ""
+	}
+
+	base = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, base)
+	return "sqlite3_" + base + "_init"
 }
 
 func sharedLibrarySuffix() string {
