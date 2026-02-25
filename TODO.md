@@ -2,6 +2,9 @@
 
 Plan baseline date: 2026-02-15
 
+Update (2026-02-25): legacy compatibility aliases and old-data migration fallbacks were removed.
+The service now supports canonical DB-scoped APIs only.
+
 This file is the execution plan for implementing the new service in `projects/skald`.
 It combines architecture evaluation, sequencing, and definition-of-done checkpoints.
 
@@ -24,12 +27,12 @@ It combines architecture evaluation, sequencing, and definition-of-done checkpoi
   - durable: message pubsub, webhook inbox, blob metadata, leases
   - non-durable: stream relay channels
 - Security model is pragmatic: hashed tokens, no plaintext webhook secret storage.
-- Legacy integration path is clear for stream behavior parity from old patchwork.
+- Stream behavior is focused on canonical DB-scoped endpoints only.
 
 ### Primary Risks
 
 - Query watch invalidation (`v0` global reeval) can become expensive under write-heavy load.
-- Stream compatibility parity is subtle (`Patch-H-*`, `Patch-Status`, `?switch=true`).
+- Stream behavior correctness is subtle (`Patch-H-*`, `Patch-Status`, `?switch=true`).
 - Per-DB runtime model needs careful lifecycle management to avoid goroutine leaks.
 - Message replay/wildcard behavior must remain consistent across HTTP SSE and MQTT adapter.
 - Blob GC and reference union across DBs can be costly without indexing + batching strategy.
@@ -49,7 +52,6 @@ It combines architecture evaluation, sequencing, and definition-of-done checkpoi
 
 ### Open Questions (must be revisited during implementation)
 
-- Legacy compatibility coverage depth (strict parity vs high-usage subset).
 - Message retention defaults (currently no default TTL; operator-defined policy).
 - Reactive query invalidation launch target (`v0` vs table-aware).
 - Legacy webhook-proxy feature keep/change/drop.
@@ -141,7 +143,7 @@ Exit criteria:
 Exit criteria:
 - publish + replay + wildcard filters validated by integration tests.
 
-## Phase 4: Streams Capability (Legacy Behavior Parity)
+## Phase 4: Streams Capability
 
 - [x] Port/adapt core stream behavior from `../patchwork`:
   - [x] blocking rendezvous queue
@@ -154,11 +156,11 @@ Exit criteria:
   - [x] `POST /api/v1/db/:db_id/streams/queue/:topic`
   - [x] `POST /api/v1/db/:db_id/streams/req/:path`
   - [x] `POST /api/v1/db/:db_id/streams/res/:path`
-- [x] Add compatibility aliases for legacy route shapes (`/public/*`, `/p/*`, `/u/{user}/*` mapping policy).
+- [x] Use canonical DB-scoped stream routes only (no legacy aliases).
 - [x] Enforce stream auth scopes (`stream.read`, `stream.write`).
 
 Exit criteria:
-- parity tests for known old patchwork stream scripts pass against compatibility routes.
+- stream queue/request/responder behavior validated under concurrency tests.
 
 ## Phase 5: Webhook Ingest (Persist-First)
 
@@ -209,7 +211,7 @@ Exit criteria:
 
 ## Phase 8: Compatibility and Hardening
 
-- [x] Build explicit legacy compatibility matrix (`kept / changed / dropped`) in docs.
+- [x] Document legacy support policy and canonical-route requirement in docs.
 - [x] Add load tests for:
   - [x] query watch under write load
   - [x] message fanout/replay
@@ -238,7 +240,7 @@ Exit criteria:
 1. Phase 0 skeleton + DB runtime manager + sync scaffolding.
 2. Phase 1 OIDC + token issuance UX + auth/ACL.
 3. Phase 5 webhook ingest (small vertical slice, validates DB/auth path quickly).
-4. Phase 4 streams parity (largest compatibility surface).
+4. Phase 4 streams (largest transport surface).
 5. Phase 3 durable message pubsub.
 6. Phase 2 query + watch.
 7. Phase 6 lease.

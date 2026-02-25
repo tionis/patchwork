@@ -68,9 +68,6 @@ func (s *Server) handlePublicBlobObject(w http.ResponseWriter, r *http.Request) 
 func (s *Server) lookupPublishedBlobContentType(ctx context.Context, blobID string) (string, error) {
 	var dbID string
 	err := s.withServiceDB(ctx, func(db *sql.DB) error {
-		if err := ensurePublicBlobExportSchema(ctx, db); err != nil {
-			return err
-		}
 		return db.QueryRowContext(
 			ctx,
 			`SELECT db_id

@@ -86,10 +86,6 @@ func (s *Server) runBlobGCSweep(ctx context.Context, grace time.Duration) error 
 
 func (s *Server) collectPublishedBlobHashes(ctx context.Context, live map[string]struct{}) error {
 	return s.withServiceDB(ctx, func(db *sql.DB) error {
-		if err := ensurePublicBlobExportSchema(ctx, db); err != nil {
-			return err
-		}
-
 		rows, err := db.QueryContext(ctx, `SELECT hash FROM public_blob_exports WHERE revoked_at IS NULL`)
 		if err != nil {
 			return err
@@ -146,104 +142,80 @@ func collectLiveBlobHashes(documentPath string, live map[string]struct{}, seen m
 	}
 	defer db.Close()
 
-	if has, err := tableExists(db, "blobs"); err != nil {
+	rows, err := db.Query(`SELECT hash FROM blobs`)
+	if err != nil {
 		return err
-	} else if has {
-		rows, err := db.Query(`SELECT hash FROM blobs`)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var hash string
-			if err := rows.Scan(&hash); err != nil {
-				rows.Close()
-				return err
-			}
-			hash = strings.ToLower(strings.TrimSpace(hash))
-			if looksLikeBlobHash(hash) {
-				live[hash] = struct{}{}
-			}
-		}
-		if err := rows.Err(); err != nil {
+	}
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
 			rows.Close()
 			return err
 		}
-		rows.Close()
+		hash = strings.ToLower(strings.TrimSpace(hash))
+		if looksLikeBlobHash(hash) {
+			live[hash] = struct{}{}
+		}
 	}
-
-	if has, err := tableExists(db, "blob_claims"); err != nil {
+	if err := rows.Err(); err != nil {
+		rows.Close()
 		return err
-	} else if has {
-		rows, err := db.Query(`SELECT hash FROM blob_claims WHERE released_at IS NULL`)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var hash string
-			if err := rows.Scan(&hash); err != nil {
-				rows.Close()
-				return err
-			}
-			hash = strings.ToLower(strings.TrimSpace(hash))
-			if looksLikeBlobHash(hash) {
-				live[hash] = struct{}{}
-			}
-		}
-		if err := rows.Err(); err != nil {
+	}
+	rows.Close()
+
+	rows, err = db.Query(`SELECT hash FROM blob_claims WHERE released_at IS NULL`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
 			rows.Close()
 			return err
 		}
-		rows.Close()
+		hash = strings.ToLower(strings.TrimSpace(hash))
+		if looksLikeBlobHash(hash) {
+			live[hash] = struct{}{}
+		}
 	}
-
-	if has, err := tableExists(db, "blob_metadata"); err != nil {
+	if err := rows.Err(); err != nil {
+		rows.Close()
 		return err
-	} else if has {
-		rows, err := db.Query(`SELECT hash, last_seen FROM blob_metadata WHERE status = 'complete'`)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var hash string
-			var lastSeenRaw string
-			if err := rows.Scan(&hash, &lastSeenRaw); err != nil {
-				rows.Close()
-				return err
-			}
+	}
+	rows.Close()
 
-			hash = strings.ToLower(strings.TrimSpace(hash))
-			if !looksLikeBlobHash(hash) {
-				continue
-			}
-
-			lastSeenAt, err := time.Parse(time.RFC3339Nano, lastSeenRaw)
-			if err != nil {
-				continue
-			}
-			if existing, ok := seen[hash]; !ok || lastSeenAt.After(existing) {
-				seen[hash] = lastSeenAt
-			}
-		}
-		if err := rows.Err(); err != nil {
+	rows, err = db.Query(`SELECT hash, last_seen FROM blob_metadata WHERE status = 'complete'`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var hash string
+		var lastSeenRaw string
+		if err := rows.Scan(&hash, &lastSeenRaw); err != nil {
 			rows.Close()
 			return err
 		}
-		rows.Close()
+
+		hash = strings.ToLower(strings.TrimSpace(hash))
+		if !looksLikeBlobHash(hash) {
+			continue
+		}
+
+		lastSeenAt, err := time.Parse(time.RFC3339Nano, lastSeenRaw)
+		if err != nil {
+			continue
+		}
+		if existing, ok := seen[hash]; !ok || lastSeenAt.After(existing) {
+			seen[hash] = lastSeenAt
+		}
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
 
 	return nil
-}
-
-func tableExists(db *sql.DB, table string) (bool, error) {
-	var count int
-	err := db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`,
-		table,
-	).Scan(&count)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
 }
 
 func looksLikeBlobHash(hash string) bool {

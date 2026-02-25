@@ -36,6 +36,10 @@ This file tracks important design/implementation decisions intentionally deferre
    - Dedicated `/h` and `/r` secret-hook behavior is not required in v1.
    - Equivalent control should come from DB-scoped auth on stream/webhook endpoints.
 
+9. **No legacy route aliases**
+   - Legacy stream aliases (`/public/*`, `/p/*`, `/u/{user}/*`) are intentionally removed.
+   - Canonical DB-scoped routes are the only supported API surface.
+
 9. **Webhook auth model**
    - Webhook ingress uses standard `Authorization` header auth with DB-scoped tokens.
    - No plaintext webhook secret storage is required in MVP.
@@ -63,11 +67,8 @@ This file tracks important design/implementation decisions intentionally deferre
 7. **Backpressure and limits**
    - Watch limits, connection limits, outbox limits, and overload behavior.
 
-8. **Legacy Patchwork compatibility matrix**
-   - Explicit `kept / changed / dropped` decision per route/feature.
-
-9. **Test strategy**
-   - Concurrency/fencing tests, reactive query correctness, blob GC race coverage, and compatibility tests.
+8. **Test strategy**
+   - Concurrency/fencing tests, reactive query correctness, blob GC race coverage, and API contract tests.
 
 10. **Legacy webhook proxy feature**
    - Decide keep / change / drop.

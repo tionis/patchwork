@@ -8,7 +8,6 @@ Canonical design and migration notes live in:
 
 - `projects/skald/DESIGN.md`
 - `projects/skald/FUTURE_CONSIDERATIONS.md` (deferred decisions/checklist)
-- `projects/skald/COMPATIBILITY.md` (legacy kept/changed/dropped matrix)
 - `projects/skald/ops/RUNBOOK.md` (operations runbook)
 - `projects/skald/LLM_API.md` (API integration guide for LLM/tooling clients)
 
@@ -16,7 +15,6 @@ That document includes:
 
 - architecture decisions and scope
 - capability model (query, reactive query watch/SSE, pubsub/fencing/hooks/blob control plane)
-- compatibility strategy for legacy Patchwork endpoints
 - auth/token/ACL model (service-local for now)
 - migration and rollout phases
 
@@ -71,7 +69,7 @@ ORDER BY id DESC
 LIMIT 100;
 ```
 
-### Streams (Legacy Compatibility Core)
+### Streams
 
 - Queue receive: `GET /api/v1/db/:db_id/streams/queue/:topic/next`
 - Queue send: `POST /api/v1/db/:db_id/streams/queue/:topic`
@@ -88,11 +86,7 @@ Supported stream behaviors:
 - switch mode on responder (`?switch=true`) for dynamic response channel handoff
 - optional non-blocking broadcast on queue send via `?pubsub=true`
 
-Legacy compatibility aliases:
-
-- `/public/*` -> `db_id=public`
-- `/p/*` -> `db_id=public`
-- `/u/{user}/*` -> `db_id={user}`
+Use canonical DB-scoped routes under `/api/v1/db/:db_id/streams/...`.
 
 ### Durable Messages (Publish)
 

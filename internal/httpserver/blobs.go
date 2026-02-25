@@ -148,38 +148,15 @@ func (s *Server) handleBlobList(w http.ResponseWriter, r *http.Request, dbID str
 	entries := make([]blobListEntry, 0, limit)
 	indexByHash := make(map[string]int, limit)
 	err := s.runtimes.WithDB(r.Context(), dbID, func(ctx context.Context, db *sql.DB) error {
-		keptExpr := "0"
-		joinBlobs := ""
-		filenameExpr := "NULL"
-		descriptionExpr := "NULL"
-
-		if hasBlobs, err := tableExists(db, "blobs"); err != nil {
-			return err
-		} else if hasBlobs {
-			joinBlobs = "LEFT JOIN blobs b ON b.hash = m.hash"
-			keptExpr = "CASE WHEN b.hash IS NULL THEN 0 ELSE 1 END"
-
-			blobColumns, err := tableColumnSet(ctx, db, "blobs")
-			if err != nil {
-				return err
-			}
-			if _, ok := blobColumns["filename"]; ok {
-				filenameExpr = "b.filename"
-			}
-			if _, ok := blobColumns["description"]; ok {
-				descriptionExpr = "b.description"
-			}
-		}
-
 		query := `
 			SELECT
 				m.hash,
 				m.size_bytes,
 				m.status,
 				m.content_type,
-				` + filenameExpr + `,
-				` + descriptionExpr + `,
-				` + keptExpr + `,
+				b.filename,
+				b.description,
+				CASE WHEN b.hash IS NULL THEN 0 ELSE 1 END,
 				m.first_seen,
 				m.last_seen,
 				m.storage_key,
@@ -191,7 +168,7 @@ func (s *Server) handleBlobList(w http.ResponseWriter, r *http.Request, dbID str
 				WHERE released_at IS NULL
 				GROUP BY hash
 			) c ON c.hash = m.hash
-			` + joinBlobs
+			LEFT JOIN blobs b ON b.hash = m.hash`
 
 		args := make([]any, 0, 2)
 		if statusFilter != "" {
@@ -258,39 +235,35 @@ func (s *Server) handleBlobList(w http.ResponseWriter, r *http.Request, dbID str
 			return nil
 		}
 
-		if hasTags, err := tableExists(db, "blob_tags"); err != nil {
+		hashes := make([]any, 0, len(entries))
+		for _, entry := range entries {
+			hashes = append(hashes, entry.Hash)
+		}
+
+		tagRows, err := db.QueryContext(
+			ctx,
+			`SELECT hash, tag FROM blob_tags WHERE hash IN (`+sqlPlaceholders(len(hashes))+`) ORDER BY tag`,
+			hashes...,
+		)
+		if err != nil {
 			return err
-		} else if hasTags {
-			hashes := make([]any, 0, len(entries))
-			for _, entry := range entries {
-				hashes = append(hashes, entry.Hash)
-			}
+		}
+		defer tagRows.Close()
 
-			tagRows, err := db.QueryContext(
-				ctx,
-				`SELECT hash, tag FROM blob_tags WHERE hash IN (`+sqlPlaceholders(len(hashes))+`) ORDER BY tag`,
-				hashes...,
+		for tagRows.Next() {
+			var (
+				hash string
+				tag  string
 			)
-			if err != nil {
+			if err := tagRows.Scan(&hash, &tag); err != nil {
 				return err
 			}
-			defer tagRows.Close()
-
-			for tagRows.Next() {
-				var (
-					hash string
-					tag  string
-				)
-				if err := tagRows.Scan(&hash, &tag); err != nil {
-					return err
-				}
-				if idx, ok := indexByHash[hash]; ok {
-					entries[idx].Tags = append(entries[idx].Tags, tag)
-				}
+			if idx, ok := indexByHash[hash]; ok {
+				entries[idx].Tags = append(entries[idx].Tags, tag)
 			}
-			if err := tagRows.Err(); err != nil {
-				return err
-			}
+		}
+		if err := tagRows.Err(); err != nil {
+			return err
 		}
 
 		return nil
@@ -845,22 +818,12 @@ func (s *Server) handleBlobUnkeep(w http.ResponseWriter, r *http.Request, dbID, 
 	}
 
 	err = s.runtimes.WithDB(r.Context(), dbID, func(ctx context.Context, db *sql.DB) error {
-		if hasTags, err := tableExists(db, "blob_tags"); err != nil {
+		if _, err := db.ExecContext(ctx, `DELETE FROM blob_tags WHERE hash = ?`, blobID); err != nil {
 			return err
-		} else if hasTags {
-			if _, err := db.ExecContext(ctx, `DELETE FROM blob_tags WHERE hash = ?`, blobID); err != nil {
-				return err
-			}
 		}
-
-		if hasBlobs, err := tableExists(db, "blobs"); err != nil {
+		if _, err := db.ExecContext(ctx, `DELETE FROM blobs WHERE hash = ?`, blobID); err != nil {
 			return err
-		} else if hasBlobs {
-			if _, err := db.ExecContext(ctx, `DELETE FROM blobs WHERE hash = ?`, blobID); err != nil {
-				return err
-			}
 		}
-
 		return nil
 	})
 	if err != nil {
@@ -916,10 +879,6 @@ func (s *Server) handleBlobPublish(w http.ResponseWriter, r *http.Request, dbID,
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	err = s.withServiceDB(r.Context(), func(db *sql.DB) error {
-		if err := ensurePublicBlobExportSchema(r.Context(), db); err != nil {
-			return err
-		}
-
 		_, err := db.ExecContext(
 			r.Context(),
 			`INSERT INTO public_blob_exports(hash, db_id, published_by, published_at, updated_at, revoked_at)
@@ -971,10 +930,6 @@ func (s *Server) handleBlobUnpublish(w http.ResponseWriter, r *http.Request, dbI
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	err = s.withServiceDB(r.Context(), func(db *sql.DB) error {
-		if err := ensurePublicBlobExportSchema(r.Context(), db); err != nil {
-			return err
-		}
-
 		_, err := db.ExecContext(
 			r.Context(),
 			`UPDATE public_blob_exports
@@ -1156,61 +1111,21 @@ func (s *Server) upsertBlobKeepSetRecord(
 	tags = normalizeBlobTags(tags)
 
 	return s.runtimes.WithDB(ctx, dbID, func(ctx context.Context, db *sql.DB) error {
-		if err := ensureBlobKeepSetSchema(ctx, db); err != nil {
+		if _, err := db.ExecContext(
+			ctx,
+			`INSERT INTO blobs(hash, filename, description, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT(hash) DO UPDATE SET
+			   filename = COALESCE(excluded.filename, blobs.filename),
+			   description = COALESCE(excluded.description, blobs.description),
+			   updated_at = excluded.updated_at`,
+			blobID,
+			nullableString(filename),
+			nullableString(description),
+			now,
+			now,
+		); err != nil {
 			return err
-		}
-
-		columns, err := tableColumnSet(ctx, db, "blobs")
-		if err != nil {
-			return err
-		}
-
-		insertColumns := []string{"hash"}
-		insertValues := []any{blobID}
-		insertPlaceholders := []string{"?"}
-		updateAssignments := make([]string, 0, 4)
-
-		if _, ok := columns["filename"]; ok {
-			insertColumns = append(insertColumns, "filename")
-			insertPlaceholders = append(insertPlaceholders, "?")
-			insertValues = append(insertValues, nullableString(filename))
-			updateAssignments = append(updateAssignments, "filename = COALESCE(excluded.filename, blobs.filename)")
-		}
-		if _, ok := columns["description"]; ok {
-			insertColumns = append(insertColumns, "description")
-			insertPlaceholders = append(insertPlaceholders, "?")
-			insertValues = append(insertValues, nullableString(description))
-			updateAssignments = append(updateAssignments, "description = COALESCE(excluded.description, blobs.description)")
-		}
-		if _, ok := columns["created_at"]; ok {
-			insertColumns = append(insertColumns, "created_at")
-			insertPlaceholders = append(insertPlaceholders, "?")
-			insertValues = append(insertValues, now)
-		}
-		if _, ok := columns["updated_at"]; ok {
-			insertColumns = append(insertColumns, "updated_at")
-			insertPlaceholders = append(insertPlaceholders, "?")
-			insertValues = append(insertValues, now)
-			updateAssignments = append(updateAssignments, "updated_at = excluded.updated_at")
-		}
-
-		if len(updateAssignments) == 0 {
-			if _, err := db.ExecContext(
-				ctx,
-				`INSERT OR IGNORE INTO blobs(`+strings.Join(insertColumns, ", ")+`) VALUES (`+strings.Join(insertPlaceholders, ", ")+`)`,
-				insertValues...,
-			); err != nil {
-				return err
-			}
-		} else {
-			if _, err := db.ExecContext(
-				ctx,
-				`INSERT INTO blobs(`+strings.Join(insertColumns, ", ")+`) VALUES (`+strings.Join(insertPlaceholders, ", ")+`)
-				 ON CONFLICT(hash) DO UPDATE SET `+strings.Join(updateAssignments, ", "),
-				insertValues...,
-			); err != nil {
-				return err
-			}
 		}
 
 		if len(tags) > 0 || replaceTags {
@@ -1249,10 +1164,6 @@ func normalizeBlobTags(tags []string) []string {
 }
 
 func upsertBlobTags(ctx context.Context, db *sql.DB, blobID string, tags []string, replace bool, now string) error {
-	if err := ensureBlobKeepSetSchema(ctx, db); err != nil {
-		return err
-	}
-
 	if replace {
 		if _, err := db.ExecContext(ctx, `DELETE FROM blob_tags WHERE hash = ?`, blobID); err != nil {
 			return err
@@ -1263,96 +1174,19 @@ func upsertBlobTags(ctx context.Context, db *sql.DB, blobID string, tags []strin
 		return nil
 	}
 
-	tagColumns, err := tableColumnSet(ctx, db, "blob_tags")
-	if err != nil {
-		return err
-	}
-
 	for _, tag := range tags {
-		if _, hasCreatedAt := tagColumns["created_at"]; hasCreatedAt {
-			if _, err := db.ExecContext(
-				ctx,
-				`INSERT OR IGNORE INTO blob_tags(hash, tag, created_at) VALUES (?, ?, ?)`,
-				blobID,
-				tag,
-				now,
-			); err != nil {
-				return err
-			}
-			continue
-		}
-
 		if _, err := db.ExecContext(
 			ctx,
-			`INSERT OR IGNORE INTO blob_tags(hash, tag) VALUES (?, ?)`,
+			`INSERT OR IGNORE INTO blob_tags(hash, tag, created_at) VALUES (?, ?, ?)`,
 			blobID,
 			tag,
+			now,
 		); err != nil {
 			return err
 		}
 	}
 
 	return nil
-}
-
-func ensureBlobKeepSetSchema(ctx context.Context, db *sql.DB) error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS blobs (
-			hash TEXT PRIMARY KEY,
-			filename TEXT,
-			description TEXT,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			FOREIGN KEY(hash) REFERENCES blob_metadata(hash) ON DELETE CASCADE
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_blobs_updated_at ON blobs(updated_at);`,
-		`CREATE TABLE IF NOT EXISTS blob_tags (
-			hash TEXT NOT NULL,
-			tag TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			PRIMARY KEY(hash, tag),
-			FOREIGN KEY(hash) REFERENCES blob_metadata(hash) ON DELETE CASCADE
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_blob_tags_tag_hash ON blob_tags(tag, hash);`,
-	}
-
-	for _, stmt := range stmts {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func tableColumnSet(ctx context.Context, db *sql.DB, table string) (map[string]struct{}, error) {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	columns := make(map[string]struct{}, 8)
-	for rows.Next() {
-		var (
-			cid       int
-			name      string
-			columnTyp string
-			notNull   int
-			dfltValue sql.NullString
-			pk        int
-		)
-		if err := rows.Scan(&cid, &name, &columnTyp, &notNull, &dfltValue, &pk); err != nil {
-			return nil, err
-		}
-		columns[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return columns, nil
 }
 
 func sqlPlaceholders(n int) string {
@@ -1366,38 +1200,9 @@ func sqlPlaceholders(n int) string {
 	return strings.Join(parts, ", ")
 }
 
-func ensurePublicBlobExportSchema(ctx context.Context, db *sql.DB) error {
-	stmts := []string{
-		`PRAGMA foreign_keys=ON;`,
-		`CREATE TABLE IF NOT EXISTS public_blob_exports (
-			hash TEXT NOT NULL,
-			db_id TEXT NOT NULL,
-			published_by TEXT,
-			published_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			revoked_at TEXT,
-			PRIMARY KEY(hash, db_id),
-			FOREIGN KEY(db_id) REFERENCES documents(db_id) ON DELETE CASCADE
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_public_blob_exports_hash_active
-		 ON public_blob_exports(hash, revoked_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_public_blob_exports_db_id_active
-		 ON public_blob_exports(db_id, revoked_at);`,
-	}
-	for _, stmt := range stmts {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *Server) isBlobPublic(ctx context.Context, blobID string) (bool, error) {
 	var count int
 	err := s.withServiceDB(ctx, func(db *sql.DB) error {
-		if err := ensurePublicBlobExportSchema(ctx, db); err != nil {
-			return err
-		}
 		return db.QueryRowContext(
 			ctx,
 			`SELECT COUNT(*) FROM public_blob_exports WHERE hash = ? AND revoked_at IS NULL`,
@@ -1422,10 +1227,6 @@ func (s *Server) fetchActivePublicBlobSet(ctx context.Context, entries []blobLis
 	}
 
 	err := s.withServiceDB(ctx, func(db *sql.DB) error {
-		if err := ensurePublicBlobExportSchema(ctx, db); err != nil {
-			return err
-		}
-
 		rows, err := db.QueryContext(
 			ctx,
 			`SELECT DISTINCT hash

@@ -19,7 +19,6 @@ Before substantial implementation work, read the relevant sections of:
 - `README.md` (implemented behavior and operator-facing docs)
 - `LLM_API.md` (machine/LLM integration contract)
 - `DESIGN.md` (architecture and intent)
-- `COMPATIBILITY.md` (legacy compatibility promises)
 - `TODO.md` (delivery plan and phase status)
 - `FUTURE_CONSIDERATIONS.md` (explicitly deferred items)
 
@@ -40,7 +39,7 @@ Before substantial implementation work, read the relevant sections of:
 - Keep server limits and auth checks explicit in handlers.
 - Preserve DB-scoped authorization (`db_id`, `action`, `resource_prefix`) behavior.
 
-## 5. API and Compatibility Guardrails
+## 5. API Guardrails
 
 When changing endpoint behavior, verify all of the following:
 
@@ -49,7 +48,6 @@ When changing endpoint behavior, verify all of the following:
 - request validation and size limits
 - response shape/status code
 - SSE event names and payload structure (if applicable)
-- compatibility aliases (`/public`, `/p`, `/u/:user`) when affected
 
 ## 6. Mandatory Documentation Updates
 
@@ -72,7 +70,6 @@ Update these whenever there is any change to:
 
 Also update as needed:
 
-- `COMPATIBILITY.md` for legacy behavior changes
 - `TODO.md` when phase items are completed or scope shifts
 - `FUTURE_CONSIDERATIONS.md` when deferring newly identified work
 

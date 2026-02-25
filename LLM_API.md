@@ -18,7 +18,7 @@ Two messaging models exist and are intentionally different:
   - replay (`since_id`, `tail`)
   - MQTT-style wildcard topic filters in subscribe
   - strict payload size limit (1 MiB)
-- **Streams** (`/streams/...` and legacy aliases):
+- **Streams** (`/streams/...`):
   - byte-stream relay semantics (queue/request/response)
   - not durable
   - no app-level payload limit in server logic
@@ -328,7 +328,7 @@ Returns fence token pair.
 - Headers are stored with sensitive headers redacted (`Authorization`, cookies).
 - Data lands in `webhook_inbox`.
 
-## 4.7 Streams (Legacy-compatible bytestream transport)
+## 4.7 Streams (Bytestream transport)
 
 Queue:
 
@@ -348,11 +348,11 @@ Semantics:
 - responder can set `Patch-Status` to control HTTP status code
 - queue publish-style fanout: add `?pubsub=true` on queue send
 
-Legacy aliases for stream routes:
+Only canonical DB-scoped stream routes are supported:
 
-- `/public/*` -> `db_id=public`
-- `/p/*` -> `db_id=public`
-- `/u/{user}/*` -> `db_id={user}`
+- `/api/v1/db/:db_id/streams/queue/...`
+- `/api/v1/db/:db_id/streams/req/...`
+- `/api/v1/db/:db_id/streams/res/...`
 
 ## 4.8 Blobs and Archival
 
@@ -547,8 +547,3 @@ Service DB also contains:
 - `auth_tokens`, `auth_token_scopes`
 - `web_identities`, `web_sessions`
 - `public_blob_exports`
-
-## 9. Compatibility Notes
-
-- Stream legacy aliases (`/public`, `/p`, `/u/:user`) are compatibility shims.
-- New integrations should prefer canonical `/api/v1/db/:db_id/...` routes.
