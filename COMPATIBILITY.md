@@ -50,5 +50,5 @@ Legend:
 | Legacy Surface | Status | Notes |
 | --- | --- | --- |
 | Lease/fencing API | changed | New DB-scoped lease endpoints (`acquire`,`renew`,`release`) |
-| Blob control plane | deferred | Planned, not implemented yet |
-| OIDC web login flow | deferred | Planned, not implemented yet |
+| Blob control plane | changed | Implemented DB-scoped blob upload/finalize/read/claim/release + keep-set metadata and public publish/unpublish |
+| OIDC web login flow | changed | Implemented OIDC login/callback/logout and web-session-backed admin token management |
