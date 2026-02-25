@@ -100,6 +100,125 @@ func TestOIDCLoginSubjectWithoutAdminGrantIsForbidden(t *testing.T) {
 	}
 }
 
+func TestOIDCEnabledUIWithoutSessionRedirectsToLogin(t *testing.T) {
+	provider := newOIDCTestProvider(t, "oidc-user")
+	defer provider.close()
+
+	env := newWebhookTestEnvWithConfig(t, func(cfg *config.Config) {
+		cfg.OIDCIssuerURL = provider.issuerURL()
+		cfg.OIDCClientID = "patchwork-client"
+		cfg.OIDCClientSecret = "patchwork-secret"
+		cfg.OIDCRedirectURL = "http://patchwork.test/auth/oidc/callback"
+		cfg.OIDCAdminSubjects = []string{"oidc-user"}
+		cfg.WebSessionTTL = time.Hour
+	})
+	defer env.close()
+
+	for _, path := range []string{"/ui", "/ui/blobs", "/ui/tokens", "/"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rr := httptest.NewRecorder()
+		env.server.Handler().ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusFound {
+			t.Fatalf("path %s expected redirect %d, got %d", path, http.StatusFound, rr.Code)
+		}
+
+		location := rr.Header().Get("Location")
+		if !strings.HasPrefix(location, "/auth/oidc/login?next=") {
+			t.Fatalf("path %s expected login redirect, got %q", path, location)
+		}
+	}
+}
+
+func TestOIDCEnabledUISessionCanAccessMainAndBlobPages(t *testing.T) {
+	provider := newOIDCTestProvider(t, "oidc-user")
+	defer provider.close()
+
+	env := newWebhookTestEnvWithConfig(t, func(cfg *config.Config) {
+		cfg.OIDCIssuerURL = provider.issuerURL()
+		cfg.OIDCClientID = "patchwork-client"
+		cfg.OIDCClientSecret = "patchwork-secret"
+		cfg.OIDCRedirectURL = "http://patchwork.test/auth/oidc/callback"
+		cfg.OIDCAdminSubjects = []string{"oidc-user"}
+		cfg.WebSessionTTL = time.Hour
+	})
+	defer env.close()
+
+	sessionCookie := performOIDCLogin(t, env)
+
+	for _, tc := range []struct {
+		Path       string
+		BodyMarker string
+	}{
+		{Path: "/ui", BodyMarker: "Patchwork Console"},
+		{Path: "/ui/blobs", BodyMarker: "Patchwork Blob Manager"},
+		{Path: "/", BodyMarker: "Patchwork Console"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.Path, nil)
+		req.AddCookie(sessionCookie)
+		rr := httptest.NewRecorder()
+		env.server.Handler().ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("path %s expected %d, got %d: %s", tc.Path, http.StatusOK, rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), tc.BodyMarker) {
+			t.Fatalf("path %s missing marker %q", tc.Path, tc.BodyMarker)
+		}
+	}
+}
+
+func TestOIDCEnabledTokenUIRequiresAdminSubject(t *testing.T) {
+	provider := newOIDCTestProvider(t, "oidc-user")
+	defer provider.close()
+
+	env := newWebhookTestEnvWithConfig(t, func(cfg *config.Config) {
+		cfg.OIDCIssuerURL = provider.issuerURL()
+		cfg.OIDCClientID = "patchwork-client"
+		cfg.OIDCClientSecret = "patchwork-secret"
+		cfg.OIDCRedirectURL = "http://patchwork.test/auth/oidc/callback"
+		cfg.OIDCAdminSubjects = []string{"different-user"}
+		cfg.WebSessionTTL = time.Hour
+	})
+	defer env.close()
+
+	sessionCookie := performOIDCLogin(t, env)
+	req := httptest.NewRequest(http.MethodGet, "/ui/tokens", nil)
+	req.AddCookie(sessionCookie)
+	rr := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected %d, got %d: %s", http.StatusForbidden, rr.Code, rr.Body.String())
+	}
+}
+
+func TestOIDCAdminSessionAuthorizesDBAPIWithoutBearerToken(t *testing.T) {
+	provider := newOIDCTestProvider(t, "oidc-user")
+	defer provider.close()
+
+	env := newWebhookTestEnvWithConfig(t, func(cfg *config.Config) {
+		cfg.OIDCIssuerURL = provider.issuerURL()
+		cfg.OIDCClientID = "patchwork-client"
+		cfg.OIDCClientSecret = "patchwork-secret"
+		cfg.OIDCRedirectURL = "http://patchwork.test/auth/oidc/callback"
+		cfg.OIDCAdminSubjects = []string{"oidc-user"}
+		cfg.WebSessionTTL = time.Hour
+	})
+	defer env.close()
+
+	sessionCookie := performOIDCLogin(t, env)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/db/oidcdb/_open", nil)
+	req.AddCookie(sessionCookie)
+
+	rr := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d: %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+}
+
 func performOIDCLogin(t *testing.T, env *webhookTestEnv) *http.Cookie {
 	t.Helper()
 

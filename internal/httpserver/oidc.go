@@ -267,9 +267,13 @@ func (o *oidcAuth) fetchUserInfo(ctx context.Context, accessToken string) (oidcU
 }
 
 func (s *Server) authenticateAdminPrincipal(r *http.Request) (auth.Principal, error) {
+	return s.authorizeRequest(r, "*", "admin.token", "")
+}
+
+func (s *Server) authorizeRequest(r *http.Request, dbID, action, resource string) (auth.Principal, error) {
 	principal, err := s.auth.AuthenticateRequest(r)
 	if err == nil {
-		if err := principal.Authorize("*", "admin.token", ""); err != nil {
+		if err := principal.Authorize(dbID, action, resource); err != nil {
 			return auth.Principal{}, err
 		}
 		return principal, nil
@@ -289,11 +293,50 @@ func (s *Server) authenticateAdminPrincipal(r *http.Request) (auth.Principal, er
 		return auth.Principal{}, auth.ErrForbidden
 	}
 
-	return auth.Principal{
+	adminPrincipal := auth.Principal{
 		TokenID: "web:" + session.ID,
 		Label:   "web:" + session.Subject,
 		IsAdmin: true,
-	}, nil
+	}
+	if err := adminPrincipal.Authorize(dbID, action, resource); err != nil {
+		return auth.Principal{}, err
+	}
+	return adminPrincipal, nil
+}
+
+func (s *Server) requireWebUIAccess(w http.ResponseWriter, r *http.Request) (webSessionRecord, bool) {
+	if s.oidc == nil || !s.oidc.enabled() {
+		return webSessionRecord{}, true
+	}
+
+	session, err := s.authenticateWebSession(r.Context(), r)
+	if err == nil {
+		return session, true
+	}
+	if errors.Is(err, auth.ErrUnauthorized) {
+		next := sanitizeNextPath(r.URL.RequestURI())
+		http.Redirect(w, r, "/auth/oidc/login?next="+url.QueryEscape(next), http.StatusFound)
+		return webSessionRecord{}, false
+	}
+
+	s.logger.Warn("web session auth failed", "path", r.URL.Path, "error", err)
+	s.writeAuthError(w, err)
+	return webSessionRecord{}, false
+}
+
+func (s *Server) requireWebUIAdminAccess(w http.ResponseWriter, r *http.Request) (webSessionRecord, bool) {
+	session, ok := s.requireWebUIAccess(w, r)
+	if !ok {
+		return webSessionRecord{}, false
+	}
+	if s.oidc == nil || !s.oidc.enabled() {
+		return session, true
+	}
+	if !s.oidc.isAdminSubject(session.Subject) {
+		s.writeAuthError(w, auth.ErrForbidden)
+		return webSessionRecord{}, false
+	}
+	return session, true
 }
 
 func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
@@ -380,7 +423,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	clearCookie(w, oidcStateCookieName, "/auth/oidc/callback", requestCookieSecure(r))
 
-	nextPath := "/ui/tokens"
+	nextPath := "/ui"
 	if nextCookie, err := r.Cookie(oidcNextCookieName); err == nil {
 		nextPath = sanitizeNextPath(nextCookie.Value)
 	}
@@ -434,7 +477,7 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	clearCookie(w, oidcStateCookieName, "/auth/oidc/callback", requestCookieSecure(r))
 	clearCookie(w, oidcNextCookieName, "/auth/oidc/callback", requestCookieSecure(r))
 
-	http.Redirect(w, r, "/ui/tokens", http.StatusSeeOther)
+	http.Redirect(w, r, "/ui", http.StatusSeeOther)
 }
 
 func (s *Server) createWebSession(ctx context.Context, userInfo oidcUserInfo) (string, time.Time, error) {
@@ -640,10 +683,10 @@ func generateWebSessionToken() (string, [32]byte, error) {
 func sanitizeNextPath(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "/ui/tokens"
+		return "/ui"
 	}
 	if !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") {
-		return "/ui/tokens"
+		return "/ui"
 	}
 	return value
 }

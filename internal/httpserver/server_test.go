@@ -118,6 +118,9 @@ func TestTokenUIPageServesHTML(t *testing.T) {
 	if body := rr.Body.String(); !strings.Contains(body, "Patchwork Machine Tokens") {
 		t.Fatalf("unexpected HTML body: %s", body)
 	}
+	if body := rr.Body.String(); !strings.Contains(body, `<option value="light">Light</option>`) {
+		t.Fatalf("missing theme toggle option in token UI")
+	}
 }
 
 func TestMainUIPageServesHTML(t *testing.T) {
@@ -138,6 +141,9 @@ func TestMainUIPageServesHTML(t *testing.T) {
 
 	if body := rr.Body.String(); !strings.Contains(body, "Patchwork Console") {
 		t.Fatalf("unexpected HTML body: %s", body)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, `<option value="system">System</option>`) {
+		t.Fatalf("missing system theme toggle option in main UI")
 	}
 }
 
@@ -176,6 +182,9 @@ func TestBlobUIPageServesHTML(t *testing.T) {
 
 	if body := rr.Body.String(); !strings.Contains(body, "Patchwork Blob Manager") {
 		t.Fatalf("unexpected HTML body: %s", body)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, `<option value="dark">Dark</option>`) {
+		t.Fatalf("missing theme toggle option in blob UI")
 	}
 }
 

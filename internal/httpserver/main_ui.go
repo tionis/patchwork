@@ -12,177 +12,473 @@ const mainUIHTML = `<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Patchwork Console</title>
   <style>
-    :root { color-scheme: light; }
-    body { font-family: "IBM Plex Sans", "Segoe UI", sans-serif; margin: 24px; background: #f7f8fb; color: #162033; }
+    :root {
+      color-scheme: light;
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --text: #10223a;
+      --muted: #53627d;
+      --border: #d3ddeb;
+      --field: #ffffff;
+      --accent: #1354d3;
+      --accent-2: #4f6186;
+      --code-bg: #0f1b33;
+      --code-text: #e7eefc;
+      --chip: #edf2ff;
+      --shadow: 0 8px 28px rgba(22, 36, 66, 0.07);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0d1118;
+      --card: #141b27;
+      --text: #e5ecfb;
+      --muted: #9aaccc;
+      --border: #243248;
+      --field: #111826;
+      --accent: #6d9dff;
+      --accent-2: #4f6b9d;
+      --code-bg: #091020;
+      --code-text: #dce7ff;
+      --chip: #1f2a40;
+      --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme]) {
+        color-scheme: dark;
+        --bg: #0d1118;
+        --card: #141b27;
+        --text: #e5ecfb;
+        --muted: #9aaccc;
+        --border: #243248;
+        --field: #111826;
+        --accent: #6d9dff;
+        --accent-2: #4f6b9d;
+        --code-bg: #091020;
+        --code-text: #dce7ff;
+        --chip: #1f2a40;
+        --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top right, rgba(19, 84, 211, 0.12), transparent 36%), var(--bg);
+      line-height: 1.38;
+    }
+
     h1, h2, h3 { margin-top: 0; }
-    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
-    .card { background: white; border: 1px solid #d5dbe8; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
-    label { display: block; margin-top: 8px; font-weight: 600; }
-    input, textarea, select { width: 100%; box-sizing: border-box; margin-top: 4px; border: 1px solid #b8c0d5; border-radius: 6px; padding: 8px; }
-    textarea { min-height: 92px; font-family: "IBM Plex Mono", monospace; }
-    button { margin-top: 10px; margin-right: 6px; background: #1449d6; color: white; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
-    button.secondary { background: #516080; }
-    code { background: #eef2ff; padding: 2px 4px; border-radius: 4px; }
-    pre { background: #0f172a; color: #e5e7eb; padding: 12px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; min-height: 84px; }
-    .small { font-size: 12px; color: #516080; }
-    a { color: #1449d6; }
+    h1 { margin-bottom: 6px; }
+
+    .layout { max-width: 1240px; margin: 0 auto; }
+
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .muted { color: var(--muted); }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+
+    .quick-nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 8px 0 0;
+    }
+
+    .chip {
+      display: inline-block;
+      text-decoration: none;
+      color: var(--text);
+      background: var(--chip);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 13px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 12px;
+    }
+
+    details.group {
+      border: 1px solid var(--border);
+      background: var(--card);
+      border-radius: 12px;
+      margin-bottom: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    details.group > summary {
+      cursor: pointer;
+      list-style: none;
+      font-weight: 700;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    details.group[open] > summary {
+      background: color-mix(in srgb, var(--card) 92%, var(--accent) 8%);
+    }
+
+    details.group > summary::-webkit-details-marker { display: none; }
+
+    details.group .section-body { padding: 12px; }
+
+    label {
+      display: block;
+      margin-top: 8px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    input, textarea, select {
+      width: 100%;
+      margin-top: 4px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      background: var(--field);
+      color: var(--text);
+    }
+
+    textarea {
+      min-height: 92px;
+      font-family: "IBM Plex Mono", monospace;
+    }
+
+    button {
+      margin-top: 10px;
+      margin-right: 6px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+
+    button.secondary { background: var(--accent-2); }
+
+    code {
+      background: var(--chip);
+      border-radius: 4px;
+      padding: 2px 5px;
+    }
+
+    pre {
+      background: var(--code-bg);
+      color: var(--code-text);
+      border-radius: 10px;
+      padding: 12px;
+      min-height: 84px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+
+    .small { font-size: 12px; color: var(--muted); }
+    a { color: var(--accent); }
+
+    .theme-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+    }
+
+    @media (max-width: 700px) {
+      body { padding: 14px; }
+      .topbar { align-items: flex-start; }
+    }
   </style>
 </head>
 <body>
-  <h1>Patchwork Console</h1>
-  <p class="small">Comprehensive API UI for DB-scoped runtime, query/watch, pubsub, streams, webhook ingest, and leases.</p>
-
-  <div class="card">
-    <h2>Session</h2>
-    <label for="baseURL">Base URL</label>
-    <input id="baseURL" value="" placeholder="Defaults to current origin" />
-    <label for="authToken">Bearer Token (optional for public endpoints)</label>
-    <input id="authToken" type="password" placeholder="Token for DB/admin actions" />
-    <label for="dbID">DB ID</label>
-    <input id="dbID" value="public" />
-    <p><a href="/ui/tokens">Token Admin</a> | <a href="/ui/blobs">Blob Manager</a> | <a href="/auth/oidc/login?next=/ui">OIDC Login</a> | <a href="/auth/logout">Logout</a></p>
-  </div>
-
-  <div class="row">
-    <div class="card">
-      <h2>Service</h2>
-      <button onclick="callService('GET', '/healthz', '', 'serviceOut')">Health</button>
-      <button onclick="callService('GET', '/status', '', 'serviceOut')">Status</button>
-      <button onclick="callService('GET', '/metrics', '', 'serviceOut')">Metrics</button>
-      <pre id="serviceOut"></pre>
+  <div class="layout">
+    <div class="topbar">
+      <div>
+        <h1>Patchwork Console</h1>
+        <div class="muted">DB-scoped API console for runtime, queries, pubsub, streams, webhooks, leases, and blob tooling.</div>
+      </div>
+      <label class="theme-control" for="themeMode">
+        Theme
+        <select id="themeMode" aria-label="Theme mode">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
     </div>
 
-    <div class="card">
-      <h2>Runtime</h2>
-      <button onclick="dbCall('POST', '/_open', '', 'runtimeOut')">Open</button>
-      <button onclick="dbCall('GET', '/_status', '', 'runtimeOut')">Status</button>
-      <pre id="runtimeOut"></pre>
-    </div>
-  </div>
-
-  <div class="row">
-    <div class="card">
-      <h2>Query Exec</h2>
-      <label for="querySQL">SQL</label>
-      <textarea id="querySQL">SELECT 1 AS ok;</textarea>
-      <label for="queryArgs">Args JSON array</label>
-      <input id="queryArgs" value="[]" />
-      <button onclick="runQueryExec()">Run</button>
-      <pre id="queryExecOut"></pre>
-    </div>
-
-    <div class="card">
-      <h2>Query Watch</h2>
-      <label for="watchSQL">SQL (read-only)</label>
-      <textarea id="watchSQL">SELECT datetime('now') AS now;</textarea>
-      <label for="watchArgs">Args JSON array</label>
-      <input id="watchArgs" value="[]" />
-      <button onclick="startQueryWatch()">Start</button>
-      <button class="secondary" onclick="stopStream('queryWatch')">Stop</button>
-      <pre id="queryWatchOut"></pre>
-    </div>
-  </div>
-
-  <div class="row">
-    <div class="card">
-      <h2>Durable Messages</h2>
-      <label for="msgTopic">Topic</label>
-      <input id="msgTopic" value="events/demo" />
-      <label for="msgPayloadText">Payload Text</label>
-      <textarea id="msgPayloadText">hello patchwork</textarea>
-      <label for="msgContentType">Content Type</label>
-      <input id="msgContentType" value="text/plain" />
-      <button onclick="publishMessage()">Publish</button>
-      <pre id="msgPublishOut"></pre>
+    <div class="card" id="start">
+      <h2>Start Here</h2>
+      <ol>
+        <li>Use <a href="/auth/oidc/login?next=/ui">OIDC Login</a> to start a web session.</li>
+        <li>If needed, open <a href="/ui/tokens">Token Admin</a> and create a machine token.</li>
+        <li>Set a DB ID below and run actions. Bearer token can stay empty for admin OIDC sessions.</li>
+      </ol>
+      <div class="quick-nav">
+        <a class="chip" href="#session">Session</a>
+        <a class="chip" href="#service-runtime">Service + Runtime</a>
+        <a class="chip" href="#query">Query</a>
+        <a class="chip" href="#messages">Messages</a>
+        <a class="chip" href="#streams">Streams</a>
+        <a class="chip" href="#webhooks-leases">Webhooks + Leases</a>
+        <a class="chip" href="#custom">Custom Call</a>
+      </div>
     </div>
 
-    <div class="card">
-      <h2>Event Stream</h2>
-      <label for="eventTopics">Topics (comma separated; supports + and #)</label>
-      <input id="eventTopics" value="events/#" />
-      <label for="eventSinceID">since_id (optional)</label>
-      <input id="eventSinceID" />
-      <label for="eventTail">tail (optional)</label>
-      <input id="eventTail" />
-      <button onclick="startEventStream()">Start</button>
-      <button class="secondary" onclick="stopStream('eventStream')">Stop</button>
-      <pre id="eventStreamOut"></pre>
-    </div>
-  </div>
-
-  <div class="row">
-    <div class="card">
-      <h2>Streams Queue</h2>
-      <label for="queueTopic">Queue Topic Path</label>
-      <input id="queueTopic" value="jobs" />
-      <label for="queuePayload">Payload</label>
-      <textarea id="queuePayload">job-1</textarea>
-      <button onclick="streamQueueSend()">Send</button>
-      <button class="secondary" onclick="streamQueueNext()">Next</button>
-      <pre id="queueOut"></pre>
+    <div class="card" id="session">
+      <h2>Session</h2>
+      <label for="baseURL">Base URL</label>
+      <input id="baseURL" value="" placeholder="Defaults to current origin" />
+      <label for="authToken">Bearer Token (optional)</label>
+      <input id="authToken" type="password" placeholder="Used for scoped machine-token requests" />
+      <label for="dbID">DB ID</label>
+      <input id="dbID" value="public" />
+      <p class="small">Web sessions are for user login. Machine tokens are for explicit scope-based API calls.</p>
+      <p>
+        <a href="/ui/tokens">Token Admin</a> |
+        <a href="/ui/blobs">Blob Manager</a> |
+        <a href="/auth/oidc/login?next=/ui">OIDC Login</a> |
+        <a href="/auth/logout">Logout</a>
+      </p>
     </div>
 
-    <div class="card">
-      <h2>Streams Request/Responder</h2>
-      <label for="reqPath">Path</label>
-      <input id="reqPath" value="service/demo" />
-      <label for="reqPayload">Requester Payload</label>
-      <textarea id="reqPayload">ping</textarea>
-      <label for="resPayload">Responder Payload (used for one blocking responder call)</label>
-      <textarea id="resPayload">pong</textarea>
-      <button onclick="streamRequester()">Requester</button>
-      <button class="secondary" onclick="streamResponderOnce()">Responder Once</button>
-      <pre id="reqResOut"></pre>
-    </div>
-  </div>
+    <details class="group" id="service-runtime" open>
+      <summary>Service and Runtime</summary>
+      <div class="section-body row">
+        <div class="card">
+          <h3>Service</h3>
+          <div class="small">Public probes and metrics.</div>
+          <button onclick="callService('GET', '/healthz', '', 'serviceOut')">Health</button>
+          <button onclick="callService('GET', '/status', '', 'serviceOut')">Status</button>
+          <button onclick="callService('GET', '/metrics', '', 'serviceOut')">Metrics</button>
+          <pre id="serviceOut"></pre>
+        </div>
 
-  <div class="row">
-    <div class="card">
-      <h2>Webhook Ingest</h2>
-      <label for="webhookEndpoint">Endpoint</label>
-      <input id="webhookEndpoint" value="vendor/event" />
-      <label for="webhookBody">JSON payload</label>
-      <textarea id="webhookBody">{"ok":true}</textarea>
-      <button onclick="webhookIngest()">Send</button>
-      <pre id="webhookOut"></pre>
-    </div>
+        <div class="card">
+          <h3>Runtime</h3>
+          <div class="small">Needs <code>query.read</code> scope.</div>
+          <button onclick="dbCall('POST', '/_open', '', 'runtimeOut')">Open</button>
+          <button onclick="dbCall('GET', '/_status', '', 'runtimeOut')">Status</button>
+          <pre id="runtimeOut"></pre>
+        </div>
+      </div>
+    </details>
 
-    <div class="card">
-      <h2>Leases</h2>
-      <label for="leaseResource">Resource</label>
-      <input id="leaseResource" value="jobs/demo" />
-      <label for="leaseOwner">Owner</label>
-      <input id="leaseOwner" value="worker-a" />
-      <label for="leaseTTL">TTL Seconds</label>
-      <input id="leaseTTL" value="30" />
-      <label for="leaseToken">Lease Token (for renew/release)</label>
-      <input id="leaseToken" />
-      <button onclick="leaseAcquire()">Acquire</button>
-      <button class="secondary" onclick="leaseRenew()">Renew</button>
-      <button class="secondary" onclick="leaseRelease()">Release</button>
-      <pre id="leaseOut"></pre>
-    </div>
-  </div>
+    <details class="group" id="query" open>
+      <summary>SQL Query</summary>
+      <div class="section-body row">
+        <div class="card">
+          <h3>Query Exec</h3>
+          <label for="querySQL">SQL</label>
+          <textarea id="querySQL">SELECT 1 AS ok;</textarea>
+          <label for="queryArgs">Args JSON array</label>
+          <input id="queryArgs" value="[]" />
+          <button onclick="runQueryExec()">Run</button>
+          <pre id="queryExecOut"></pre>
+        </div>
 
-  <div class="card">
-    <h2>Custom API Call</h2>
-    <label for="customMethod">Method</label>
-    <select id="customMethod">
-      <option>GET</option>
-      <option>POST</option>
-      <option>PUT</option>
-      <option>DELETE</option>
-    </select>
-    <label for="customPath">Path</label>
-    <input id="customPath" value="/api/v1/db/public/_status" />
-    <label for="customBody">Body (optional)</label>
-    <textarea id="customBody"></textarea>
-    <button onclick="customCall()">Send</button>
-    <pre id="customOut"></pre>
+        <div class="card">
+          <h3>Query Watch</h3>
+          <div class="small">SSE updates for read-only SQL.</div>
+          <label for="watchSQL">SQL</label>
+          <textarea id="watchSQL">SELECT datetime('now') AS now;</textarea>
+          <label for="watchArgs">Args JSON array</label>
+          <input id="watchArgs" value="[]" />
+          <button onclick="startQueryWatch()">Start</button>
+          <button class="secondary" onclick="stopStream('queryWatch')">Stop</button>
+          <pre id="queryWatchOut"></pre>
+        </div>
+      </div>
+    </details>
+
+    <details class="group" id="messages" open>
+      <summary>Durable Message PubSub</summary>
+      <div class="section-body row">
+        <div class="card">
+          <h3>Publish</h3>
+          <label for="msgTopic">Topic</label>
+          <input id="msgTopic" value="events/demo" />
+          <label for="msgPayloadText">Payload Text</label>
+          <textarea id="msgPayloadText">hello patchwork</textarea>
+          <label for="msgContentType">Content Type</label>
+          <input id="msgContentType" value="text/plain" />
+          <button onclick="publishMessage()">Publish</button>
+          <pre id="msgPublishOut"></pre>
+        </div>
+
+        <div class="card">
+          <h3>Events Stream</h3>
+          <label for="eventTopics">Topics (comma separated; supports + and #)</label>
+          <input id="eventTopics" value="events/#" />
+          <label for="eventSinceID">since_id (optional)</label>
+          <input id="eventSinceID" />
+          <label for="eventTail">tail (optional)</label>
+          <input id="eventTail" />
+          <button onclick="startEventStream()">Start</button>
+          <button class="secondary" onclick="stopStream('eventStream')">Stop</button>
+          <pre id="eventStreamOut"></pre>
+        </div>
+      </div>
+    </details>
+
+    <details class="group" id="streams" open>
+      <summary>Byte Streams (Legacy Stream Mode)</summary>
+      <div class="section-body row">
+        <div class="card">
+          <h3>Queue</h3>
+          <label for="queueTopic">Queue Topic Path</label>
+          <input id="queueTopic" value="jobs" />
+          <label for="queuePayload">Payload</label>
+          <textarea id="queuePayload">job-1</textarea>
+          <button onclick="streamQueueSend()">Send</button>
+          <button class="secondary" onclick="streamQueueNext()">Next</button>
+          <pre id="queueOut"></pre>
+        </div>
+
+        <div class="card">
+          <h3>Request and Responder</h3>
+          <label for="reqPath">Path</label>
+          <input id="reqPath" value="service/demo" />
+          <label for="reqPayload">Requester Payload</label>
+          <textarea id="reqPayload">ping</textarea>
+          <label for="resPayload">Responder Payload</label>
+          <textarea id="resPayload">pong</textarea>
+          <button onclick="streamRequester()">Requester</button>
+          <button class="secondary" onclick="streamResponderOnce()">Responder Once</button>
+          <pre id="reqResOut"></pre>
+        </div>
+      </div>
+    </details>
+
+    <details class="group" id="webhooks-leases" open>
+      <summary>Webhook Ingest and Leases</summary>
+      <div class="section-body row">
+        <div class="card">
+          <h3>Webhook Ingest</h3>
+          <label for="webhookEndpoint">Endpoint</label>
+          <input id="webhookEndpoint" value="vendor/event" />
+          <label for="webhookBody">JSON payload</label>
+          <textarea id="webhookBody">{"ok":true}</textarea>
+          <button onclick="webhookIngest()">Send</button>
+          <pre id="webhookOut"></pre>
+        </div>
+
+        <div class="card">
+          <h3>Leases</h3>
+          <label for="leaseResource">Resource</label>
+          <input id="leaseResource" value="jobs/demo" />
+          <label for="leaseOwner">Owner</label>
+          <input id="leaseOwner" value="worker-a" />
+          <label for="leaseTTL">TTL Seconds</label>
+          <input id="leaseTTL" value="30" />
+          <label for="leaseToken">Lease Token (for renew/release)</label>
+          <input id="leaseToken" />
+          <button onclick="leaseAcquire()">Acquire</button>
+          <button class="secondary" onclick="leaseRenew()">Renew</button>
+          <button class="secondary" onclick="leaseRelease()">Release</button>
+          <pre id="leaseOut"></pre>
+        </div>
+      </div>
+    </details>
+
+    <details class="group" id="custom" open>
+      <summary>Custom API Call</summary>
+      <div class="section-body card" style="margin: 0; box-shadow: none; border: 0; background: transparent; padding: 0;">
+        <label for="customMethod">Method</label>
+        <select id="customMethod">
+          <option>GET</option>
+          <option>POST</option>
+          <option>PUT</option>
+          <option>DELETE</option>
+        </select>
+        <label for="customPath">Path</label>
+        <input id="customPath" value="/api/v1/db/public/_status" />
+        <label for="customBody">Body (optional)</label>
+        <textarea id="customBody"></textarea>
+        <button onclick="customCall()">Send</button>
+        <pre id="customOut"></pre>
+      </div>
+    </details>
   </div>
 
   <script>
     var controllers = {};
+    var themeStorageKey = "patchwork_theme_mode";
+
+    function applyThemeMode(mode) {
+      var root = document.documentElement;
+      if (mode === "light" || mode === "dark") {
+        root.setAttribute("data-theme", mode);
+      } else {
+        root.removeAttribute("data-theme");
+      }
+    }
+
+    function initThemeMode() {
+      var select = document.getElementById("themeMode");
+      if (!select) return;
+
+      var stored = "";
+      try {
+        stored = localStorage.getItem(themeStorageKey) || "";
+      } catch (_) {
+        stored = "";
+      }
+
+      var mode = (stored === "light" || stored === "dark" || stored === "system") ? stored : "system";
+      select.value = mode;
+      applyThemeMode(mode);
+
+      select.addEventListener("change", function() {
+        var next = select.value;
+        try {
+          localStorage.setItem(themeStorageKey, next);
+        } catch (_) {}
+        applyThemeMode(next);
+      });
+
+      if (window.matchMedia) {
+        var media = window.matchMedia("(prefers-color-scheme: dark)");
+        var onChange = function() {
+          var current = "system";
+          try {
+            current = localStorage.getItem(themeStorageKey) || "system";
+          } catch (_) {
+            current = "system";
+          }
+          if (current === "system") {
+            applyThemeMode("system");
+          }
+        };
+        if (media.addEventListener) {
+          media.addEventListener("change", onChange);
+        } else if (media.addListener) {
+          media.addListener(onChange);
+        }
+      }
+    }
 
     function baseURL() {
       var raw = document.getElementById("baseURL").value.trim();
@@ -237,8 +533,7 @@ const mainUIHTML = `<!doctype html>
         if (body !== "") opts.body = body;
         var res = await fetch(baseURL() + path, opts);
         var text = await res.text();
-        var label = "[" + res.status + "] ";
-        setOut(outID, label + prettyText(text));
+        setOut(outID, "[" + res.status + "] " + prettyText(text));
       } catch (err) {
         setOut(outID, String(err));
       }
@@ -456,6 +751,8 @@ const mainUIHTML = `<!doctype html>
       var qs = parts.length ? "?" + parts.join("&") : "";
       await startStream("eventStream", "GET", "/api/v1/db/" + encodeURIComponent(id) + "/events/stream" + qs, "", "eventStreamOut");
     }
+
+    initThemeMode();
   </script>
 </body>
 </html>`
@@ -467,6 +764,9 @@ func (s *Server) handleMainUI(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := s.requireWebUIAccess(w, r); !ok {
 		return
 	}
 

@@ -115,7 +115,7 @@ func (s *Server) handleBlobList(w http.ResponseWriter, r *http.Request, dbID str
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.read", "/blobs/list"); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "blob.read", "/blobs/list"); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -314,7 +314,7 @@ func (s *Server) handleBlobInitUpload(w http.ResponseWriter, r *http.Request, db
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.upload", blobID); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "blob.upload", blobID); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -445,7 +445,7 @@ func (s *Server) handleBlobCompleteUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.upload", blobID); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "blob.upload", blobID); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -523,7 +523,7 @@ func (s *Server) handleBlobReadURL(w http.ResponseWriter, r *http.Request, dbID,
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.read", blobID); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "blob.read", blobID); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -614,7 +614,7 @@ func (s *Server) handleBlobClaim(w http.ResponseWriter, r *http.Request, dbID, b
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.claim", blobID); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "blob.claim", blobID); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -677,7 +677,7 @@ func (s *Server) handleBlobRelease(w http.ResponseWriter, r *http.Request, dbID,
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.release", blobID); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "blob.release", blobID); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -761,7 +761,7 @@ func (s *Server) handleBlobKeep(w http.ResponseWriter, r *http.Request, dbID, bl
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.upload", "keep/"+blobID); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "blob.upload", "keep/"+blobID); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -812,7 +812,7 @@ func (s *Server) handleBlobUnkeep(w http.ResponseWriter, r *http.Request, dbID, 
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.upload", "unkeep/"+blobID); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "blob.upload", "unkeep/"+blobID); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -852,7 +852,7 @@ func (s *Server) handleBlobPublish(w http.ResponseWriter, r *http.Request, dbID,
 		return
 	}
 
-	principal, err := s.auth.AuthorizeRequest(r, dbID, "blob.publish", blobID)
+	principal, err := s.authorizeRequest(r, dbID, "blob.publish", blobID)
 	if err != nil {
 		s.writeAuthError(w, err)
 		return
@@ -923,7 +923,7 @@ func (s *Server) handleBlobUnpublish(w http.ResponseWriter, r *http.Request, dbI
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.publish", blobID); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "blob.publish", blobID); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}

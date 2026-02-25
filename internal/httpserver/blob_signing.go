@@ -54,7 +54,7 @@ func (s *Server) authorizeBlobDataPlaneRequest(w http.ResponseWriter, r *http.Re
 		return false
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, action, resource); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, action, resource); err != nil {
 		s.writeAuthError(w, err)
 		return false
 	}

@@ -47,6 +47,9 @@ Authorization logic:
 - `db_id` and `action` must match exactly.
 - If `resource_prefix` is set, requested resource must start with that prefix.
 - Admin tokens bypass scope checks.
+- For HTTP endpoints that use normal auth checks, Patchwork resolves auth as:
+  - bearer token principal first
+  - fallback to OIDC web session admin principal (if OIDC is configured and the subject is in `PATCHWORK_OIDC_ADMIN_SUBJECTS`)
 
 High-signal action map:
 
@@ -103,13 +106,34 @@ Admin token endpoints require one of:
 
 ### `GET /` and `GET /ui`
 
-- Auth: none (UI itself)
+- Auth:
+  - OIDC disabled: none
+  - OIDC enabled: requires valid web session (redirects to `/auth/oidc/login?next=...` if missing)
 - Browser console for common Patchwork operations (service status, DB runtime, query/watch, messages/events, streams, webhooks, leases).
-- Most actions initiated from the UI still require normal bearer-token auth by scope.
+- Theme mode selector is built in (`system` default, `light`, `dark`).
+- For API calls from UI:
+  - bearer token works normally
+  - OIDC admin sessions can authorize protected calls as admin
+
+### `GET /ui/blobs`
+
+- Auth:
+  - OIDC disabled: none
+  - OIDC enabled: requires valid web session
+- Blob management console UI.
+- Theme mode selector is built in (`system` default, `light`, `dark`).
+
+### `GET /ui/tokens`
+
+- Auth:
+  - OIDC disabled: none
+  - OIDC enabled: requires valid admin web session subject
+- Token management console UI.
+- Theme mode selector is built in (`system` default, `light`, `dark`).
 
 ### `GET /api/v1/admin/tokens`
 
-- Auth: `admin.token` on `db_id="*"` (or OIDC admin session)
+- Auth: `admin.token` on `db_id="*"` (or OIDC admin session admin subject)
 - Returns token metadata list.
 
 ### `POST /api/v1/admin/tokens`

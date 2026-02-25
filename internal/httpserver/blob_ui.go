@@ -12,80 +12,229 @@ const blobUIHTML = `<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Patchwork Blob Manager</title>
   <style>
-    :root { color-scheme: light; }
-    body { font-family: "IBM Plex Sans", "Segoe UI", sans-serif; margin: 24px; background: #f7f8fb; color: #162033; }
+    :root {
+      color-scheme: light;
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --text: #10223a;
+      --muted: #53627d;
+      --border: #d3ddeb;
+      --field: #ffffff;
+      --accent: #1354d3;
+      --accent-2: #4f6186;
+      --chip: #edf2ff;
+      --shadow: 0 8px 28px rgba(22, 36, 66, 0.07);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0d1118;
+      --card: #141b27;
+      --text: #e5ecfb;
+      --muted: #9aaccc;
+      --border: #243248;
+      --field: #111826;
+      --accent: #6d9dff;
+      --accent-2: #4f6b9d;
+      --chip: #1f2a40;
+      --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme]) {
+        color-scheme: dark;
+        --bg: #0d1118;
+        --card: #141b27;
+        --text: #e5ecfb;
+        --muted: #9aaccc;
+        --border: #243248;
+        --field: #111826;
+        --accent: #6d9dff;
+        --accent-2: #4f6b9d;
+        --chip: #1f2a40;
+        --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top right, rgba(19, 84, 211, 0.12), transparent 36%), var(--bg);
+      line-height: 1.38;
+    }
     h1 { margin-top: 0; }
-    .card { background: white; border: 1px solid #d5dbe8; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    .layout { max-width: 1180px; margin: 0 auto; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+      margin-bottom: 12px;
+    }
     label { display: block; margin-top: 8px; font-weight: 600; }
-    input, select { width: 100%; box-sizing: border-box; margin-top: 4px; border: 1px solid #b8c0d5; border-radius: 6px; padding: 8px; }
-    button { margin-top: 12px; background: #1449d6; color: white; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
-    button.secondary { background: #516080; }
+    input, select {
+      width: 100%;
+      margin-top: 4px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      background: var(--field);
+      color: var(--text);
+    }
+    button {
+      margin-top: 12px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    button.secondary { background: var(--accent-2); }
     table { width: 100%; border-collapse: collapse; }
-    th, td { border-bottom: 1px solid #e2e8f0; text-align: left; padding: 8px; vertical-align: top; }
-    code { background: #eef2ff; padding: 2px 4px; border-radius: 4px; }
-    pre { background: #0f172a; color: #e5e7eb; padding: 12px; border-radius: 8px; overflow-x: auto; }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 8px;
+      vertical-align: top;
+    }
+    code {
+      background: var(--chip);
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+    pre {
+      background: #0f1b33;
+      color: #e7eefc;
+      padding: 12px;
+      border-radius: 10px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+    a { color: var(--accent); }
+    .small { font-size: 12px; color: var(--muted); }
+    .theme-control { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+    @media (max-width: 700px) { body { padding: 14px; } }
   </style>
 </head>
 <body>
-  <h1>Patchwork Blob Manager</h1>
+  <div class="layout">
+    <div class="topbar">
+      <div>
+        <h1>Patchwork Blob Manager</h1>
+        <div class="small">Upload, inspect, publish, and keep blobs for DB-scoped archives.</div>
+      </div>
+      <label class="theme-control" for="themeMode">
+        Theme
+        <select id="themeMode" aria-label="Theme mode">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+    </div>
 
-  <div class="card">
-    <label for="authToken">Bearer Token</label>
-    <input id="authToken" type="password" placeholder="Token with blob.read/blob.upload/blob.publish scopes" />
-    <label for="dbID">DB ID</label>
-    <input id="dbID" value="public" />
-    <button class="secondary" onclick="loadBlobs()">Load Blobs</button>
-    <p><a href="/ui/tokens">Token Admin</a> | <a href="/auth/oidc/login?next=/ui/blobs">OIDC Login</a> | <a href="/auth/logout">Logout</a></p>
-  </div>
+    <div class="card">
+      <label for="authToken">Bearer Token (optional if admin OIDC session is allowed)</label>
+      <input id="authToken" type="password" placeholder="Token with blob.read/blob.upload/blob.publish scopes" />
+      <label for="dbID">DB ID</label>
+      <input id="dbID" value="public" />
+      <button class="secondary" onclick="loadBlobs()">Load Blobs</button>
+      <p><a href="/ui">Console</a> | <a href="/ui/tokens">Token Admin</a> | <a href="/auth/logout">Logout</a></p>
+    </div>
 
-  <div class="card">
-    <h2>Upload (SingleFile REST Form)</h2>
-    <label for="fileField">File Field Name</label>
-    <input id="fileField" value="file" />
-    <label for="urlField">URL Field Name</label>
-    <input id="urlField" value="url" />
-    <label for="sourceURL">Source URL (optional)</label>
-    <input id="sourceURL" placeholder="https://example.com/page" />
-    <label for="description">Description (optional)</label>
-    <input id="description" placeholder="Archived copy of ..." />
-    <label for="tags">Tags (comma separated)</label>
-    <input id="tags" placeholder="archive/news, singlefile" />
-    <label for="uploadFile">Archive File</label>
-    <input id="uploadFile" type="file" />
-    <button onclick="uploadSingleFile()">Upload</button>
-    <pre id="uploadResult">No upload yet.</pre>
-  </div>
+    <div class="card">
+      <h2>Upload (SingleFile REST Form)</h2>
+      <label for="fileField">File Field Name</label>
+      <input id="fileField" value="file" />
+      <label for="urlField">URL Field Name</label>
+      <input id="urlField" value="url" />
+      <label for="sourceURL">Source URL (optional)</label>
+      <input id="sourceURL" placeholder="https://example.com/page" />
+      <label for="description">Description (optional)</label>
+      <input id="description" placeholder="Archived copy of ..." />
+      <label for="tags">Tags (comma separated)</label>
+      <input id="tags" placeholder="archive/news, singlefile" />
+      <label for="uploadFile">Archive File</label>
+      <input id="uploadFile" type="file" />
+      <button onclick="uploadSingleFile()">Upload</button>
+      <pre id="uploadResult">No upload yet.</pre>
+    </div>
 
-  <div class="card">
-    <h2>Blobs</h2>
-    <button class="secondary" onclick="loadBlobs()">Refresh</button>
-    <table>
-      <thead>
-        <tr>
-          <th>Hash</th>
-          <th>Status</th>
-          <th>Size</th>
-          <th>Type</th>
-          <th>Kept</th>
-          <th>Public</th>
-          <th>Tags</th>
-          <th>Claims</th>
-          <th>Last Seen</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody id="blobRows"></tbody>
-    </table>
+    <div class="card">
+      <h2>Blobs</h2>
+      <button class="secondary" onclick="loadBlobs()">Refresh</button>
+      <table>
+        <thead>
+          <tr>
+            <th>Hash</th>
+            <th>Status</th>
+            <th>Size</th>
+            <th>Type</th>
+            <th>Kept</th>
+            <th>Public</th>
+            <th>Tags</th>
+            <th>Claims</th>
+            <th>Last Seen</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="blobRows"></tbody>
+      </table>
+    </div>
   </div>
 
   <script>
+    var themeStorageKey = "patchwork_theme_mode";
+
+    function applyThemeMode(mode) {
+      var root = document.documentElement;
+      if (mode === "light" || mode === "dark") {
+        root.setAttribute("data-theme", mode);
+      } else {
+        root.removeAttribute("data-theme");
+      }
+    }
+
+    function initThemeMode() {
+      var select = document.getElementById("themeMode");
+      if (!select) return;
+      var stored = "";
+      try {
+        stored = localStorage.getItem(themeStorageKey) || "";
+      } catch (_) {
+        stored = "";
+      }
+      var mode = (stored === "light" || stored === "dark" || stored === "system") ? stored : "system";
+      select.value = mode;
+      applyThemeMode(mode);
+      select.addEventListener("change", function() {
+        try {
+          localStorage.setItem(themeStorageKey, select.value);
+        } catch (_) {}
+        applyThemeMode(select.value);
+      });
+    }
+
     function getDBID() {
       return document.getElementById("dbID").value.trim();
     }
 
     function getAuthHeaders() {
       var token = document.getElementById("authToken").value.trim();
-      if (!token) throw new Error("Bearer token is required");
+      if (!token) return {};
       return { "Authorization": "Bearer " + token };
     }
 
@@ -230,6 +379,8 @@ const blobUIHTML = `<!doctype html>
         tbody.appendChild(row);
       }
     }
+
+    initThemeMode();
   </script>
 </body>
 </html>`
@@ -237,6 +388,9 @@ const blobUIHTML = `<!doctype html>
 func (s *Server) handleBlobUI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := s.requireWebUIAccess(w, r); !ok {
 		return
 	}
 

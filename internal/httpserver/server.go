@@ -127,64 +127,220 @@ const tokenUIHTML = `<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Patchwork Token Admin</title>
   <style>
-    :root { color-scheme: light; }
-    body { font-family: "IBM Plex Sans", "Segoe UI", sans-serif; margin: 24px; background: #f7f8fb; color: #162033; }
-    h1 { margin-top: 0; }
-    .card { background: white; border: 1px solid #d5dbe8; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    :root {
+      color-scheme: light;
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --text: #10223a;
+      --muted: #53627d;
+      --border: #d3ddeb;
+      --field: #ffffff;
+      --accent: #1354d3;
+      --accent-2: #4f6186;
+      --code-bg: #0f1b33;
+      --code-text: #e7eefc;
+      --chip: #edf2ff;
+      --shadow: 0 8px 28px rgba(22, 36, 66, 0.07);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0d1118;
+      --card: #141b27;
+      --text: #e5ecfb;
+      --muted: #9aaccc;
+      --border: #243248;
+      --field: #111826;
+      --accent: #6d9dff;
+      --accent-2: #4f6b9d;
+      --code-bg: #091020;
+      --code-text: #dce7ff;
+      --chip: #1f2a40;
+      --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme]) {
+        color-scheme: dark;
+        --bg: #0d1118;
+        --card: #141b27;
+        --text: #e5ecfb;
+        --muted: #9aaccc;
+        --border: #243248;
+        --field: #111826;
+        --accent: #6d9dff;
+        --accent-2: #4f6b9d;
+        --code-bg: #091020;
+        --code-text: #dce7ff;
+        --chip: #1f2a40;
+        --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top right, rgba(19, 84, 211, 0.12), transparent 36%), var(--bg);
+      line-height: 1.38;
+    }
+    h1, h2 { margin-top: 0; }
+    .layout { max-width: 1100px; margin: 0 auto; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+      margin-bottom: 12px;
+    }
     label { display: block; margin-top: 8px; font-weight: 600; }
-    input, textarea { width: 100%; box-sizing: border-box; margin-top: 4px; border: 1px solid #b8c0d5; border-radius: 6px; padding: 8px; }
+    input, textarea, select {
+      width: 100%;
+      margin-top: 4px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      background: var(--field);
+      color: var(--text);
+    }
     textarea { min-height: 90px; font-family: "IBM Plex Mono", monospace; }
-    button { margin-top: 12px; background: #1449d6; color: white; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
-    button.secondary { background: #516080; }
-    pre { background: #0f172a; color: #e5e7eb; padding: 12px; border-radius: 8px; overflow-x: auto; }
+    button {
+      margin-top: 12px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    button.secondary { background: var(--accent-2); }
+    pre {
+      background: var(--code-bg);
+      color: var(--code-text);
+      padding: 12px;
+      border-radius: 10px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
     table { width: 100%; border-collapse: collapse; }
-    th, td { border-bottom: 1px solid #e2e8f0; text-align: left; padding: 8px; vertical-align: top; }
-    code { background: #eef2ff; padding: 2px 4px; border-radius: 4px; }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 8px;
+      vertical-align: top;
+    }
+    code {
+      background: var(--chip);
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+    .small { font-size: 12px; color: var(--muted); }
+    a { color: var(--accent); }
+    .theme-control { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+    @media (max-width: 700px) { body { padding: 14px; } }
   </style>
 </head>
 <body>
-  <h1>Patchwork Machine Tokens</h1>
+  <div class="layout">
+    <div class="topbar">
+      <div>
+        <h1>Patchwork Machine Tokens</h1>
+        <div class="small">Issue and revoke machine tokens with DB/action/resource scopes.</div>
+      </div>
+      <label class="theme-control" for="themeMode">
+        Theme
+        <select id="themeMode" aria-label="Theme mode">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+    </div>
 
-  <div class="card">
-    <label for="authToken">Admin Token</label>
-    <input id="authToken" type="password" placeholder="Optional when logged in via OIDC" />
-    <button class="secondary" onclick="loadTokens()">Load Tokens</button>
-    <p><a href="/ui/blobs">Blob Manager</a> | <a href="/auth/oidc/login?next=/ui/tokens">OIDC Login</a> | <a href="/auth/logout">Logout</a></p>
-  </div>
+    <div class="card">
+      <p class="small">This page uses your OIDC web session. Optional: provide a bearer token override.</p>
+      <label for="authToken">Admin Token Override (optional)</label>
+      <input id="authToken" type="password" placeholder="Optional when logged in via OIDC" />
+      <button class="secondary" onclick="loadTokens()">Load Tokens</button>
+      <p><a href="/ui">Console</a> | <a href="/ui/blobs">Blob Manager</a> | <a href="/auth/logout">Logout</a></p>
+    </div>
 
-  <div class="card">
-    <h2>Create Token</h2>
-    <label for="label">Label</label>
-    <input id="label" placeholder="worker-a" />
-    <label><input id="isAdmin" type="checkbox" /> Is Admin</label>
-    <label for="expiresAt">Expires At (RFC3339, optional)</label>
-    <input id="expiresAt" placeholder="2026-12-31T23:59:59Z" />
-    <label for="scopes">Scopes (one per line: db_id,action,resource_prefix)</label>
-    <textarea id="scopes" placeholder="public,query.read,&#10;public,stream.write,jobs/"></textarea>
-    <button onclick="createToken()">Create Token</button>
-    <pre id="createResult">No token created yet.</pre>
-  </div>
+    <div class="card">
+      <h2>Create Token</h2>
+      <label for="label">Label</label>
+      <input id="label" placeholder="worker-a" />
+      <label><input id="isAdmin" type="checkbox" /> Is Admin</label>
+      <label for="expiresAt">Expires At (RFC3339, optional)</label>
+      <input id="expiresAt" placeholder="2026-12-31T23:59:59Z" />
+      <label for="scopes">Scopes (one per line: db_id,action,resource_prefix)</label>
+      <textarea id="scopes" placeholder="public,query.read,&#10;public,stream.write,jobs/"></textarea>
+      <button onclick="createToken()">Create Token</button>
+      <pre id="createResult">No token created yet.</pre>
+    </div>
 
-  <div class="card">
-    <h2>Token List</h2>
-    <button class="secondary" onclick="loadTokens()">Refresh</button>
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Label</th>
-          <th>Admin</th>
-          <th>Expires</th>
-          <th>Revoked</th>
-          <th>Scopes</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody id="tokenRows"></tbody>
-    </table>
+    <div class="card">
+      <h2>Token List</h2>
+      <button class="secondary" onclick="loadTokens()">Refresh</button>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Label</th>
+            <th>Admin</th>
+            <th>Expires</th>
+            <th>Revoked</th>
+            <th>Scopes</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="tokenRows"></tbody>
+      </table>
+    </div>
   </div>
 
   <script>
+    var themeStorageKey = "patchwork_theme_mode";
+
+    function applyThemeMode(mode) {
+      var root = document.documentElement;
+      if (mode === "light" || mode === "dark") {
+        root.setAttribute("data-theme", mode);
+      } else {
+        root.removeAttribute("data-theme");
+      }
+    }
+
+    function initThemeMode() {
+      var select = document.getElementById("themeMode");
+      if (!select) return;
+      var stored = "";
+      try {
+        stored = localStorage.getItem(themeStorageKey) || "";
+      } catch (_) {
+        stored = "";
+      }
+      var mode = (stored === "light" || stored === "dark" || stored === "system") ? stored : "system";
+      select.value = mode;
+      applyThemeMode(mode);
+      select.addEventListener("change", function() {
+        try {
+          localStorage.setItem(themeStorageKey, select.value);
+        } catch (_) {}
+        applyThemeMode(select.value);
+      });
+    }
+
     function getAuthHeader() {
       var token = document.getElementById("authToken").value.trim();
       if (!token) {
@@ -295,6 +451,8 @@ const tokenUIHTML = `<!doctype html>
         alert(String(err));
       }
     }
+
+    initThemeMode();
   </script>
 </body>
 </html>`
@@ -502,6 +660,9 @@ func (s *Server) handleTokenUI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if _, ok := s.requireWebUIAdminAccess(w, r); !ok {
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = io.WriteString(w, tokenUIHTML)
@@ -554,7 +715,7 @@ func (s *Server) handleDBOpen(w http.ResponseWriter, r *http.Request, dbID strin
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "query.read", "/runtime/open"); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "query.read", "/runtime/open"); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -579,7 +740,7 @@ func (s *Server) handleDBStatus(w http.ResponseWriter, r *http.Request, dbID str
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "query.read", "/runtime/status"); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "query.read", "/runtime/status"); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -638,7 +799,7 @@ func (s *Server) handleMessagePublish(w http.ResponseWriter, r *http.Request, db
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "pub.publish", topic); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "pub.publish", topic); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -881,7 +1042,7 @@ func (s *Server) handleQueryExec(w http.ResponseWriter, r *http.Request, dbID st
 	statementClass := classifyStatementClass(sqlText)
 	requiredAction := queryActionForClass(statementClass)
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, requiredAction, "/query/exec"); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, requiredAction, "/query/exec"); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -971,7 +1132,7 @@ func (s *Server) handleQueryWatch(w http.ResponseWriter, r *http.Request, dbID s
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "query.read", "/query/watch"); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "query.read", "/query/watch"); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -1212,7 +1373,7 @@ func (s *Server) handleLeaseAcquire(w http.ResponseWriter, r *http.Request, dbID
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "lease.acquire", resource); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "lease.acquire", resource); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -1306,7 +1467,7 @@ func (s *Server) handleLeaseRenew(w http.ResponseWriter, r *http.Request, dbID s
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "lease.renew", resource); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "lease.renew", resource); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -1390,7 +1551,7 @@ func (s *Server) handleLeaseRelease(w http.ResponseWriter, r *http.Request, dbID
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "lease.release", resource); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "lease.release", resource); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -1461,7 +1622,7 @@ func (s *Server) handleWebhookIngest(w http.ResponseWriter, r *http.Request, dbI
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "webhook.ingest", endpoint); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "webhook.ingest", endpoint); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -1580,7 +1741,7 @@ func (s *Server) handleStreamQueue(w http.ResponseWriter, r *http.Request, dbID,
 			return
 		}
 
-		if _, err := s.auth.AuthorizeRequest(r, dbID, "stream.read", "queue/"+topic); err != nil {
+		if _, err := s.authorizeRequest(r, dbID, "stream.read", "queue/"+topic); err != nil {
 			s.writeAuthError(w, err)
 			return
 		}
@@ -1610,7 +1771,7 @@ func (s *Server) handleStreamQueue(w http.ResponseWriter, r *http.Request, dbID,
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "stream.write", "queue/"+topic); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "stream.write", "queue/"+topic); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -1656,7 +1817,7 @@ func (s *Server) handleStreamRequester(w http.ResponseWriter, r *http.Request, d
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "stream.write", "req/"+requestPath); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "stream.write", "req/"+requestPath); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -1706,7 +1867,7 @@ func (s *Server) handleStreamResponder(w http.ResponseWriter, r *http.Request, d
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "stream.write", "res/"+responsePath); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "stream.write", "res/"+responsePath); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
@@ -1881,7 +2042,7 @@ func parseReplayParams(values url.Values) (sinceID int64, hasSinceID bool, tail 
 
 func authorizeSubscribeRequest(s *Server, w http.ResponseWriter, r *http.Request, dbID string, filters []string) error {
 	if len(filters) == 0 {
-		if _, err := s.auth.AuthorizeRequest(r, dbID, "pub.subscribe", ""); err != nil {
+		if _, err := s.authorizeRequest(r, dbID, "pub.subscribe", ""); err != nil {
 			s.writeAuthError(w, err)
 			return err
 		}
@@ -1894,7 +2055,7 @@ func authorizeSubscribeRequest(s *Server, w http.ResponseWriter, r *http.Request
 			continue
 		}
 		seen[filter] = struct{}{}
-		if _, err := s.auth.AuthorizeRequest(r, dbID, "pub.subscribe", filter); err != nil {
+		if _, err := s.authorizeRequest(r, dbID, "pub.subscribe", filter); err != nil {
 			s.writeAuthError(w, err)
 			return err
 		}

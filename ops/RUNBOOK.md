@@ -108,6 +108,8 @@ SQLite extensions + compile checks:
 
 - Verify token is present in `Authorization: Bearer ...`
 - Verify token scopes match `db_id` and action
+- If OIDC is enabled, verify browser has a valid `patchwork_session` cookie
+- For OIDC web sessions, verify subject is listed in `PATCHWORK_OIDC_ADMIN_SUBJECTS` when admin access is required
 
 `429`:
 
@@ -139,6 +141,10 @@ Web UI entry points:
 - `GET /` and `GET /ui`: main multi-feature console
 - `GET /ui/tokens`: token admin UI
 - `GET /ui/blobs`: blob manager UI
+- Theme selector on each page: `system` (default), `light`, `dark`
+- If OIDC is configured:
+  - `/`, `/ui`, `/ui/blobs` redirect to OIDC login when session is missing
+  - `/ui/tokens` requires admin subject
 
 Containerized build/run:
 

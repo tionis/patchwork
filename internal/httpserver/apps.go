@@ -31,7 +31,7 @@ func (s *Server) handleSingleFileRESTFormUpload(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.upload", "apps/"+singleFileRESTFormEndpoint); err != nil {
+	if _, err := s.authorizeRequest(r, dbID, "blob.upload", "apps/"+singleFileRESTFormEndpoint); err != nil {
 		s.writeAuthError(w, err)
 		return
 	}

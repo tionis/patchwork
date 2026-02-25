@@ -199,6 +199,10 @@ Behavior:
 
 - Main console route: `GET /` (also available as `GET /ui`)
 - Route: `GET /ui/tokens`
+- UI theme toggle is available on `/ui`, `/ui/tokens`, and `/ui/blobs` with modes: `system` (default), `light`, `dark`.
+- When OIDC is configured:
+  - `GET /`, `GET /ui`, and `GET /ui/blobs` require a valid web session and redirect to `/auth/oidc/login?next=...` when missing.
+  - `GET /ui/tokens` additionally requires an admin OIDC subject.
 - Provides a lightweight admin page for machine token create/list/revoke flows against:
   - `GET /api/v1/admin/tokens`
   - `POST /api/v1/admin/tokens`
@@ -211,7 +215,9 @@ Behavior:
   - `GET /auth/oidc/login`
   - `GET /auth/oidc/callback`
   - `GET /auth/logout`
-- When OIDC is configured, web sessions are stored in `web_sessions` and allowed OIDC subjects can manage machine tokens without pasting a bearer token in the UI.
+- When OIDC is configured, web sessions are stored in `web_sessions`.
+- OIDC admin subjects can manage machine tokens without pasting a bearer token in the UI.
+- OIDC admin sessions are also accepted as admin authorization for DB-scoped APIs in the web UI (bearer token remains optional for non-admin scoped use).
 
 ### Blob Control Plane
 
