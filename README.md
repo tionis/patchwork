@@ -10,6 +10,7 @@ Canonical design and migration notes live in:
 - `projects/skald/FUTURE_CONSIDERATIONS.md` (deferred decisions/checklist)
 - `projects/skald/COMPATIBILITY.md` (legacy kept/changed/dropped matrix)
 - `projects/skald/ops/RUNBOOK.md` (operations runbook)
+- `projects/skald/LLM_API.md` (API integration guide for LLM/tooling clients)
 
 That document includes:
 
@@ -20,6 +21,17 @@ That document includes:
 - migration and rollout phases
 
 ## Implemented API (Current)
+
+### DB ID Rules
+
+- All DB-scoped APIs use `:db_id` in the route.
+- `db_id` must match: `^[A-Za-z0-9._-]{1,128}$`
+- DB runtimes/documents are created on-demand when first used.
+
+### Runtime Endpoints
+
+- Open/ensure runtime: `POST /api/v1/db/:db_id/_open` (`query.read`)
+- Runtime health/path: `GET /api/v1/db/:db_id/_status` (`query.read`)
 
 ### Webhook Ingest
 
@@ -103,6 +115,7 @@ Accepted payload shapes (exactly one):
   - repeated `topic=<filter>` (MQTT wildcards supported: `+`, `#`)
   - `since_id=<message_id>` for replay from a cursor
   - `tail=<n>` for replay of the latest `n` messages (max `1000`)
+  - `since_id` and `tail` are mutually exclusive
 
 SSE event types:
 
@@ -195,6 +208,9 @@ Behavior:
   - `GET /api/v1/admin/tokens`
   - `POST /api/v1/admin/tokens`
   - `DELETE /api/v1/admin/tokens/:id`
+- Admin API auth:
+  - bearer principal with `db_id="*"`, `action="admin.token"` (or admin token)
+  - or OIDC web session for configured admin subjects
 - Plaintext token is only shown in the create response payload.
 - OIDC login flow is available via:
   - `GET /auth/oidc/login`
@@ -211,6 +227,10 @@ Document migration now includes initial blob-control tables:
 - `blobs` (keep-set metadata: filename/description + archival pin)
 - `blob_tags` (tag-indexed keep-set labels)
 - `app_singlefile_uploads`
+
+Service metadata table used for CDN-style publication tracking:
+
+- `public_blob_exports`
 
 Blob management UI:
 
@@ -233,6 +253,15 @@ Current blob API routes:
 - `POST /api/v1/db/:db_id/blobs/:blob_id/unpublish`
 - `POST /api/v1/db/:db_id/apps/singlefile/rest-form`
 - `GET /o/:blob_hash` (public CDN-style permalink for published blobs)
+- `HEAD /o/:blob_hash`
+
+Blob scope summary:
+
+- `blob.upload`: init/upload/complete, keep/unkeep, singlefile ingest
+- `blob.read`: list/read-url/object
+- `blob.claim`: claim
+- `blob.release`: release
+- `blob.publish`: publish/unpublish
 
 `complete-upload` verifies the staged blob hash before marking metadata as `complete`.
 
@@ -243,6 +272,7 @@ SingleFile REST Form integration:
 - Requires bearer auth with `blob.upload` scope for target DB.
 - Persists upload metadata in `app_singlefile_uploads` for audit/manage workflows.
 - Uploaded blobs are pinned by default in the DB keep-set (`blobs`) for long-term archiving.
+- Optional form fields are supported for archival metadata (`description`, `tags`/`tag`).
 
 Blob signed URL support:
 
