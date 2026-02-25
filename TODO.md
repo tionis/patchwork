@@ -232,6 +232,7 @@ Exit criteria:
 - [ ] Query watch dependency-aware invalidation (`v1`).
 - [x] SQL extension bridge baseline (driver switch + extension loading + compile-option checks).
 - [ ] Outbox workers.
+- [ ] Optional DB-scoped Automerge docs as an additive feature (`/api/v1/db/:db_id/automerge/*`), without replacing the SQLite-first document/runtime model.
 - [ ] Webhook HMAC request signature validation (optional per endpoint).
 - [ ] Legacy webhook-proxy feature decision + implementation (if kept).
 - [ ] HuProxy/OIDC SSH claim integration (if reintroduced).

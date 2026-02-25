@@ -78,6 +78,10 @@ This file tracks important design/implementation decisions intentionally deferre
    - Provider-style request signature validation (for example GitHub HMAC) is deferred.
    - If added later, define per-endpoint config and failure behavior.
 
+12. **Optional Automerge integration (DB-scoped)**
+   - Consider supporting Automerge documents inside each `db_id` as an additive capability.
+   - Keep it DB-scoped and optional; do not replace the SQLite-first runtime/query model.
+
 ## Notes
 
 - These items are intentionally deferred to keep prototype velocity high.
