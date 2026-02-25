@@ -120,6 +120,44 @@ func TestTokenUIPageServesHTML(t *testing.T) {
 	}
 }
 
+func TestMainUIPageServesHTML(t *testing.T) {
+	env := newWebhookTestEnv(t)
+	defer env.close()
+
+	req := httptest.NewRequest(http.MethodGet, "/ui", nil)
+	rr := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d: %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("unexpected content type: %q", ct)
+	}
+
+	if body := rr.Body.String(); !strings.Contains(body, "Patchwork Console") {
+		t.Fatalf("unexpected HTML body: %s", body)
+	}
+}
+
+func TestRootPageServesMainUI(t *testing.T) {
+	env := newWebhookTestEnv(t)
+	defer env.close()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d: %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	if body := rr.Body.String(); !strings.Contains(body, "Patchwork Console") {
+		t.Fatalf("unexpected HTML body: %s", body)
+	}
+}
+
 func TestBlobUIPageServesHTML(t *testing.T) {
 	env := newWebhookTestEnv(t)
 	defer env.close()

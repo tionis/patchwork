@@ -197,6 +197,7 @@ Behavior:
 
 ### Token Management UI
 
+- Main console route: `GET /` (also available as `GET /ui`)
 - Route: `GET /ui/tokens`
 - Provides a lightweight admin page for machine token create/list/revoke flows against:
   - `GET /api/v1/admin/tokens`
@@ -228,6 +229,7 @@ Service metadata table used for CDN-style publication tracking:
 
 Blob management UI:
 
+- Main console route: `GET /` (also available as `GET /ui`)
 - Route: `GET /ui/blobs`
 - Includes DB-scoped blob listing and a multipart upload form targeting the SingleFile endpoint.
 
@@ -323,7 +325,7 @@ Operational implications:
 
 - build requires `CGO_ENABLED=1` and a C toolchain on the build host
 - SQLite compile options are checked once at first DB connection via `PRAGMA compile_options`
-- missing recommended options are logged by default
+- missing recommended options are logged when `PATCHWORK_SQLITE_WARN_MISSING_COMPILE_OPTIONS=true`
 - startup can be made strict with `PATCHWORK_SQLITE_REQUIRED_COMPILE_OPTIONS`
 
 Recommended compile options (current default warning set):
@@ -347,7 +349,7 @@ Default extension load attempts per connection:
 Extension env behavior:
 
 - explicit `PATCHWORK_SQLITE_EXTENSION_*` paths are treated as required
-- optional/default discovery logs one-time warnings if no candidate loads
+- optional/default discovery warnings are controlled by `PATCHWORK_SQLITE_WARN_MISSING_EXTENSIONS`
 - extra required extensions can be listed with `PATCHWORK_SQLITE_EXTENSIONS` (`path` or `path|entrypoint`, comma-separated)
 
 Build example (non-ICU):

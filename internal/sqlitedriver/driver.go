@@ -89,7 +89,7 @@ func verifyCompileOptions(conn *sqlite3.SQLiteConn) error {
 			return
 		}
 
-		if !envBoolDefault("PATCHWORK_SQLITE_WARN_MISSING_COMPILE_OPTIONS", true) {
+		if !envBoolDefault("PATCHWORK_SQLITE_WARN_MISSING_COMPILE_OPTIONS", false) {
 			return
 		}
 
@@ -296,6 +296,10 @@ func loadExtensionGroup(conn *sqlite3.SQLiteConn, group extensionGroup) error {
 			return fmt.Errorf("load sqlite extension %q failed: %w", group.label, loadErr)
 		}
 		return fmt.Errorf("load sqlite extension %q failed: no candidate was loadable (%s)", group.label, strings.Join(triedUnique, ", "))
+	}
+
+	if !envBoolDefault("PATCHWORK_SQLITE_WARN_MISSING_EXTENSIONS", false) {
+		return nil
 	}
 
 	if loadErr != nil {

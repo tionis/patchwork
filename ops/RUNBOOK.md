@@ -98,6 +98,7 @@ SQLite extensions + compile checks:
 - `PATCHWORK_SQLITE_EXTENSION_SQLEAN_DIR`
 - `PATCHWORK_SQLITE_EXTENSIONS`
 - `PATCHWORK_SQLITE_WARN_MISSING_COMPILE_OPTIONS`
+- `PATCHWORK_SQLITE_WARN_MISSING_EXTENSIONS`
 - `PATCHWORK_SQLITE_REQUIRED_COMPILE_OPTIONS`
 - `PATCHWORK_SQLITE_RECOMMENDED_COMPILE_OPTIONS`
 
@@ -124,13 +125,20 @@ Lease conflicts:
 SQLite compile-option warnings at startup:
 
 - The server checks `PRAGMA compile_options` once on first SQLite connection.
-- Missing recommended options are logged as warnings.
+- Missing recommended options are logged only when `PATCHWORK_SQLITE_WARN_MISSING_COMPILE_OPTIONS=true`.
 - Set `PATCHWORK_SQLITE_REQUIRED_COMPILE_OPTIONS` to fail if required options are missing.
 
 Extensions not loading:
 
 - If `PATCHWORK_SQLITE_EXTENSION_*` is explicitly set, load failures are treated as errors.
-- Without explicit paths, Patchwork tries default candidates (`crsqlite`, `vec0`, `sqlean`) and logs one-time warnings if nothing is loadable.
+- Without explicit paths, Patchwork tries default candidates (`crsqlite`, `vec0`, `sqlean`).
+- Missing optional extension candidates are logged only when `PATCHWORK_SQLITE_WARN_MISSING_EXTENSIONS=true`.
+
+Web UI entry points:
+
+- `GET /` and `GET /ui`: main multi-feature console
+- `GET /ui/tokens`: token admin UI
+- `GET /ui/blobs`: blob manager UI
 
 Containerized build/run:
 

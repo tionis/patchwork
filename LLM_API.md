@@ -101,6 +101,12 @@ Admin token endpoints require one of:
 - Auth: none
 - Prometheus text format.
 
+### `GET /` and `GET /ui`
+
+- Auth: none (UI itself)
+- Browser console for common Patchwork operations (service status, DB runtime, query/watch, messages/events, streams, webhooks, leases).
+- Most actions initiated from the UI still require normal bearer-token auth by scope.
+
 ### `GET /api/v1/admin/tokens`
 
 - Auth: `admin.token` on `db_id="*"` (or OIDC admin session)
@@ -555,7 +561,7 @@ These are deployment/runtime facts that can affect API behavior diagnostics.
 - Patchwork uses a cgo-backed SQLite driver (`go-sqlite3`) registered under driver name `sqlite`.
 - Build/runtime requires `CGO_ENABLED=1` and a C toolchain at build time.
 - On first SQLite connection, Patchwork checks `PRAGMA compile_options` once.
-- Missing recommended compile options are logged unless disabled.
+- Missing recommended compile options are logged when `PATCHWORK_SQLITE_WARN_MISSING_COMPILE_OPTIONS=true`.
 - To hard-fail when options are missing, set:
   - `PATCHWORK_SQLITE_REQUIRED_COMPILE_OPTIONS`
 
@@ -577,7 +583,7 @@ Extension loading:
   - sqlite-vec (`vec0`, `sqlite_vec`, variant names)
   - sqlean (`sqlean`, variant names)
 - If explicit env paths are configured (`PATCHWORK_SQLITE_EXTENSION_*`), loading is treated as required.
-- Optional auto-discovery emits one-time warning logs when no candidate can be loaded.
+- Optional auto-discovery warning logs are controlled by `PATCHWORK_SQLITE_WARN_MISSING_EXTENSIONS`.
 
 Build pipeline notes:
 
