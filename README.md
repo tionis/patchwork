@@ -359,3 +359,26 @@ go build -tags "sqlite_fts5 sqlite_preupdate_hook sqlite_vtable" -o patchwork ./
 ```
 
 For ICU-enabled builds, add `sqlite_icu` to tags and provide ICU link flags/libs on your build host.
+
+### SQLite Extension Tests
+
+`internal/sqlitedriver/driver_test.go` includes:
+
+- deterministic tests for required compile-option and required-extension failure behavior
+- integration probes for cr-sqlite, sqlite-vec, and sqlean functionality
+
+Run integration probes by providing extension paths through test env vars:
+
+- `PATCHWORK_SQLITE_TEST_CRSQLITE_PATH` (optional `PATCHWORK_SQLITE_TEST_CRSQLITE_ENTRYPOINT`)
+- `PATCHWORK_SQLITE_TEST_VEC_PATH` (optional `PATCHWORK_SQLITE_TEST_VEC_ENTRYPOINT`)
+- `PATCHWORK_SQLITE_TEST_SQLEAN_PATH` (optional `PATCHWORK_SQLITE_TEST_SQLEAN_ENTRYPOINT`)
+- or `PATCHWORK_SQLITE_TEST_SQLEAN_DIR` for sqlean module-directory loading
+
+Example:
+
+```bash
+PATCHWORK_SQLITE_TEST_CRSQLITE_PATH=/opt/patchwork/extensions/crsqlite \
+PATCHWORK_SQLITE_TEST_VEC_PATH=/opt/patchwork/extensions/vec0 \
+PATCHWORK_SQLITE_TEST_SQLEAN_PATH=/opt/patchwork/extensions/sqlean \
+go test ./internal/sqlitedriver -v
+```
