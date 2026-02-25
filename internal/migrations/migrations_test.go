@@ -37,6 +37,8 @@ func TestBootstrapDocumentCreatesMessageGroundworkTables(t *testing.T) {
 		"fencing_tokens",
 		"blob_metadata",
 		"blob_claims",
+		"blobs",
+		"blob_tags",
 		"app_singlefile_uploads",
 	}
 
@@ -76,6 +78,7 @@ func TestBootstrapServiceCreatesOIDCTables(t *testing.T) {
 		"auth_token_scopes",
 		"web_identities",
 		"web_sessions",
+		"public_blob_exports",
 	}
 
 	for _, table := range requiredTables {

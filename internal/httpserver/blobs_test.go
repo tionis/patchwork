@@ -336,6 +336,15 @@ func TestSingleFileRESTFormUploadStoresBlobAndRecord(t *testing.T) {
 	if err := writer.WriteField("source_page", "https://example.com/articles/1"); err != nil {
 		t.Fatalf("write source field: %v", err)
 	}
+	if err := writer.WriteField("description", "Archive snapshot of article 1"); err != nil {
+		t.Fatalf("write description field: %v", err)
+	}
+	if err := writer.WriteField("tags", "archive/news"); err != nil {
+		t.Fatalf("write tags field: %v", err)
+	}
+	if err := writer.WriteField("tag", "singlefile"); err != nil {
+		t.Fatalf("write tag field: %v", err)
+	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close multipart writer: %v", err)
 	}
@@ -355,10 +364,12 @@ func TestSingleFileRESTFormUploadStoresBlobAndRecord(t *testing.T) {
 	}
 
 	var response struct {
-		BlobID    string `json:"blob_id"`
-		URL       string `json:"url"`
-		ReadURL   string `json:"read_url"`
-		SourceURL string `json:"source_url"`
+		BlobID    string   `json:"blob_id"`
+		URL       string   `json:"url"`
+		ReadURL   string   `json:"read_url"`
+		SourceURL string   `json:"source_url"`
+		Kept      bool     `json:"kept"`
+		Tags      []string `json:"tags"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -372,6 +383,9 @@ func TestSingleFileRESTFormUploadStoresBlobAndRecord(t *testing.T) {
 	}
 	if response.URL == "" || response.ReadURL == "" {
 		t.Fatalf("expected non-empty url/read_url in response: %+v", response)
+	}
+	if !response.Kept {
+		t.Fatalf("expected kept=true in response: %+v", response)
 	}
 
 	objectRR := blobRequest(t, env, token, http.MethodGet, response.ReadURL, "")
@@ -407,6 +421,36 @@ func TestSingleFileRESTFormUploadStoresBlobAndRecord(t *testing.T) {
 	}
 	if storedHash != expectedBlobID {
 		t.Fatalf("unexpected stored blob hash: %q", storedHash)
+	}
+
+	var keptFilename sql.NullString
+	if err := env.runtimes.WithDB(context.Background(), "blobdb", func(ctx context.Context, db *sql.DB) error {
+		return db.QueryRowContext(
+			ctx,
+			`SELECT filename
+			 FROM blobs
+			 WHERE hash = ?`,
+			expectedBlobID,
+		).Scan(&keptFilename)
+	}); err != nil {
+		t.Fatalf("query blobs keep-set table: %v", err)
+	}
+	if !keptFilename.Valid || keptFilename.String != "singlefile-page.html" {
+		t.Fatalf("unexpected keep-set filename: %+v", keptFilename)
+	}
+
+	var tagCount int
+	if err := env.runtimes.WithDB(context.Background(), "blobdb", func(ctx context.Context, db *sql.DB) error {
+		return db.QueryRowContext(
+			ctx,
+			`SELECT COUNT(*) FROM blob_tags WHERE hash = ?`,
+			expectedBlobID,
+		).Scan(&tagCount)
+	}); err != nil {
+		t.Fatalf("query blob_tags: %v", err)
+	}
+	if tagCount < 2 {
+		t.Fatalf("expected at least 2 tags, got %d", tagCount)
 	}
 }
 
@@ -473,6 +517,7 @@ func TestBlobListReturnsMetadata(t *testing.T) {
 			Status      string `json:"status"`
 			SizeBytes   *int64 `json:"size_bytes"`
 			ContentType string `json:"content_type"`
+			Kept        bool   `json:"kept"`
 		} `json:"blobs"`
 	}
 	if err := json.Unmarshal(listRR.Body.Bytes(), &listResponse); err != nil {
@@ -497,9 +542,86 @@ func TestBlobListReturnsMetadata(t *testing.T) {
 		if blob.ContentType != "text/plain" {
 			t.Fatalf("unexpected content_type: %q", blob.ContentType)
 		}
+		if !blob.Kept {
+			t.Fatalf("expected blob to be pinned by default")
+		}
 	}
 	if !found {
 		t.Fatalf("blob %q not found in response: %s", blobID, listRR.Body.String())
+	}
+}
+
+func TestBlobPublishAndPublicReadByHash(t *testing.T) {
+	env := newWebhookTestEnv(t)
+	defer env.close()
+
+	token := env.issueTokenWithScopes(t, "blob-public", []auth.Scope{
+		{DBID: "blobdb", Action: "blob.upload"},
+		{DBID: "blobdb", Action: "blob.read"},
+		{DBID: "blobdb", Action: "blob.publish"},
+	})
+
+	payload := []byte("public-blob-data")
+	sum := sha256.Sum256(payload)
+	blobID := hex.EncodeToString(sum[:])
+
+	initRR := blobRequest(t, env, token, http.MethodPost, "/api/v1/db/blobdb/blobs/init-upload", `{"hash":"`+blobID+`","content_type":"text/plain"}`)
+	if initRR.Code != http.StatusOK {
+		t.Fatalf("init-upload expected %d, got %d: %s", http.StatusOK, initRR.Code, initRR.Body.String())
+	}
+
+	var initPayload struct {
+		UploadURL string `json:"upload_url"`
+	}
+	if err := json.Unmarshal(initRR.Body.Bytes(), &initPayload); err != nil {
+		t.Fatalf("decode init-upload response: %v", err)
+	}
+	uploadRR := blobRequest(t, env, token, http.MethodPut, initPayload.UploadURL, string(payload))
+	if uploadRR.Code != http.StatusOK {
+		t.Fatalf("upload expected %d, got %d: %s", http.StatusOK, uploadRR.Code, uploadRR.Body.String())
+	}
+	completeRR := blobRequest(t, env, token, http.MethodPost, "/api/v1/db/blobdb/blobs/complete-upload", `{"hash":"`+blobID+`"}`)
+	if completeRR.Code != http.StatusOK {
+		t.Fatalf("complete-upload expected %d, got %d: %s", http.StatusOK, completeRR.Code, completeRR.Body.String())
+	}
+
+	publishRR := blobRequest(t, env, token, http.MethodPost, "/api/v1/db/blobdb/blobs/"+blobID+"/publish", "")
+	if publishRR.Code != http.StatusOK {
+		t.Fatalf("publish expected %d, got %d: %s", http.StatusOK, publishRR.Code, publishRR.Body.String())
+	}
+
+	publicReq := httptest.NewRequest(http.MethodGet, "/o/"+blobID, nil)
+	publicRR := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(publicRR, publicReq)
+	if publicRR.Code != http.StatusOK {
+		t.Fatalf("public GET expected %d, got %d: %s", http.StatusOK, publicRR.Code, publicRR.Body.String())
+	}
+	if got := publicRR.Body.String(); got != string(payload) {
+		t.Fatalf("unexpected public payload: %q", got)
+	}
+	if cc := publicRR.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+		t.Fatalf("expected immutable cache-control, got %q", cc)
+	}
+
+	etag := publicRR.Header().Get("ETag")
+	headReq := httptest.NewRequest(http.MethodHead, "/o/"+blobID, nil)
+	headReq.Header.Set("If-None-Match", etag)
+	headRR := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(headRR, headReq)
+	if headRR.Code != http.StatusNotModified {
+		t.Fatalf("conditional head expected %d, got %d", http.StatusNotModified, headRR.Code)
+	}
+
+	unpublishRR := blobRequest(t, env, token, http.MethodPost, "/api/v1/db/blobdb/blobs/"+blobID+"/unpublish", "")
+	if unpublishRR.Code != http.StatusOK {
+		t.Fatalf("unpublish expected %d, got %d: %s", http.StatusOK, unpublishRR.Code, unpublishRR.Body.String())
+	}
+
+	publicAfterReq := httptest.NewRequest(http.MethodGet, "/o/"+blobID, nil)
+	publicAfterRR := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(publicAfterRR, publicAfterReq)
+	if publicAfterRR.Code != http.StatusNotFound {
+		t.Fatalf("after unpublish expected %d, got %d", http.StatusNotFound, publicAfterRR.Code)
 	}
 }
 

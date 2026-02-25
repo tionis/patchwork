@@ -31,7 +31,7 @@ const blobUIHTML = `<!doctype html>
 
   <div class="card">
     <label for="authToken">Bearer Token</label>
-    <input id="authToken" type="password" placeholder="Token with blob.read/blob.upload scopes" />
+    <input id="authToken" type="password" placeholder="Token with blob.read/blob.upload/blob.publish scopes" />
     <label for="dbID">DB ID</label>
     <input id="dbID" value="public" />
     <button class="secondary" onclick="loadBlobs()">Load Blobs</button>
@@ -46,6 +46,10 @@ const blobUIHTML = `<!doctype html>
     <input id="urlField" value="url" />
     <label for="sourceURL">Source URL (optional)</label>
     <input id="sourceURL" placeholder="https://example.com/page" />
+    <label for="description">Description (optional)</label>
+    <input id="description" placeholder="Archived copy of ..." />
+    <label for="tags">Tags (comma separated)</label>
+    <input id="tags" placeholder="archive/news, singlefile" />
     <label for="uploadFile">Archive File</label>
     <input id="uploadFile" type="file" />
     <button onclick="uploadSingleFile()">Upload</button>
@@ -62,6 +66,9 @@ const blobUIHTML = `<!doctype html>
           <th>Status</th>
           <th>Size</th>
           <th>Type</th>
+          <th>Kept</th>
+          <th>Public</th>
+          <th>Tags</th>
           <th>Claims</th>
           <th>Last Seen</th>
           <th>Action</th>
@@ -95,9 +102,13 @@ const blobUIHTML = `<!doctype html>
         if (!fileInput.files || !fileInput.files[0]) throw new Error("Select a file");
 
         var sourceURL = document.getElementById("sourceURL").value.trim();
+        var description = document.getElementById("description").value.trim();
+        var tags = document.getElementById("tags").value.trim();
         var data = new FormData();
         data.append(fileField, fileInput.files[0], fileInput.files[0].name);
         if (sourceURL) data.append(urlField, sourceURL);
+        if (description) data.append("description", description);
+        if (tags) data.append("tags", tags);
 
         var endpoint = "/api/v1/db/" + encodeURIComponent(dbID) + "/apps/singlefile/rest-form";
         var res = await fetch(endpoint, {
@@ -130,6 +141,42 @@ const blobUIHTML = `<!doctype html>
       }
     }
 
+    async function setBlobPublic(hash, makePublic) {
+      try {
+        var dbID = getDBID();
+        var op = makePublic ? "publish" : "unpublish";
+        var endpoint = "/api/v1/db/" + encodeURIComponent(dbID) + "/blobs/" + encodeURIComponent(hash) + "/" + op;
+        var res = await fetch(endpoint, {
+          method: "POST",
+          headers: Object.assign({ "Content-Type": "application/json" }, getAuthHeaders()),
+          body: "{}"
+        });
+        var text = await res.text();
+        if (!res.ok) throw new Error(text);
+        await loadBlobs();
+      } catch (err) {
+        alert(String(err));
+      }
+    }
+
+    async function setBlobKept(hash, keep) {
+      try {
+        var dbID = getDBID();
+        var op = keep ? "keep" : "unkeep";
+        var endpoint = "/api/v1/db/" + encodeURIComponent(dbID) + "/blobs/" + encodeURIComponent(hash) + "/" + op;
+        var res = await fetch(endpoint, {
+          method: "POST",
+          headers: Object.assign({ "Content-Type": "application/json" }, getAuthHeaders()),
+          body: "{}"
+        });
+        var text = await res.text();
+        if (!res.ok) throw new Error(text);
+        await loadBlobs();
+      } catch (err) {
+        alert(String(err));
+      }
+    }
+
     async function loadBlobs() {
       var tbody = document.getElementById("blobRows");
       tbody.innerHTML = "";
@@ -145,7 +192,7 @@ const blobUIHTML = `<!doctype html>
         var blobs = payload.blobs || [];
         if (!blobs.length) {
           var empty = document.createElement("tr");
-          empty.innerHTML = "<td colspan=\"7\">No blobs found</td>";
+          empty.innerHTML = "<td colspan=\"10\">No blobs found</td>";
           tbody.appendChild(empty);
           return;
         }
@@ -153,19 +200,33 @@ const blobUIHTML = `<!doctype html>
         for (var i = 0; i < blobs.length; i++) {
           var blob = blobs[i];
           var row = document.createElement("tr");
+          var tags = (blob.tags || []).join(", ");
+          var publicAction = blob.public
+            ? "<button onclick=\"setBlobPublic('" + blob.hash + "', false)\">Unpublish</button>"
+            : "<button onclick=\"setBlobPublic('" + blob.hash + "', true)\">Publish</button>";
+          var keepAction = blob.kept
+            ? "<button class=\"secondary\" onclick=\"setBlobKept('" + blob.hash + "', false)\">Unkeep</button>"
+            : "<button class=\"secondary\" onclick=\"setBlobKept('" + blob.hash + "', true)\">Keep</button>";
+          var publicCell = blob.public ? "yes" : "no";
+          if (blob.public && blob.public_url) {
+            publicCell = "<a href=\"" + blob.public_url + "\" target=\"_blank\">yes</a>";
+          }
           row.innerHTML =
             "<td><code>" + blob.hash + "</code></td>" +
             "<td>" + (blob.status || "") + "</td>" +
             "<td>" + String(blob.size_bytes || "") + "</td>" +
             "<td>" + (blob.content_type || "") + "</td>" +
+            "<td>" + String(!!blob.kept) + "</td>" +
+            "<td>" + publicCell + "</td>" +
+            "<td>" + tags + "</td>" +
             "<td>" + String(blob.active_claims || 0) + "</td>" +
             "<td>" + (blob.last_seen || "") + "</td>" +
-            "<td><button onclick=\"openBlob('" + blob.hash + "')\">Open</button></td>";
+            "<td><button onclick=\"openBlob('" + blob.hash + "')\">Open</button> " + publicAction + " " + keepAction + "</td>";
           tbody.appendChild(row);
         }
       } catch (err) {
         var row = document.createElement("tr");
-        row.innerHTML = "<td colspan=\"7\">" + String(err) + "</td>";
+        row.innerHTML = "<td colspan=\"10\">" + String(err) + "</td>";
         tbody.appendChild(row);
       }
     }

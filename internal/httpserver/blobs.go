@@ -39,15 +39,28 @@ type blobReleaseRequest struct {
 	ClaimRef string `json:"claim_ref,omitempty"`
 }
 
+type blobKeepRequest struct {
+	Filename    string   `json:"filename,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	ReplaceTags bool     `json:"replace_tags,omitempty"`
+}
+
 type blobListEntry struct {
-	Hash           string `json:"hash"`
-	SizeBytes      *int64 `json:"size_bytes,omitempty"`
-	Status         string `json:"status"`
-	ContentType    string `json:"content_type,omitempty"`
-	FirstSeen      string `json:"first_seen"`
-	LastSeen       string `json:"last_seen"`
-	ActiveClaims   int64  `json:"active_claims"`
-	StorageKeyHint string `json:"storage_key,omitempty"`
+	Hash           string   `json:"hash"`
+	SizeBytes      *int64   `json:"size_bytes,omitempty"`
+	Status         string   `json:"status"`
+	ContentType    string   `json:"content_type,omitempty"`
+	Filename       string   `json:"filename,omitempty"`
+	Description    string   `json:"description,omitempty"`
+	Tags           []string `json:"tags,omitempty"`
+	Kept           bool     `json:"kept"`
+	Public         bool     `json:"public"`
+	PublicURL      string   `json:"public_url,omitempty"`
+	FirstSeen      string   `json:"first_seen"`
+	LastSeen       string   `json:"last_seen"`
+	ActiveClaims   int64    `json:"active_claims"`
+	StorageKeyHint string   `json:"storage_key,omitempty"`
 }
 
 func (s *Server) handleBlobAPI(w http.ResponseWriter, r *http.Request, dbID, action string) {
@@ -80,6 +93,14 @@ func (s *Server) handleBlobAPI(w http.ResponseWriter, r *http.Request, dbID, act
 			s.handleBlobClaim(w, r, dbID, blobID)
 		case "release":
 			s.handleBlobRelease(w, r, dbID, blobID)
+		case "keep":
+			s.handleBlobKeep(w, r, dbID, blobID)
+		case "unkeep":
+			s.handleBlobUnkeep(w, r, dbID, blobID)
+		case "publish":
+			s.handleBlobPublish(w, r, dbID, blobID)
+		case "unpublish":
+			s.handleBlobUnpublish(w, r, dbID, blobID)
 		default:
 			http.NotFound(w, r)
 		}
@@ -125,13 +146,40 @@ func (s *Server) handleBlobList(w http.ResponseWriter, r *http.Request, dbID str
 	}
 
 	entries := make([]blobListEntry, 0, limit)
+	indexByHash := make(map[string]int, limit)
 	err := s.runtimes.WithDB(r.Context(), dbID, func(ctx context.Context, db *sql.DB) error {
+		keptExpr := "0"
+		joinBlobs := ""
+		filenameExpr := "NULL"
+		descriptionExpr := "NULL"
+
+		if hasBlobs, err := tableExists(db, "blobs"); err != nil {
+			return err
+		} else if hasBlobs {
+			joinBlobs = "LEFT JOIN blobs b ON b.hash = m.hash"
+			keptExpr = "CASE WHEN b.hash IS NULL THEN 0 ELSE 1 END"
+
+			blobColumns, err := tableColumnSet(ctx, db, "blobs")
+			if err != nil {
+				return err
+			}
+			if _, ok := blobColumns["filename"]; ok {
+				filenameExpr = "b.filename"
+			}
+			if _, ok := blobColumns["description"]; ok {
+				descriptionExpr = "b.description"
+			}
+		}
+
 		query := `
 			SELECT
 				m.hash,
 				m.size_bytes,
 				m.status,
 				m.content_type,
+				` + filenameExpr + `,
+				` + descriptionExpr + `,
+				` + keptExpr + `,
 				m.first_seen,
 				m.last_seen,
 				m.storage_key,
@@ -142,7 +190,8 @@ func (s *Server) handleBlobList(w http.ResponseWriter, r *http.Request, dbID str
 				FROM blob_claims
 				WHERE released_at IS NULL
 				GROUP BY hash
-			) c ON c.hash = m.hash`
+			) c ON c.hash = m.hash
+			` + joinBlobs
 
 		args := make([]any, 0, 2)
 		if statusFilter != "" {
@@ -163,12 +212,18 @@ func (s *Server) handleBlobList(w http.ResponseWriter, r *http.Request, dbID str
 				entry          blobListEntry
 				sizeBytes      sql.NullInt64
 				contentTypeRaw sql.NullString
+				filenameRaw    sql.NullString
+				descriptionRaw sql.NullString
+				keptInt        int
 			)
 			if err := rows.Scan(
 				&entry.Hash,
 				&sizeBytes,
 				&entry.Status,
 				&contentTypeRaw,
+				&filenameRaw,
+				&descriptionRaw,
+				&keptInt,
 				&entry.FirstSeen,
 				&entry.LastSeen,
 				&entry.StorageKeyHint,
@@ -183,15 +238,80 @@ func (s *Server) handleBlobList(w http.ResponseWriter, r *http.Request, dbID str
 			if contentTypeRaw.Valid {
 				entry.ContentType = contentTypeRaw.String
 			}
+			if filenameRaw.Valid {
+				entry.Filename = filenameRaw.String
+			}
+			if descriptionRaw.Valid {
+				entry.Description = descriptionRaw.String
+			}
+			entry.Kept = keptInt == 1
 
+			indexByHash[entry.Hash] = len(entries)
 			entries = append(entries, entry)
 		}
 
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		if len(entries) == 0 {
+			return nil
+		}
+
+		if hasTags, err := tableExists(db, "blob_tags"); err != nil {
+			return err
+		} else if hasTags {
+			hashes := make([]any, 0, len(entries))
+			for _, entry := range entries {
+				hashes = append(hashes, entry.Hash)
+			}
+
+			tagRows, err := db.QueryContext(
+				ctx,
+				`SELECT hash, tag FROM blob_tags WHERE hash IN (`+sqlPlaceholders(len(hashes))+`) ORDER BY tag`,
+				hashes...,
+			)
+			if err != nil {
+				return err
+			}
+			defer tagRows.Close()
+
+			for tagRows.Next() {
+				var (
+					hash string
+					tag  string
+				)
+				if err := tagRows.Scan(&hash, &tag); err != nil {
+					return err
+				}
+				if idx, ok := indexByHash[hash]; ok {
+					entries[idx].Tags = append(entries[idx].Tags, tag)
+				}
+			}
+			if err := tagRows.Err(); err != nil {
+				return err
+			}
+		}
+
+		return nil
 	})
 	if err != nil {
 		http.Error(w, "failed to list blobs", http.StatusInternalServerError)
 		return
+	}
+
+	publicHashes, err := s.fetchActivePublicBlobSet(r.Context(), entries)
+	if err != nil {
+		http.Error(w, "failed to list blobs", http.StatusInternalServerError)
+		return
+	}
+
+	for i := range entries {
+		hash := entries[i].Hash
+		if _, ok := publicHashes[hash]; ok {
+			entries[i].Public = true
+			entries[i].PublicURL = absoluteRequestURL(r, "/o/"+hash)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -399,6 +519,11 @@ func (s *Server) handleBlobCompleteUpload(w http.ResponseWriter, r *http.Request
 	})
 	if err != nil {
 		http.Error(w, "failed to finalize blob metadata", http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.upsertBlobKeepSetRecord(r.Context(), dbID, blobID, "", "", nil, false); err != nil {
+		http.Error(w, "failed to pin blob in keep-set", http.StatusInternalServerError)
 		return
 	}
 
@@ -650,6 +775,243 @@ func (s *Server) handleBlobRelease(w http.ResponseWriter, r *http.Request, dbID,
 	})
 }
 
+func (s *Server) handleBlobKeep(w http.ResponseWriter, r *http.Request, dbID, blobID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var err error
+	blobID, err = normalizeBlobID(blobID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.upload", "keep/"+blobID); err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+
+	var req blobKeepRequest
+	if r.ContentLength != 0 {
+		if err := decodeRequestJSON(r, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	tags := normalizeBlobTags(req.Tags)
+	if err := s.upsertBlobKeepSetRecord(
+		r.Context(),
+		dbID,
+		blobID,
+		req.Filename,
+		req.Description,
+		tags,
+		req.ReplaceTags,
+	); err != nil {
+		http.Error(w, "failed to update keep-set metadata", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"blob_id":     blobID,
+		"db_id":       dbID,
+		"kept":        true,
+		"filename":    strings.TrimSpace(req.Filename),
+		"description": strings.TrimSpace(req.Description),
+		"tags":        tags,
+	})
+}
+
+func (s *Server) handleBlobUnkeep(w http.ResponseWriter, r *http.Request, dbID, blobID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var err error
+	blobID, err = normalizeBlobID(blobID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.upload", "unkeep/"+blobID); err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+
+	err = s.runtimes.WithDB(r.Context(), dbID, func(ctx context.Context, db *sql.DB) error {
+		if hasTags, err := tableExists(db, "blob_tags"); err != nil {
+			return err
+		} else if hasTags {
+			if _, err := db.ExecContext(ctx, `DELETE FROM blob_tags WHERE hash = ?`, blobID); err != nil {
+				return err
+			}
+		}
+
+		if hasBlobs, err := tableExists(db, "blobs"); err != nil {
+			return err
+		} else if hasBlobs {
+			if _, err := db.ExecContext(ctx, `DELETE FROM blobs WHERE hash = ?`, blobID); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		http.Error(w, "failed to remove keep-set metadata", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"blob_id": blobID,
+		"db_id":   dbID,
+		"kept":    false,
+	})
+}
+
+func (s *Server) handleBlobPublish(w http.ResponseWriter, r *http.Request, dbID, blobID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var err error
+	blobID, err = normalizeBlobID(blobID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	principal, err := s.auth.AuthorizeRequest(r, dbID, "blob.publish", blobID)
+	if err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+
+	status, err := s.lookupBlobStatus(r.Context(), dbID, blobID)
+	if err != nil {
+		http.Error(w, "failed to query blob metadata", http.StatusInternalServerError)
+		return
+	}
+	if status == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if status != "complete" {
+		http.Error(w, "blob is not complete", http.StatusConflict)
+		return
+	}
+
+	if err := s.upsertBlobKeepSetRecord(r.Context(), dbID, blobID, "", "", nil, false); err != nil {
+		http.Error(w, "failed to pin blob", http.StatusInternalServerError)
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	err = s.withServiceDB(r.Context(), func(db *sql.DB) error {
+		if err := ensurePublicBlobExportSchema(r.Context(), db); err != nil {
+			return err
+		}
+
+		_, err := db.ExecContext(
+			r.Context(),
+			`INSERT INTO public_blob_exports(hash, db_id, published_by, published_at, updated_at, revoked_at)
+			 VALUES (?, ?, ?, ?, ?, NULL)
+			 ON CONFLICT(hash, db_id) DO UPDATE SET
+			   published_by = excluded.published_by,
+			   published_at = excluded.published_at,
+			   updated_at = excluded.updated_at,
+			   revoked_at = NULL`,
+			blobID,
+			dbID,
+			nullableString(principal.TokenID),
+			now,
+			now,
+		)
+		return err
+	})
+	if err != nil {
+		http.Error(w, "failed to publish blob", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"blob_id":    blobID,
+		"db_id":      dbID,
+		"public":     true,
+		"public_url": absoluteRequestURL(r, "/o/"+blobID),
+	})
+}
+
+func (s *Server) handleBlobUnpublish(w http.ResponseWriter, r *http.Request, dbID, blobID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var err error
+	blobID, err = normalizeBlobID(blobID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.publish", blobID); err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	err = s.withServiceDB(r.Context(), func(db *sql.DB) error {
+		if err := ensurePublicBlobExportSchema(r.Context(), db); err != nil {
+			return err
+		}
+
+		_, err := db.ExecContext(
+			r.Context(),
+			`UPDATE public_blob_exports
+			 SET revoked_at = ?, updated_at = ?
+			 WHERE hash = ? AND db_id = ? AND revoked_at IS NULL`,
+			now,
+			now,
+			blobID,
+			dbID,
+		)
+		return err
+	})
+	if err != nil {
+		http.Error(w, "failed to unpublish blob", http.StatusInternalServerError)
+		return
+	}
+
+	stillPublic, err := s.isBlobPublic(r.Context(), blobID)
+	if err != nil {
+		http.Error(w, "failed to query blob publication", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"blob_id": blobID,
+		"db_id":   dbID,
+		"public":  stillPublic,
+		"public_url": func() string {
+			if stillPublic {
+				return absoluteRequestURL(r, "/o/"+blobID)
+			}
+			return ""
+		}(),
+	})
+}
+
 func (s *Server) blobRootDir() string {
 	return filepath.Join(s.cfg.DataDir, "blobs")
 }
@@ -777,6 +1139,320 @@ func (s *Server) ingestCompleteBlob(ctx context.Context, dbID, contentType strin
 	}
 
 	return blobID, sizeBytes, storedAt, nil
+}
+
+func (s *Server) upsertBlobKeepSetRecord(
+	ctx context.Context,
+	dbID,
+	blobID,
+	filename,
+	description string,
+	tags []string,
+	replaceTags bool,
+) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	filename = strings.TrimSpace(filename)
+	description = strings.TrimSpace(description)
+	tags = normalizeBlobTags(tags)
+
+	return s.runtimes.WithDB(ctx, dbID, func(ctx context.Context, db *sql.DB) error {
+		if err := ensureBlobKeepSetSchema(ctx, db); err != nil {
+			return err
+		}
+
+		columns, err := tableColumnSet(ctx, db, "blobs")
+		if err != nil {
+			return err
+		}
+
+		insertColumns := []string{"hash"}
+		insertValues := []any{blobID}
+		insertPlaceholders := []string{"?"}
+		updateAssignments := make([]string, 0, 4)
+
+		if _, ok := columns["filename"]; ok {
+			insertColumns = append(insertColumns, "filename")
+			insertPlaceholders = append(insertPlaceholders, "?")
+			insertValues = append(insertValues, nullableString(filename))
+			updateAssignments = append(updateAssignments, "filename = COALESCE(excluded.filename, blobs.filename)")
+		}
+		if _, ok := columns["description"]; ok {
+			insertColumns = append(insertColumns, "description")
+			insertPlaceholders = append(insertPlaceholders, "?")
+			insertValues = append(insertValues, nullableString(description))
+			updateAssignments = append(updateAssignments, "description = COALESCE(excluded.description, blobs.description)")
+		}
+		if _, ok := columns["created_at"]; ok {
+			insertColumns = append(insertColumns, "created_at")
+			insertPlaceholders = append(insertPlaceholders, "?")
+			insertValues = append(insertValues, now)
+		}
+		if _, ok := columns["updated_at"]; ok {
+			insertColumns = append(insertColumns, "updated_at")
+			insertPlaceholders = append(insertPlaceholders, "?")
+			insertValues = append(insertValues, now)
+			updateAssignments = append(updateAssignments, "updated_at = excluded.updated_at")
+		}
+
+		if len(updateAssignments) == 0 {
+			if _, err := db.ExecContext(
+				ctx,
+				`INSERT OR IGNORE INTO blobs(`+strings.Join(insertColumns, ", ")+`) VALUES (`+strings.Join(insertPlaceholders, ", ")+`)`,
+				insertValues...,
+			); err != nil {
+				return err
+			}
+		} else {
+			if _, err := db.ExecContext(
+				ctx,
+				`INSERT INTO blobs(`+strings.Join(insertColumns, ", ")+`) VALUES (`+strings.Join(insertPlaceholders, ", ")+`)
+				 ON CONFLICT(hash) DO UPDATE SET `+strings.Join(updateAssignments, ", "),
+				insertValues...,
+			); err != nil {
+				return err
+			}
+		}
+
+		if len(tags) > 0 || replaceTags {
+			if err := upsertBlobTags(ctx, db, blobID, tags, replaceTags, now); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
+func normalizeBlobTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(tags))
+	result := make([]string, 0, len(tags))
+	for _, raw := range tags {
+		for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+			return r == ',' || r == '\n' || r == '\r' || r == '\t'
+		}) {
+			tag := strings.ToLower(strings.TrimSpace(part))
+			if tag == "" {
+				continue
+			}
+			if _, ok := seen[tag]; ok {
+				continue
+			}
+			seen[tag] = struct{}{}
+			result = append(result, tag)
+		}
+	}
+	return result
+}
+
+func upsertBlobTags(ctx context.Context, db *sql.DB, blobID string, tags []string, replace bool, now string) error {
+	if err := ensureBlobKeepSetSchema(ctx, db); err != nil {
+		return err
+	}
+
+	if replace {
+		if _, err := db.ExecContext(ctx, `DELETE FROM blob_tags WHERE hash = ?`, blobID); err != nil {
+			return err
+		}
+	}
+
+	if len(tags) == 0 {
+		return nil
+	}
+
+	tagColumns, err := tableColumnSet(ctx, db, "blob_tags")
+	if err != nil {
+		return err
+	}
+
+	for _, tag := range tags {
+		if _, hasCreatedAt := tagColumns["created_at"]; hasCreatedAt {
+			if _, err := db.ExecContext(
+				ctx,
+				`INSERT OR IGNORE INTO blob_tags(hash, tag, created_at) VALUES (?, ?, ?)`,
+				blobID,
+				tag,
+				now,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if _, err := db.ExecContext(
+			ctx,
+			`INSERT OR IGNORE INTO blob_tags(hash, tag) VALUES (?, ?)`,
+			blobID,
+			tag,
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func ensureBlobKeepSetSchema(ctx context.Context, db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS blobs (
+			hash TEXT PRIMARY KEY,
+			filename TEXT,
+			description TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(hash) REFERENCES blob_metadata(hash) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_blobs_updated_at ON blobs(updated_at);`,
+		`CREATE TABLE IF NOT EXISTS blob_tags (
+			hash TEXT NOT NULL,
+			tag TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY(hash, tag),
+			FOREIGN KEY(hash) REFERENCES blob_metadata(hash) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_blob_tags_tag_hash ON blob_tags(tag, hash);`,
+	}
+
+	for _, stmt := range stmts {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func tableColumnSet(ctx context.Context, db *sql.DB, table string) (map[string]struct{}, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	columns := make(map[string]struct{}, 8)
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			columnTyp string
+			notNull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &columnTyp, &notNull, &dfltValue, &pk); err != nil {
+			return nil, err
+		}
+		columns[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return columns, nil
+}
+
+func sqlPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = "?"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func ensurePublicBlobExportSchema(ctx context.Context, db *sql.DB) error {
+	stmts := []string{
+		`PRAGMA foreign_keys=ON;`,
+		`CREATE TABLE IF NOT EXISTS public_blob_exports (
+			hash TEXT NOT NULL,
+			db_id TEXT NOT NULL,
+			published_by TEXT,
+			published_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			revoked_at TEXT,
+			PRIMARY KEY(hash, db_id),
+			FOREIGN KEY(db_id) REFERENCES documents(db_id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_public_blob_exports_hash_active
+		 ON public_blob_exports(hash, revoked_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_public_blob_exports_db_id_active
+		 ON public_blob_exports(db_id, revoked_at);`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) isBlobPublic(ctx context.Context, blobID string) (bool, error) {
+	var count int
+	err := s.withServiceDB(ctx, func(db *sql.DB) error {
+		if err := ensurePublicBlobExportSchema(ctx, db); err != nil {
+			return err
+		}
+		return db.QueryRowContext(
+			ctx,
+			`SELECT COUNT(*) FROM public_blob_exports WHERE hash = ? AND revoked_at IS NULL`,
+			blobID,
+		).Scan(&count)
+	})
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (s *Server) fetchActivePublicBlobSet(ctx context.Context, entries []blobListEntry) (map[string]struct{}, error) {
+	active := make(map[string]struct{})
+	if len(entries) == 0 {
+		return active, nil
+	}
+
+	hashes := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		hashes = append(hashes, entry.Hash)
+	}
+
+	err := s.withServiceDB(ctx, func(db *sql.DB) error {
+		if err := ensurePublicBlobExportSchema(ctx, db); err != nil {
+			return err
+		}
+
+		rows, err := db.QueryContext(
+			ctx,
+			`SELECT DISTINCT hash
+			 FROM public_blob_exports
+			 WHERE revoked_at IS NULL
+			   AND hash IN (`+sqlPlaceholders(len(hashes))+`)`,
+			hashes...,
+		)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var hash string
+			if err := rows.Scan(&hash); err != nil {
+				return err
+			}
+			active[hash] = struct{}{}
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return active, nil
 }
 
 func (s *Server) lookupBlobStatus(ctx context.Context, dbID, blobID string) (string, error) {

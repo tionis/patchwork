@@ -363,6 +363,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/admin/tokens/", s.handleAdminTokenByID)
 	mux.HandleFunc("/ui/tokens", s.handleTokenUI)
 	mux.HandleFunc("/ui/blobs", s.handleBlobUI)
+	mux.HandleFunc("/o/", s.handlePublicBlobObject)
 	mux.HandleFunc("/auth/oidc/login", s.handleOIDCLogin)
 	mux.HandleFunc("/auth/oidc/callback", s.handleOIDCCallback)
 	mux.HandleFunc("/auth/logout", s.handleAuthLogout)

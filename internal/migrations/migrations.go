@@ -93,6 +93,20 @@ func BootstrapService(ctx context.Context, dataDir, documentsDir, serviceDBPath 
 		 ON web_sessions(issuer, subject);`,
 		`CREATE INDEX IF NOT EXISTS idx_web_sessions_expires_at
 		 ON web_sessions(expires_at);`,
+		`CREATE TABLE IF NOT EXISTS public_blob_exports (
+			hash TEXT NOT NULL,
+			db_id TEXT NOT NULL,
+			published_by TEXT,
+			published_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			revoked_at TEXT,
+			PRIMARY KEY(hash, db_id),
+			FOREIGN KEY(db_id) REFERENCES documents(db_id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_public_blob_exports_hash_active
+		 ON public_blob_exports(hash, revoked_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_public_blob_exports_db_id_active
+		 ON public_blob_exports(db_id, revoked_at);`,
 	}
 
 	for _, stmt := range stmts {
@@ -226,6 +240,23 @@ func BootstrapDocument(ctx context.Context, dbPath string) error {
 		 ON blob_claims(db_id, hash);`,
 		`CREATE INDEX IF NOT EXISTS idx_blob_claims_released_at
 		 ON blob_claims(released_at);`,
+		`CREATE TABLE IF NOT EXISTS blobs (
+			hash TEXT PRIMARY KEY,
+			filename TEXT,
+			description TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(hash) REFERENCES blob_metadata(hash) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_blobs_updated_at ON blobs(updated_at);`,
+		`CREATE TABLE IF NOT EXISTS blob_tags (
+			hash TEXT NOT NULL,
+			tag TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY(hash, tag),
+			FOREIGN KEY(hash) REFERENCES blob_metadata(hash) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_blob_tags_tag_hash ON blob_tags(tag, hash);`,
 		`CREATE TABLE IF NOT EXISTS app_singlefile_uploads (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			endpoint TEXT NOT NULL,

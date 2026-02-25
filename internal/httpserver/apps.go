@@ -62,6 +62,13 @@ func (s *Server) handleSingleFileRESTFormUpload(w http.ResponseWriter, r *http.R
 	sourceURL := pickMultipartValue(r.MultipartForm, urlFieldPreference, "url")
 	filename := strings.TrimSpace(fileHeader.Filename)
 	contentType := strings.TrimSpace(fileHeader.Header.Get("Content-Type"))
+	description := pickMultipartValue(r.MultipartForm, strings.TrimSpace(r.URL.Query().Get("description_field")), "description")
+	tags := normalizeBlobTags(collectMultipartValues(
+		r.MultipartForm,
+		strings.TrimSpace(r.URL.Query().Get("tags_field")),
+		"tags",
+		"tag",
+	))
 
 	blobID, sizeBytes, storedAt, err := s.ingestCompleteBlob(r.Context(), dbID, contentType, fileReader)
 	if err != nil {
@@ -94,17 +101,26 @@ func (s *Server) handleSingleFileRESTFormUpload(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	if err := s.upsertBlobKeepSetRecord(r.Context(), dbID, blobID, filename, description, tags, false); err != nil {
+		s.logger.Warn("singlefile upload keep-set update failed", "db_id", dbID, "blob_id", blobID, "error", err)
+		http.Error(w, "failed to persist metadata", http.StatusInternalServerError)
+		return
+	}
+
 	readURLPath := fmt.Sprintf("/api/v1/db/%s/blobs/object/%s", dbID, blobID)
 	readURL, readURLExpiresAt := s.signBlobPath(http.MethodGet, readURLPath, time.Now().UTC())
 	absoluteReadURL := absoluteRequestURL(r, readURL)
 
 	response := map[string]any{
-		"db_id":      dbID,
-		"endpoint":   singleFileRESTFormEndpoint,
-		"stored":     true,
-		"blob_id":    blobID,
-		"filename":   filename,
-		"source_url": sourceURL,
+		"db_id":       dbID,
+		"endpoint":    singleFileRESTFormEndpoint,
+		"stored":      true,
+		"blob_id":     blobID,
+		"filename":    filename,
+		"description": strings.TrimSpace(description),
+		"tags":        tags,
+		"kept":        true,
+		"source_url":  sourceURL,
 		"content_type": func() string {
 			if contentType == "" {
 				return "application/octet-stream"
@@ -225,6 +241,31 @@ func pickMultipartValue(form *multipart.Form, preferredField, fallbackField stri
 	}
 
 	return ""
+}
+
+func collectMultipartValues(form *multipart.Form, fields ...string) []string {
+	if form == nil || len(fields) == 0 {
+		return nil
+	}
+
+	values := make([]string, 0, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		fieldValues, ok := form.Value[field]
+		if !ok {
+			continue
+		}
+		for _, value := range fieldValues {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				values = append(values, trimmed)
+			}
+		}
+	}
+
+	return values
 }
 
 func firstNonEmpty(values ...string) string {

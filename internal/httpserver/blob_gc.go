@@ -44,6 +44,9 @@ func (s *Server) runBlobGCSweep(ctx context.Context, grace time.Duration) error 
 			return err
 		}
 	}
+	if err := s.collectPublishedBlobHashes(ctx, liveHashes); err != nil {
+		return err
+	}
 
 	cutoff := time.Now().UTC().Add(-grace)
 	blobRoot := s.blobRootDir()
@@ -78,6 +81,32 @@ func (s *Server) runBlobGCSweep(ctx context.Context, grace time.Duration) error 
 			return err
 		}
 		return nil
+	})
+}
+
+func (s *Server) collectPublishedBlobHashes(ctx context.Context, live map[string]struct{}) error {
+	return s.withServiceDB(ctx, func(db *sql.DB) error {
+		if err := ensurePublicBlobExportSchema(ctx, db); err != nil {
+			return err
+		}
+
+		rows, err := db.QueryContext(ctx, `SELECT hash FROM public_blob_exports WHERE revoked_at IS NULL`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var hash string
+			if err := rows.Scan(&hash); err != nil {
+				return err
+			}
+			hash = strings.ToLower(strings.TrimSpace(hash))
+			if looksLikeBlobHash(hash) {
+				live[hash] = struct{}{}
+			}
+		}
+		return rows.Err()
 	})
 }
 

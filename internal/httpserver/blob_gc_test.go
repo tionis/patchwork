@@ -25,10 +25,14 @@ func TestBlobGCSweepUsesUnionReferencesAndGracePeriod(t *testing.T) {
 	}
 
 	if err := env.runtimes.WithDB(context.Background(), "gc-a", func(ctx context.Context, db *sql.DB) error {
-		if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS blobs (hash TEXT PRIMARY KEY)`); err != nil {
-			return err
-		}
-		if _, err := db.ExecContext(ctx, `INSERT OR REPLACE INTO blobs(hash) VALUES (?)`, liveHash); err != nil {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		if _, err := db.ExecContext(
+			ctx,
+			`INSERT OR REPLACE INTO blobs(hash, created_at, updated_at) VALUES (?, ?, ?)`,
+			liveHash,
+			now,
+			now,
+		); err != nil {
 			return err
 		}
 		_, err := db.ExecContext(
