@@ -37,6 +37,7 @@ func TestBootstrapDocumentCreatesMessageGroundworkTables(t *testing.T) {
 		"fencing_tokens",
 		"blob_metadata",
 		"blob_claims",
+		"app_singlefile_uploads",
 	}
 
 	for _, table := range requiredTables {

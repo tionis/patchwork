@@ -208,18 +208,33 @@ Document migration now includes initial blob-control tables:
 
 - `blob_metadata`
 - `blob_claims`
+- `app_singlefile_uploads`
+
+Blob management UI:
+
+- Route: `GET /ui/blobs`
+- Includes DB-scoped blob listing and a multipart upload form targeting the SingleFile endpoint.
 
 Current blob API routes:
 
 - `POST /api/v1/db/:db_id/blobs/init-upload`
 - `PUT /api/v1/db/:db_id/blobs/upload/:blob_id`
 - `POST /api/v1/db/:db_id/blobs/complete-upload`
+- `GET /api/v1/db/:db_id/blobs/list`
 - `GET /api/v1/db/:db_id/blobs/:blob_id/read-url`
 - `GET /api/v1/db/:db_id/blobs/object/:blob_id`
 - `POST /api/v1/db/:db_id/blobs/:blob_id/claim`
 - `POST /api/v1/db/:db_id/blobs/:blob_id/release`
+- `POST /api/v1/db/:db_id/apps/singlefile/rest-form`
 
 `complete-upload` verifies the staged blob hash before marking metadata as `complete`.
+
+SingleFile REST Form integration:
+
+- Endpoint accepts `multipart/form-data` and returns JSON with `url`/`read_url`/`blob_id`.
+- Works with SingleFile's configurable file/url field names.
+- Requires bearer auth with `blob.upload` scope for target DB.
+- Persists upload metadata in `app_singlefile_uploads` for audit/manage workflows.
 
 Blob signed URL support:
 

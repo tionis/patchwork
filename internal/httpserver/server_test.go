@@ -120,6 +120,27 @@ func TestTokenUIPageServesHTML(t *testing.T) {
 	}
 }
 
+func TestBlobUIPageServesHTML(t *testing.T) {
+	env := newWebhookTestEnv(t)
+	defer env.close()
+
+	req := httptest.NewRequest(http.MethodGet, "/ui/blobs", nil)
+	rr := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d: %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("unexpected content type: %q", ct)
+	}
+
+	if body := rr.Body.String(); !strings.Contains(body, "Patchwork Blob Manager") {
+		t.Fatalf("unexpected HTML body: %s", body)
+	}
+}
+
 func TestWebhookIngestRequiresMatchingDBScope(t *testing.T) {
 	env := newWebhookTestEnv(t)
 	defer env.close()

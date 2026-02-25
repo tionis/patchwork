@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -38,8 +39,21 @@ type blobReleaseRequest struct {
 	ClaimRef string `json:"claim_ref,omitempty"`
 }
 
+type blobListEntry struct {
+	Hash           string `json:"hash"`
+	SizeBytes      *int64 `json:"size_bytes,omitempty"`
+	Status         string `json:"status"`
+	ContentType    string `json:"content_type,omitempty"`
+	FirstSeen      string `json:"first_seen"`
+	LastSeen       string `json:"last_seen"`
+	ActiveClaims   int64  `json:"active_claims"`
+	StorageKeyHint string `json:"storage_key,omitempty"`
+}
+
 func (s *Server) handleBlobAPI(w http.ResponseWriter, r *http.Request, dbID, action string) {
 	switch {
+	case action == "blobs/list":
+		s.handleBlobList(w, r, dbID)
 	case action == "blobs/init-upload":
 		s.handleBlobInitUpload(w, r, dbID)
 	case action == "blobs/complete-upload":
@@ -72,6 +86,121 @@ func (s *Server) handleBlobAPI(w http.ResponseWriter, r *http.Request, dbID, act
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (s *Server) handleBlobList(w http.ResponseWriter, r *http.Request, dbID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if _, err := s.auth.AuthorizeRequest(r, dbID, "blob.read", "/blobs/list"); err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
+
+	if err := s.runtimes.EnsureDocument(r.Context(), dbID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	limit := 100
+	if limitRaw := strings.TrimSpace(r.URL.Query().Get("limit")); limitRaw != "" {
+		parsed, err := strconv.Atoi(limitRaw)
+		if err != nil || parsed <= 0 || parsed > 1000 {
+			http.Error(w, "limit must be a positive integer <= 1000", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+
+	statusFilter := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("status")))
+	if statusFilter != "" {
+		switch statusFilter {
+		case "pending", "complete", "failed":
+		default:
+			http.Error(w, "status must be one of: pending, complete, failed", http.StatusBadRequest)
+			return
+		}
+	}
+
+	entries := make([]blobListEntry, 0, limit)
+	err := s.runtimes.WithDB(r.Context(), dbID, func(ctx context.Context, db *sql.DB) error {
+		query := `
+			SELECT
+				m.hash,
+				m.size_bytes,
+				m.status,
+				m.content_type,
+				m.first_seen,
+				m.last_seen,
+				m.storage_key,
+				COALESCE(c.active_claims, 0)
+			FROM blob_metadata m
+			LEFT JOIN (
+				SELECT hash, COUNT(*) AS active_claims
+				FROM blob_claims
+				WHERE released_at IS NULL
+				GROUP BY hash
+			) c ON c.hash = m.hash`
+
+		args := make([]any, 0, 2)
+		if statusFilter != "" {
+			query += " WHERE m.status = ?"
+			args = append(args, statusFilter)
+		}
+		query += " ORDER BY m.last_seen DESC LIMIT ?"
+		args = append(args, limit)
+
+		rows, err := db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var (
+				entry          blobListEntry
+				sizeBytes      sql.NullInt64
+				contentTypeRaw sql.NullString
+			)
+			if err := rows.Scan(
+				&entry.Hash,
+				&sizeBytes,
+				&entry.Status,
+				&contentTypeRaw,
+				&entry.FirstSeen,
+				&entry.LastSeen,
+				&entry.StorageKeyHint,
+				&entry.ActiveClaims,
+			); err != nil {
+				return err
+			}
+
+			if sizeBytes.Valid {
+				entry.SizeBytes = &sizeBytes.Int64
+			}
+			if contentTypeRaw.Valid {
+				entry.ContentType = contentTypeRaw.String
+			}
+
+			entries = append(entries, entry)
+		}
+
+		return rows.Err()
+	})
+	if err != nil {
+		http.Error(w, "failed to list blobs", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"db_id":  dbID,
+		"limit":  limit,
+		"status": statusFilter,
+		"blobs":  entries,
+	})
 }
 
 func (s *Server) handleBlobInitUpload(w http.ResponseWriter, r *http.Request, dbID string) {
@@ -566,6 +695,88 @@ func hashFileSHA256(path string) (string, int64, error) {
 	}
 
 	return hex.EncodeToString(hasher.Sum(nil)), n, nil
+}
+
+func (s *Server) ingestCompleteBlob(ctx context.Context, dbID, contentType string, body io.Reader) (blobID string, sizeBytes int64, storedAt string, err error) {
+	if err := os.MkdirAll(s.blobRootDir(), 0o755); err != nil {
+		return "", 0, "", err
+	}
+	if err := os.MkdirAll(s.blobStagingDir(), 0o755); err != nil {
+		return "", 0, "", err
+	}
+
+	tempFile, err := os.CreateTemp(s.blobStagingDir(), "ingest-*.part")
+	if err != nil {
+		return "", 0, "", err
+	}
+	tempPath := tempFile.Name()
+
+	defer func() {
+		_ = tempFile.Close()
+		if err != nil {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	hasher := sha256.New()
+	sizeBytes, err = io.Copy(io.MultiWriter(tempFile, hasher), body)
+	if err != nil {
+		return "", 0, "", err
+	}
+	if err := tempFile.Sync(); err != nil {
+		return "", 0, "", err
+	}
+	if err := tempFile.Close(); err != nil {
+		return "", 0, "", err
+	}
+
+	blobID = hex.EncodeToString(hasher.Sum(nil))
+	objectPath := s.blobObjectPath(blobID)
+	if err := os.MkdirAll(filepath.Dir(objectPath), 0o755); err != nil {
+		return "", 0, "", err
+	}
+
+	if renameErr := os.Rename(tempPath, objectPath); renameErr != nil {
+		if _, statErr := os.Stat(objectPath); statErr == nil {
+			_ = os.Remove(tempPath)
+		} else {
+			return "", 0, "", renameErr
+		}
+	}
+
+	storedAtTime := time.Now().UTC()
+	storedAt = storedAtTime.Format(time.RFC3339Nano)
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	storageKey := s.blobStorageKey(blobID)
+	err = s.runtimes.WithDB(ctx, dbID, func(ctx context.Context, db *sql.DB) error {
+		_, err := db.ExecContext(
+			ctx,
+			`INSERT INTO blob_metadata(hash, storage_key, size_bytes, status, content_type, first_seen, last_seen)
+			 VALUES (?, ?, ?, 'complete', ?, ?, ?)
+			 ON CONFLICT(hash) DO UPDATE SET
+			   storage_key = excluded.storage_key,
+			   size_bytes = excluded.size_bytes,
+			   status = 'complete',
+			   content_type = excluded.content_type,
+			   last_seen = excluded.last_seen`,
+			blobID,
+			storageKey,
+			sizeBytes,
+			contentType,
+			storedAt,
+			storedAt,
+		)
+		return err
+	})
+	if err != nil {
+		return "", 0, "", err
+	}
+
+	return blobID, sizeBytes, storedAt, nil
 }
 
 func (s *Server) lookupBlobStatus(ctx context.Context, dbID, blobID string) (string, error) {

@@ -149,7 +149,7 @@ const tokenUIHTML = `<!doctype html>
     <label for="authToken">Admin Token</label>
     <input id="authToken" type="password" placeholder="Optional when logged in via OIDC" />
     <button class="secondary" onclick="loadTokens()">Load Tokens</button>
-    <p><a href="/auth/oidc/login?next=/ui/tokens">OIDC Login</a> | <a href="/auth/logout">Logout</a></p>
+    <p><a href="/ui/blobs">Blob Manager</a> | <a href="/auth/oidc/login?next=/ui/tokens">OIDC Login</a> | <a href="/auth/logout">Logout</a></p>
   </div>
 
   <div class="card">
@@ -362,6 +362,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/admin/tokens", s.handleAdminTokens)
 	mux.HandleFunc("/api/v1/admin/tokens/", s.handleAdminTokenByID)
 	mux.HandleFunc("/ui/tokens", s.handleTokenUI)
+	mux.HandleFunc("/ui/blobs", s.handleBlobUI)
 	mux.HandleFunc("/auth/oidc/login", s.handleOIDCLogin)
 	mux.HandleFunc("/auth/oidc/callback", s.handleOIDCCallback)
 	mux.HandleFunc("/auth/logout", s.handleAuthLogout)
@@ -528,6 +529,8 @@ func (s *Server) handleDBAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleLeaseAPI(w, r, dbID, action)
 	case strings.HasPrefix(action, "blobs/"):
 		s.handleBlobAPI(w, r, dbID, action)
+	case strings.HasPrefix(action, "apps/"):
+		s.handleAppAPI(w, r, dbID, action)
 	case strings.HasPrefix(action, "streams/queue/"):
 		topicPath := strings.TrimPrefix(action, "streams/queue/")
 		s.handleStreamQueue(w, r, dbID, topicPath)

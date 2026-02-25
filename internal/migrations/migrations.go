@@ -226,6 +226,22 @@ func BootstrapDocument(ctx context.Context, dbPath string) error {
 		 ON blob_claims(db_id, hash);`,
 		`CREATE INDEX IF NOT EXISTS idx_blob_claims_released_at
 		 ON blob_claims(released_at);`,
+		`CREATE TABLE IF NOT EXISTS app_singlefile_uploads (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			endpoint TEXT NOT NULL,
+			source_url TEXT,
+			filename TEXT NOT NULL,
+			blob_hash TEXT NOT NULL,
+			size_bytes INTEGER NOT NULL,
+			content_type TEXT,
+			headers_json TEXT NOT NULL,
+			received_at TEXT NOT NULL,
+			FOREIGN KEY(blob_hash) REFERENCES blob_metadata(hash) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_app_singlefile_uploads_blob_hash
+		 ON app_singlefile_uploads(blob_hash);`,
+		`CREATE INDEX IF NOT EXISTS idx_app_singlefile_uploads_source_url_received
+		 ON app_singlefile_uploads(source_url, received_at);`,
 	}
 
 	for _, stmt := range stmts {
