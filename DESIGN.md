@@ -561,7 +561,7 @@ MQTT mapping rule:
 - Wildcard evaluation remains confined inside `db_id` scope.
 - Last-will behavior is handled in the message pubsub path, not the stream path.
 
-## Compatibility with Old Patchwork
+## Behavior carried forward from old patchwork
 
 The old service provided valuable operational patterns that should be retained:
 
@@ -573,9 +573,9 @@ The old service provided valuable operational patterns that should be retained:
 Migration approach:
 
 1. Preserve `patch.tionis.dev`.
-2. Provide compatibility routes for high-value legacy paths with behavior parity for core flows.
+2. Expose canonical DB-scoped APIs only.
 3. Use native service tokens from day one (no legacy `config.yaml` auth compatibility layer).
-4. Keep old behavior available during migration window.
+4. Do not provide legacy route aliases.
 
 Compatibility parity targets for v1:
 
@@ -584,13 +584,7 @@ Compatibility parity targets for v1:
 - `Patch-H-*` passthrough and `Patch-Status` response status override
 - responder switch (`?switch=true`) behavior
 
-Potential compatibility route mapping:
-
-- `/public/*` -> default `db_id=public` namespace routes.
-- `/p/*` -> alias to `/public/*`.
-- `/u/{user}/*` -> maps to user-owned DB namespace.
-
-Out-of-scope compatibility for MVP:
+Out-of-scope for MVP:
 
 - huproxy tunneling should stay separate unless explicitly reintroduced.
 
@@ -663,15 +657,15 @@ Recommended metrics:
 1. Finalize naming and repo rename (`skald` -> `patchwork` if confirmed).
 2. Implement core auth + capability activation + query read.
 3. Implement message pubsub publish + SSE subscribe + replay.
-4. Add stream (queue/req/res/broadcast) compatibility endpoints.
+4. Add stream (queue/req/res/broadcast) canonical endpoints.
 5. Add lease/fencing API with single-writer authority.
 6. Add blob control plane with pre-signed URL flows.
-7. Migrate key script endpoints from old patchwork.
+7. Publish API examples for canonical endpoints.
 8. Add ansible deployment role updates in `projects/gandalf`.
 
 ## Open Questions
 
-1. Should compatibility routes be strict parity for all legacy path variants, or only parity for the most-used subset?
+1. Do we need any migration aids beyond canonical DB-scoped routes?
 2. Which capabilities are mandatory in v1 (`query + message pubsub + streams + lease`) and which are optional (`blob`)?
 3. What retention policy is desired for `messages` per DB (size/time/count)?
 4. Reactive query invalidation phase target at launch: v0 (global), v1 (table-aware), or mixed?
