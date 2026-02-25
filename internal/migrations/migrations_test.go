@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"testing"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/tionis/patchwork/internal/sqlitedriver"
 )
 
 func TestBootstrapDocumentCreatesMessageGroundworkTables(t *testing.T) {

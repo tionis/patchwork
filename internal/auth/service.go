@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "modernc.org/sqlite"
+	_ "github.com/tionis/patchwork/internal/sqlitedriver"
 )
 
 var (

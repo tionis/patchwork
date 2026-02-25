@@ -20,7 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tionis/patchwork/internal/auth"
 	"github.com/tionis/patchwork/internal/config"
-	_ "modernc.org/sqlite"
+	_ "github.com/tionis/patchwork/internal/sqlitedriver"
 )
 
 const (

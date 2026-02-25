@@ -314,3 +314,48 @@ The document runtime now exposes minimal sync boundaries for future transport wo
 - `ExportSnapshot(ctx, dbID, writer)` on `docruntime.Manager`
 - `SubscribeChanges(ctx, dbID, buffer)` change-feed subscription
 - `RegisterSyncTransportHook(hook)` for adapter-specific event forwarding
+
+### SQLite Driver and Extensions
+
+Patchwork now uses `github.com/mattn/go-sqlite3` via an internal driver registration package (`internal/sqlitedriver`) and keeps the SQL driver name as `sqlite`.
+
+Operational implications:
+
+- build requires `CGO_ENABLED=1` and a C toolchain on the build host
+- SQLite compile options are checked once at first DB connection via `PRAGMA compile_options`
+- missing recommended options are logged by default
+- startup can be made strict with `PATCHWORK_SQLITE_REQUIRED_COMPILE_OPTIONS`
+
+Recommended compile options (current default warning set):
+
+- `ENABLE_FTS5`
+- `ENABLE_SESSION`
+- `ENABLE_PREUPDATE_HOOK`
+- `ENABLE_SNAPSHOT`
+- `ENABLE_RBU`
+- `ENABLE_ICU`
+- `ENABLE_RTREE`
+- `ENABLE_GEOPOLY`
+
+Default extension load attempts per connection:
+
+- cr-sqlite candidates: `crsqlite`, `crsqlite0` (+ `lib*` and platform suffix variants)
+- sqlite-vec candidates: `vec0`, `sqlite_vec` (+ `lib*` and platform suffix variants)
+- sqlean bundle candidate: `sqlean` (+ `lib*` and platform suffix variants)
+- optional safe sqlean module set (`crypto`, `math`, `regexp`, `stats`, `text`, `time`, `unicode`, `uuid`) via `PATCHWORK_SQLITE_EXTENSION_SQLEAN_DIR`
+
+Extension env behavior:
+
+- explicit `PATCHWORK_SQLITE_EXTENSION_*` paths are treated as required
+- optional/default discovery logs one-time warnings if no candidate loads
+- extra required extensions can be listed with `PATCHWORK_SQLITE_EXTENSIONS` (`path` or `path|entrypoint`, comma-separated)
+
+Build example (non-ICU):
+
+```bash
+CGO_ENABLED=1 \
+CGO_CFLAGS="-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_SNAPSHOT -DSQLITE_ENABLE_RBU -DSQLITE_ENABLE_GEOPOLY -DSQLITE_ENABLE_RTREE" \
+go build -tags "sqlite_fts5 sqlite_preupdate_hook sqlite_vtable" -o patchwork ./cmd/patchwork
+```
+
+For ICU-enabled builds, add `sqlite_icu` to tags and provide ICU link flags/libs on your build host.

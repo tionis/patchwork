@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/tionis/patchwork/internal/sqlitedriver"
 )
 
 func (s *Server) runBlobGCLoop(ctx context.Context, interval, grace time.Duration) {

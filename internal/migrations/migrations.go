@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/tionis/patchwork/internal/sqlitedriver"
 )
 
 const (

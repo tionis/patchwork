@@ -49,13 +49,13 @@ It combines architecture evaluation, sequencing, and definition-of-done checkpoi
 - Webhook ingress auth uses `Authorization` header tokens; HMAC request signatures are deferred.
 - Lease authority is local SQLite state using single-writer lock discipline.
 - Blob finalize must verify object hash before completion success.
+- SQLite runtime uses `go-sqlite3` with extension loading hooks (cr-sqlite/sqlite-vec/sqlean) and compile-option checks.
 
 ### Open Questions (must be revisited during implementation)
 
 - Message retention defaults (currently no default TTL; operator-defined policy).
 - Reactive query invalidation launch target (`v0` vs table-aware).
 - Legacy webhook-proxy feature keep/change/drop.
-- SQL extension bridge timing (MVP vs later).
 
 ## Implementation Strategy
 
@@ -230,7 +230,8 @@ Exit criteria:
 
 - [ ] MQTT adapter implementation details and persistent session semantics.
 - [ ] Query watch dependency-aware invalidation (`v1`).
-- [ ] SQL extension bridge and outbox workers.
+- [x] SQL extension bridge baseline (driver switch + extension loading + compile-option checks).
+- [ ] Outbox workers.
 - [ ] Webhook HMAC request signature validation (optional per endpoint).
 - [ ] Legacy webhook-proxy feature decision + implementation (if kept).
 - [ ] HuProxy/OIDC SSH claim integration (if reintroduced).

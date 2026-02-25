@@ -547,3 +547,34 @@ Service DB also contains:
 - `auth_tokens`, `auth_token_scopes`
 - `web_identities`, `web_sessions`
 - `public_blob_exports`
+
+## 9. Runtime Notes for Operators and Agent-Managed Deployments
+
+These are deployment/runtime facts that can affect API behavior diagnostics.
+
+- Patchwork uses a cgo-backed SQLite driver (`go-sqlite3`) registered under driver name `sqlite`.
+- Build/runtime requires `CGO_ENABLED=1` and a C toolchain at build time.
+- On first SQLite connection, Patchwork checks `PRAGMA compile_options` once.
+- Missing recommended compile options are logged unless disabled.
+- To hard-fail when options are missing, set:
+  - `PATCHWORK_SQLITE_REQUIRED_COMPILE_OPTIONS`
+
+Default recommended compile options:
+
+- `ENABLE_FTS5`
+- `ENABLE_SESSION`
+- `ENABLE_PREUPDATE_HOOK`
+- `ENABLE_SNAPSHOT`
+- `ENABLE_RBU`
+- `ENABLE_ICU`
+- `ENABLE_RTREE`
+- `ENABLE_GEOPOLY`
+
+Extension loading:
+
+- Patchwork attempts to load:
+  - cr-sqlite (`crsqlite`, `crsqlite0`, variant names)
+  - sqlite-vec (`vec0`, `sqlite_vec`, variant names)
+  - sqlean (`sqlean`, variant names)
+- If explicit env paths are configured (`PATCHWORK_SQLITE_EXTENSION_*`), loading is treated as required.
+- Optional auto-discovery emits one-time warning logs when no candidate can be loaded.

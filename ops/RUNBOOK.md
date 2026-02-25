@@ -5,7 +5,18 @@
 1. Build:
 
 ```bash
-go build -o patchwork ./cmd/patchwork
+CGO_ENABLED=1 \
+CGO_CFLAGS="-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_SNAPSHOT -DSQLITE_ENABLE_RBU -DSQLITE_ENABLE_GEOPOLY -DSQLITE_ENABLE_RTREE" \
+go build -tags "sqlite_fts5 sqlite_preupdate_hook sqlite_vtable" -o patchwork ./cmd/patchwork
+```
+
+Optional ICU-enabled build (requires ICU dev headers/libs on the build host):
+
+```bash
+CGO_ENABLED=1 \
+CGO_CFLAGS="-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_SNAPSHOT -DSQLITE_ENABLE_RBU -DSQLITE_ENABLE_GEOPOLY -DSQLITE_ENABLE_RTREE" \
+CGO_LDFLAGS="-licuuc -licui18n" \
+go build -tags "sqlite_fts5 sqlite_preupdate_hook sqlite_vtable sqlite_icu" -o patchwork ./cmd/patchwork
 ```
 
 2. Configure environment (see `ops/env.example`).
@@ -72,6 +83,20 @@ OIDC web login (optional):
 - `PATCHWORK_OIDC_ADMIN_SUBJECTS`
 - `PATCHWORK_WEB_SESSION_TTL`
 
+SQLite extensions + compile checks:
+
+- `PATCHWORK_SQLITE_EXTENSION_CRSQLITE`
+- `PATCHWORK_SQLITE_EXTENSION_CRSQLITE_ENTRYPOINT`
+- `PATCHWORK_SQLITE_EXTENSION_VEC`
+- `PATCHWORK_SQLITE_EXTENSION_VEC_ENTRYPOINT`
+- `PATCHWORK_SQLITE_EXTENSION_SQLEAN`
+- `PATCHWORK_SQLITE_EXTENSION_SQLEAN_ENTRYPOINT`
+- `PATCHWORK_SQLITE_EXTENSION_SQLEAN_DIR`
+- `PATCHWORK_SQLITE_EXTENSIONS`
+- `PATCHWORK_SQLITE_WARN_MISSING_COMPILE_OPTIONS`
+- `PATCHWORK_SQLITE_REQUIRED_COMPILE_OPTIONS`
+- `PATCHWORK_SQLITE_RECOMMENDED_COMPILE_OPTIONS`
+
 ## Common Troubleshooting
 
 `401/403`:
@@ -91,3 +116,14 @@ Lease conflicts:
 
 - Expected when another owner holds the resource
 - Use `renew` for current owner, not repeated `acquire`
+
+SQLite compile-option warnings at startup:
+
+- The server checks `PRAGMA compile_options` once on first SQLite connection.
+- Missing recommended options are logged as warnings.
+- Set `PATCHWORK_SQLITE_REQUIRED_COMPILE_OPTIONS` to fail if required options are missing.
+
+Extensions not loading:
+
+- If `PATCHWORK_SQLITE_EXTENSION_*` is explicitly set, load failures are treated as errors.
+- Without explicit paths, Patchwork tries default candidates (`crsqlite`, `vec0`, `sqlean`) and logs one-time warnings if nothing is loadable.

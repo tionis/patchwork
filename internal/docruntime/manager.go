@@ -14,7 +14,7 @@ import (
 
 	"github.com/tionis/patchwork/internal/config"
 	"github.com/tionis/patchwork/internal/migrations"
-	_ "modernc.org/sqlite"
+	_ "github.com/tionis/patchwork/internal/sqlitedriver"
 )
 
 var dbIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
