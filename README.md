@@ -360,6 +360,45 @@ go build -tags "sqlite_fts5 sqlite_preupdate_hook sqlite_vtable" -o patchwork ./
 
 For ICU-enabled builds, add `sqlite_icu` to tags and provide ICU link flags/libs on your build host.
 
+### Extension Source and Build Pipeline
+
+Extension sources are vendored via git subtree under `third_party/`:
+
+- `third_party/cr-sqlite`
+- `third_party/cr-sqlite/core/rs/sqlite-rs-embedded`
+- `third_party/sqlite-vec`
+- `third_party/sqlean`
+
+Root build orchestration is provided by:
+
+- `Makefile`
+- `Containerfile`
+
+Common local build commands:
+
+```bash
+make build-patchwork
+make build-extensions
+make test-sqlitedriver-ext
+```
+
+Build prerequisites for `make build-extensions`:
+
+- C toolchain (`gcc`/`clang`), `make`
+- Rust toolchain (for `cr-sqlite`), including `nightly-2023-10-05`
+- for ICU-enabled Patchwork binary builds: ICU dev libs/headers
+
+Artifacts are written to:
+
+- binary: `build/patchwork`
+- extensions: `build/extensions/`
+
+Container build (includes extension artifacts):
+
+```bash
+docker build -f Containerfile -t patchwork:dev .
+```
+
 ### SQLite Extension Tests
 
 `internal/sqlitedriver/driver_test.go` includes:

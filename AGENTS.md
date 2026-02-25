@@ -39,6 +39,12 @@ Before substantial implementation work, read the relevant sections of:
 - Keep server limits and auth checks explicit in handlers.
 - Preserve DB-scoped authorization (`db_id`, `action`, `resource_prefix`) behavior.
 
+## 4.1 Third-Party Extensions
+
+- SQLite extension source trees under `third_party/` are subtree-vendored upstream code.
+- Do not hand-edit vendored extension source unless the task explicitly requires patching upstream code.
+- Prefer updating vendored trees via `git subtree pull` and document the source ref in commit messages.
+
 ## 5. API Guardrails
 
 When changing endpoint behavior, verify all of the following:

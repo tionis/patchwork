@@ -5,25 +5,29 @@
 1. Build:
 
 ```bash
-CGO_ENABLED=1 \
-CGO_CFLAGS="-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_SNAPSHOT -DSQLITE_ENABLE_RBU -DSQLITE_ENABLE_GEOPOLY -DSQLITE_ENABLE_RTREE" \
-go build -tags "sqlite_fts5 sqlite_preupdate_hook sqlite_vtable" -o patchwork ./cmd/patchwork
+make build-patchwork
+make build-extensions
 ```
+
+Extension build prerequisites:
+
+- `make`, `gcc`/`clang`
+- Rust + rustup (for `cr-sqlite`)
+- `rustup toolchain install nightly-2023-10-05`
 
 Optional ICU-enabled build (requires ICU dev headers/libs on the build host):
 
 ```bash
-CGO_ENABLED=1 \
-CGO_CFLAGS="-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_SNAPSHOT -DSQLITE_ENABLE_RBU -DSQLITE_ENABLE_GEOPOLY -DSQLITE_ENABLE_RTREE" \
-CGO_LDFLAGS="-licuuc -licui18n" \
-go build -tags "sqlite_fts5 sqlite_preupdate_hook sqlite_vtable sqlite_icu" -o patchwork ./cmd/patchwork
+make build-patchwork \
+  GO_BUILD_TAGS="sqlite_fts5 sqlite_preupdate_hook sqlite_vtable sqlite_icu" \
+  SQLITE_LDFLAGS="-licuuc -licui18n"
 ```
 
 2. Configure environment (see `ops/env.example`).
 3. Start service:
 
 ```bash
-./patchwork
+./build/patchwork
 ```
 
 ## Health and Status
@@ -127,3 +131,10 @@ Extensions not loading:
 
 - If `PATCHWORK_SQLITE_EXTENSION_*` is explicitly set, load failures are treated as errors.
 - Without explicit paths, Patchwork tries default candidates (`crsqlite`, `vec0`, `sqlean`) and logs one-time warnings if nothing is loadable.
+
+Containerized build/run:
+
+- Build image: `docker build -f Containerfile -t patchwork:dev .`
+- The image includes:
+  - `/opt/patchwork/patchwork`
+  - `/opt/patchwork/extensions/{crsqlite,vec0,sqlean,...}`

@@ -1,2 +1,5 @@
 # Runtime data (local development)
 data/
+
+# Local build artifacts
+build/

@@ -578,3 +578,10 @@ Extension loading:
   - sqlean (`sqlean`, variant names)
 - If explicit env paths are configured (`PATCHWORK_SQLITE_EXTENSION_*`), loading is treated as required.
 - Optional auto-discovery emits one-time warning logs when no candidate can be loaded.
+
+Build pipeline notes:
+
+- Extension sources are vendored under `third_party/` as git subtrees.
+- Root `Makefile` builds:
+  - `build/patchwork`
+  - `build/extensions/` artifacts (`crsqlite`, `vec0`, `sqlean`, safe sqlean modules)
