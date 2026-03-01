@@ -38,6 +38,51 @@ This project is intentionally developed interactively:
 - Add optional web-oriented access paths (SSE, HTTP, optional MQTT).
 - Centralize access control and auditability for these operations.
 
+## Intended Use Cases
+
+1. DB-scoped backend for apps:
+   - each `db_id` represents one document/workspace and exposes controlled SQL/query-watch APIs.
+2. Durable eventing for business workflows:
+   - persist and replay message events with topic filtering and wildcard subscriptions.
+3. Low-latency stream proxying:
+   - retain old patchwork bytestream request/response ergonomics where durability is not required.
+4. External system ingestion:
+   - accept webhook deliveries and store them in DB-local inbox tables for SQL-driven processing.
+5. Distributed worker coordination:
+   - enforce single-writer critical sections through lease/fencing semantics.
+6. Content archival and publication:
+   - ingest and deduplicate blobs globally while applying DB-scoped keep/publish policy.
+
+## High-Level Architecture
+
+Patchwork is composed of three main data domains plus an API/runtime layer:
+
+- API and runtime layer:
+  - HTTP server exposing DB-scoped control/data endpoints.
+  - One runtime worker per active `db_id` to serialize DB operations through channels.
+  - Background jobs for maintenance tasks (for example blob GC).
+- Service/global state (`service.db`):
+  - machine tokens and web sessions
+  - publication metadata and other process-level control-plane data
+- Per-document state (`documents/<db_id>.sqlite3`):
+  - domain data, query/watch execution context
+  - message/stream/webhook/lease/blob reference tables
+- Blob object storage (`blobs/`, `blob-staging/` or future object store backend):
+  - content-addressed blob bytes keyed by hash
+
+Authentication and authorization flow:
+
+- Human auth: OIDC web login (session cookie).
+- Machine auth: scoped bearer tokens issued by Patchwork.
+- Authorization key: `db_id` + action + optional resource prefix.
+
+Messaging/transport split (intentional):
+
+- Message pubsub capability:
+  - durable, replayable, wildcard subscriptions, strict payload limits.
+- Stream capability:
+  - non-durable bytestream relay, optimized for efficient proxy behavior.
+
 ## Product Focus
 
 - SQLite DBs are first-class documents.

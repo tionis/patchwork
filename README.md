@@ -18,6 +18,54 @@ That document includes:
 - auth/token/ACL model (service-local for now)
 - migration and rollout phases
 
+## Documentation Map
+
+- `README.md`: quick orientation, API surface summary, and current feature behavior
+- `DESIGN.md`: architecture decisions, capability model, and long-form design rationale
+- `LLM_API.md`: machine-oriented integration contract and endpoint details
+- `ops/RUNBOOK.md`: operational setup, troubleshooting, and deployment notes
+- `TODO.md`: implementation status and explicit first-deployment gap checklist
+- `FUTURE_CONSIDERATIONS.md`: deferred design decisions and stretch goals
+
+## Primary Use Cases
+
+- Build DB-scoped application backends where each SQLite DB is a document unit.
+- Expose controlled SQL execution and reactive query watches for dashboards/UI sync.
+- Support both durable message pubsub and low-latency bytestream relay patterns.
+- Ingest external webhooks into DB-local durable inbox tables for later SQL consumption.
+- Coordinate workers via lease/fencing APIs.
+- Archive and publish content-addressed blobs with DB-scoped policy and global dedup.
+
+## Architecture At A Glance
+
+Patchwork separates global service state from per-document DB state:
+
+- Service/global SQLite (`service.db`):
+  - token/session metadata
+  - public blob export metadata
+  - process-level control-plane state
+- Per-document SQLite DBs (`documents/<db_id>.sqlite3`):
+  - query/watch data
+  - messages/streams/webhook inbox/leases/blob refs
+  - DB-scoped auth/resource policy enforcement context
+- Blob object storage (`blobs/`, `blob-staging/`):
+  - content-addressed objects keyed by hash
+  - GC managed from DB references and publication state
+
+Runtime model:
+
+- HTTP API server with DB-scoped routes under `/api/v1/db/:db_id/...`
+- one runtime worker per active `db_id` for serialized DB operations
+- auth resolution path:
+  - bearer machine token (scoped)
+  - optional OIDC admin web-session fallback for admin-authorized operations
+- background maintenance loops (for example blob GC)
+
+Messaging model split:
+
+- Durable message pubsub: strict payload limits + replay/wildcards.
+- Streams: efficient non-durable bytestream proxy semantics.
+
 ## Implemented API (Current)
 
 ### DB ID Rules
@@ -255,7 +303,8 @@ Current blob API routes:
 - `POST /api/v1/db/:db_id/blobs/:blob_id/unpublish`
 - `POST /api/v1/db/:db_id/apps/singlefile/rest-form`
 - `GET /o/:blob_hash` (public CDN-style permalink for published blobs)
-- `HEAD /o/:blob_hash`
+- `GET /o/:blob_hash.<suffix>` (same blob, extension-friendly URL)
+- `HEAD /o/:blob_hash` (also supports optional suffix)
 
 Blob scope summary:
 

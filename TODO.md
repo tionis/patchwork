@@ -16,6 +16,39 @@ It combines architecture evaluation, sequencing, and definition-of-done checkpoi
 - Human auth path is OIDC in the web app.
 - Machine auth path is scoped service tokens issued via the web interface.
 
+## First Deployment Gaps (Release-Blocking)
+
+- [ ] Release cut discipline:
+  - [ ] finalize/commit pending changes
+  - [ ] publish an explicit release tag + changelog entry
+- [ ] Production environment profile is finalized and documented:
+  - [ ] OIDC config (`issuer/client/redirect/admin subjects`)
+  - [ ] bootstrap admin-token policy (enable/disable/rotation)
+  - [ ] blob signing key + URL TTL policy
+  - [ ] global/per-token rate-limit values
+  - [ ] SQLite extension paths + required compile options
+- [ ] Target-environment build verification is automated in CI/release pipeline:
+  - [ ] `make build-all`
+  - [ ] `make test-sqlitedriver-ext`
+- [ ] Backup + restore is proven, not just documented:
+  - [ ] scheduled backups for `service.db`, `documents/*.sqlite3`, and blob dirs
+  - [ ] restore drill with measured RTO/RPO
+- [ ] Monitoring and alerting baseline exists:
+  - [ ] request error rates (`5xx`, `429`, auth failures)
+  - [ ] runtime/database health and disk usage
+  - [ ] blob GC failures and growth trends
+- [ ] Edge deployment hardening is complete:
+  - [ ] TLS reverse proxy in front of service
+  - [ ] forwarded-header/cookie security validated for OIDC web sessions
+  - [ ] network exposure and firewall scope are restricted
+- [ ] First-deploy smoke suite is scripted and repeatable:
+  - [ ] OIDC login + token minting
+  - [ ] DB open/query/watch
+  - [ ] message publish + subscribe replay
+  - [ ] streams req/res + queue
+  - [ ] webhook ingest persistence
+  - [ ] blob upload/finalize/publish/public read
+
 ## Architecture Evaluation
 
 ### Strengths
@@ -236,6 +269,9 @@ Exit criteria:
 - [ ] Webhook HMAC request signature validation (optional per endpoint).
 - [ ] Legacy webhook-proxy feature decision + implementation (if kept).
 - [ ] HuProxy/OIDC SSH claim integration (if reintroduced).
+- [ ] Evaluate `ws4sqlite`-style stored statements + strict server-side statement mode (DB-scoped).
+- [ ] Evaluate batched statement execution API (`valuesBatch`) for write-heavy workflows.
+- [ ] Evaluate built-in scheduled maintenance tasks (vacuum/backup rotation/startup SQL) per DB.
 
 ## Suggested Working Order for Immediate Next Steps
 
