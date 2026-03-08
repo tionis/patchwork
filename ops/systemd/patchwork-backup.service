@@ -1,0 +1,10 @@
+[Unit]
+Description=Patchwork Data Backup
+After=network.target
+
+[Service]
+Type=oneshot
+User=patchwork
+Group=patchwork
+EnvironmentFile=/etc/patchwork/patchwork.env
+ExecStart=/opt/patchwork/ops/scripts/backup.sh /var/lib/patchwork /var/backups/patchwork

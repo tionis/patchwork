@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            curl \
+            git \
+            libicu-dev \
+            make \
+            pkg-config
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2023-10-05
+          components: rust-src
+
+      - name: Build all artifacts
+        run: |
+          make build-all \
+            GO_BUILD_TAGS="sqlite_fts5 sqlite_preupdate_hook sqlite_vtable sqlite_icu" \
+            SQLITE_CFLAGS="-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_SNAPSHOT -DSQLITE_ENABLE_RBU -DSQLITE_ENABLE_RTREE -DSQLITE_ENABLE_GEOPOLY" \
+            SQLITE_LDFLAGS="-licuuc -licui18n"
+
+      - name: Verify SQLite driver and extensions
+        run: make test-sqlitedriver-ext
+
+      - name: Run unit and integration tests
+        run: go test ./...

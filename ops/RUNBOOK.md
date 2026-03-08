@@ -52,11 +52,89 @@ Default `PATCHWORK_DATA_DIR` layout:
 - `blobs/` (finalized blob objects)
 - `blob-staging/` (staging uploads)
 
-## Backup Notes
+## First-Deploy Smoke Suite
+
+Run a full end-to-end smoke check against a local server:
+
+```bash
+make smoke-first-deploy
+```
+
+What it verifies:
+
+- token minting
+- DB open/query/watch
+- durable message publish + replay subscribe
+- streams queue + req/res
+- webhook ingest persistence
+- lease acquire/renew/release
+- blob upload/finalize/publish/public read
+
+Use an already running server instead:
+
+```bash
+PATCHWORK_SMOKE_START_SERVER=0 \
+PATCHWORK_SMOKE_BASE_URL=https://patch.example.com \
+PATCHWORK_SMOKE_ADMIN_TOKEN=<admin-token> \
+ops/scripts/smoke-first-deploy.sh
+```
+
+Optional OIDC login redirect check (when OIDC is configured):
+
+```bash
+PATCHWORK_SMOKE_CHECK_OIDC_LOGIN=1 make smoke-first-deploy
+```
+
+## Backup and Restore
 
 - Back up `PATCHWORK_DATA_DIR` atomically where possible.
 - `service.db` and `documents/*.sqlite3` should be included together.
 - Blob directories (`blobs/`, `blob-staging/`) must be backed up with DB metadata for consistency.
+
+Create a timestamped snapshot:
+
+```bash
+make backup BACKUP_DATA_DIR=/var/lib/patchwork BACKUP_OUT_DIR=/var/backups/patchwork
+```
+
+Restore a snapshot:
+
+```bash
+make restore \
+  RESTORE_SNAPSHOT=/var/backups/patchwork/20260301T020000Z \
+  RESTORE_DATA_DIR=/var/lib/patchwork-restore
+```
+
+Run a measured backup/restore drill (prints RTO/RPO summary):
+
+```bash
+make backup-restore-drill BACKUP_DATA_DIR=/var/lib/patchwork BACKUP_OUT_DIR=/var/backups/patchwork
+```
+
+Systemd units for scheduled backups are provided:
+
+- `ops/systemd/patchwork-backup.service`
+- `ops/systemd/patchwork-backup.timer`
+
+Install and enable:
+
+```bash
+sudo cp ops/systemd/patchwork-backup.service /etc/systemd/system/
+sudo cp ops/systemd/patchwork-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now patchwork-backup.timer
+```
+
+## Production Profile
+
+Use `ops/PRODUCTION_PROFILE.md` to lock deployment-specific values before release:
+
+- OIDC issuer/client/redirect/admin subjects
+- bootstrap admin-token lifecycle
+- blob signing key and URL TTL
+- rate-limit values
+- SQLite extension paths and required compile options
+- backup/restore and alert routing details
 
 ## Operational Controls
 
@@ -101,6 +179,27 @@ SQLite extensions + compile checks:
 - `PATCHWORK_SQLITE_WARN_MISSING_EXTENSIONS`
 - `PATCHWORK_SQLITE_REQUIRED_COMPILE_OPTIONS`
 - `PATCHWORK_SQLITE_RECOMMENDED_COMPILE_OPTIONS`
+
+## Monitoring Baseline
+
+- Patchwork alerts: `ops/monitoring/prometheus-rules.yml`
+- Monitoring notes: `ops/monitoring/README.md`
+
+Recommended scrape/probe targets:
+
+- `GET /metrics`
+- `GET /healthz`
+- host/node metrics (disk usage)
+
+Blob GC failures currently surface as logs (`blob gc sweep failed`). Add a log alert rule for that message until dedicated GC Prometheus metrics are added.
+
+## Edge Hardening Checklist
+
+- Run Patchwork behind a TLS reverse proxy.
+- Restrict direct service bind/network exposure to trusted internal networks.
+- Verify forwarded headers (`X-Forwarded-*`) and secure-cookie behavior for OIDC flows.
+- Keep OIDC redirect URL aligned with external HTTPS origin.
+- Reference Nginx config: `ops/nginx/patchwork.conf`
 
 ## Common Troubleshooting
 

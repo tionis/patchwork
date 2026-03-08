@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Patchwork backup periodically
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+Unit=patchwork-backup.service
+
+[Install]
+WantedBy=timers.target

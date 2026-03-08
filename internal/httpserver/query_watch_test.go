@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bufio"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -127,5 +128,70 @@ func TestQueryWatchRequiresReadScope(t *testing.T) {
 
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("expected %d, got %d: %s", http.StatusForbidden, rr.Code, rr.Body.String())
+	}
+}
+
+func TestQueryWatchFlushesSnapshotImmediately(t *testing.T) {
+	env := newWebhookTestEnv(t)
+	defer env.close()
+
+	token := env.issueTokenWithScopes(t, "watch-flush", []auth.Scope{
+		{DBID: "watchdb", Action: "query.read"},
+	})
+
+	ts := httptest.NewServer(env.server.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		ts.URL+"/api/v1/db/watchdb/query/watch",
+		strings.NewReader(`{"sql":"SELECT 1 AS ok","args":[],"options":{"heartbeat_seconds":1}}`),
+	)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("perform watch request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	lineCh := make(chan string, 8)
+	errCh := make(chan error, 1)
+
+	go func() {
+		for scanner.Scan() {
+			lineCh <- scanner.Text()
+		}
+		errCh <- scanner.Err()
+	}()
+
+	deadline := time.After(1200 * time.Millisecond)
+	for {
+		select {
+		case line := <-lineCh:
+			if line == "event: snapshot" {
+				return
+			}
+		case scanErr := <-errCh:
+			if scanErr != nil {
+				t.Fatalf("scanner error: %v", scanErr)
+			}
+			t.Fatal("watch stream ended before snapshot event")
+		case <-deadline:
+			t.Fatal("timed out waiting for flushed snapshot event")
+		}
 	}
 }

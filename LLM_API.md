@@ -616,3 +616,10 @@ Build pipeline notes:
 - Root `Makefile` builds:
   - `build/patchwork`
   - `build/extensions/` artifacts (`crsqlite`, `vec0`, `sqlean`, safe sqlean modules)
+
+Operational verification helpers:
+
+- `make build-all` builds server + extension artifacts.
+- `make test-sqlitedriver-ext` verifies extension loading/probe tests.
+- `make smoke-first-deploy` runs an end-to-end API smoke flow.
+- `make backup`, `make restore`, `make backup-restore-drill` automate backup/restore checks.

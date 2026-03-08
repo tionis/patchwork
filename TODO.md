@@ -4,6 +4,9 @@ Plan baseline date: 2026-02-15
 
 Update (2026-02-25): legacy compatibility aliases and old-data migration fallbacks were removed.
 The service now supports canonical DB-scoped APIs only.
+Update (2026-03-08): first-deploy automation was added in-repo (CI build gates, smoke suite script,
+backup/restore scripts + drill, monitoring rule baseline, production profile template). Deployment-specific
+values and rollout execution remain pending.
 
 This file is the execution plan for implementing the new service in `projects/skald`.
 It combines architecture evaluation, sequencing, and definition-of-done checkpoints.
@@ -22,32 +25,32 @@ It combines architecture evaluation, sequencing, and definition-of-done checkpoi
   - [ ] finalize/commit pending changes
   - [ ] publish an explicit release tag + changelog entry
 - [ ] Production environment profile is finalized and documented:
-  - [ ] OIDC config (`issuer/client/redirect/admin subjects`)
-  - [ ] bootstrap admin-token policy (enable/disable/rotation)
-  - [ ] blob signing key + URL TTL policy
-  - [ ] global/per-token rate-limit values
-  - [ ] SQLite extension paths + required compile options
+  - [x] OIDC config (`issuer/client/redirect/admin subjects`) template documented (`ops/PRODUCTION_PROFILE.md`)
+  - [x] bootstrap admin-token policy (enable/disable/rotation) template documented (`ops/PRODUCTION_PROFILE.md`)
+  - [x] blob signing key + URL TTL policy template documented (`ops/PRODUCTION_PROFILE.md`)
+  - [x] global/per-token rate-limit values template documented (`ops/PRODUCTION_PROFILE.md`)
+  - [x] SQLite extension paths + required compile options template documented (`ops/PRODUCTION_PROFILE.md`)
 - [ ] Target-environment build verification is automated in CI/release pipeline:
-  - [ ] `make build-all`
-  - [ ] `make test-sqlitedriver-ext`
+  - [x] `make build-all`
+  - [x] `make test-sqlitedriver-ext`
 - [ ] Backup + restore is proven, not just documented:
-  - [ ] scheduled backups for `service.db`, `documents/*.sqlite3`, and blob dirs
-  - [ ] restore drill with measured RTO/RPO
+  - [x] scheduled backups for `service.db`, `documents/*.sqlite3`, and blob dirs
+  - [x] restore drill with measured RTO/RPO
 - [ ] Monitoring and alerting baseline exists:
-  - [ ] request error rates (`5xx`, `429`, auth failures)
-  - [ ] runtime/database health and disk usage
-  - [ ] blob GC failures and growth trends
+  - [x] request error rates (`5xx`, `429`, auth failures)
+  - [x] runtime/database health and disk usage
+  - [x] blob GC failures and growth trends
 - [ ] Edge deployment hardening is complete:
   - [ ] TLS reverse proxy in front of service
   - [ ] forwarded-header/cookie security validated for OIDC web sessions
   - [ ] network exposure and firewall scope are restricted
 - [ ] First-deploy smoke suite is scripted and repeatable:
   - [ ] OIDC login + token minting
-  - [ ] DB open/query/watch
-  - [ ] message publish + subscribe replay
-  - [ ] streams req/res + queue
-  - [ ] webhook ingest persistence
-  - [ ] blob upload/finalize/publish/public read
+  - [x] DB open/query/watch
+  - [x] message publish + subscribe replay
+  - [x] streams req/res + queue
+  - [x] webhook ingest persistence
+  - [x] blob upload/finalize/publish/public read
 
 ## Architecture Evaluation
 

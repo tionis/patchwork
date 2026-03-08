@@ -1,0 +1,61 @@
+groups:
+  - name: patchwork-http
+    rules:
+      - alert: PatchworkHigh5xxRate
+        expr: |
+          (
+            sum(rate(patchwork_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(patchwork_http_requests_total[5m])), 1)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Patchwork 5xx error rate is elevated
+          description: 5xx responses are above 5% for at least 10 minutes.
+
+      - alert: PatchworkAuthFailureSpike
+        expr: sum(rate(patchwork_http_requests_total{status=~"401|403"}[5m])) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Patchwork auth failures are elevated
+          description: 401/403 responses exceed 2 req/s over 5 minutes.
+
+      - alert: PatchworkRateLimitSpike
+        expr: sum(rate(patchwork_http_requests_total{status="429"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Patchwork rate-limits are elevated
+          description: 429 responses exceed 1 req/s over 5 minutes.
+
+  - name: patchwork-runtime
+    rules:
+      - alert: PatchworkRuntimeWorkersHigh
+        expr: patchwork_db_runtimes_active > 500
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Patchwork active DB runtime workers are high
+          description: Active runtime workers exceeded 500 for 15 minutes.
+
+  - name: patchwork-host
+    rules:
+      - alert: PatchworkHostDiskLow
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+            /
+            clamp_min(node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}, 1)
+          ) < 0.10
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: Host disk free space is low
+          description: Filesystem has less than 10% free space for at least 15 minutes.

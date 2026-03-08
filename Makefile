@@ -9,6 +9,11 @@ OUT_BIN ?= $(OUT_DIR)/patchwork
 OUT_EXT_DIR ?= $(OUT_DIR)/extensions
 OUT_SQLEAN_DIR ?= $(OUT_EXT_DIR)/sqlean
 
+BACKUP_DATA_DIR ?= ./data
+BACKUP_OUT_DIR ?= ./backups
+RESTORE_SNAPSHOT ?=
+RESTORE_DATA_DIR ?= ./restore-data
+
 GO_BUILD_TAGS ?= sqlite_fts5 sqlite_preupdate_hook sqlite_vtable
 SQLITE_CFLAGS ?= -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_SNAPSHOT -DSQLITE_ENABLE_RBU -DSQLITE_ENABLE_RTREE -DSQLITE_ENABLE_GEOPOLY
 SQLITE_LDFLAGS ?=
@@ -51,6 +56,10 @@ help:
 	@echo "  make build-all                Build patchwork and all extension artifacts"
 	@echo "  make test                     Run go test ./..."
 	@echo "  make test-sqlitedriver-ext    Run sqlite driver extension tests with built artifacts"
+	@echo "  make smoke-first-deploy       Run first-deploy smoke suite (starts local server)"
+	@echo "  make backup                   Create timestamped backup snapshot"
+	@echo "  make restore                  Restore a snapshot into a target data dir"
+	@echo "  make backup-restore-drill     Run backup+restore drill and print measured timing"
 	@echo "  make clean                    Remove build output and third_party extension dist folders"
 	@echo ""
 	@echo "Common overrides:"
@@ -120,6 +129,27 @@ test-sqlitedriver-ext: build-extensions
 	PATCHWORK_SQLITE_TEST_SQLEAN_PATH="$$(pwd)/$(OUT_EXT_DIR)/sqlean" \
 	PATCHWORK_SQLITE_TEST_SQLEAN_DIR="$$(pwd)/$(OUT_SQLEAN_DIR)" \
 	$(GO) test ./internal/sqlitedriver -v
+
+.PHONY: smoke-first-deploy
+smoke-first-deploy: build-patchwork
+	PATCHWORK_SMOKE_BINARY="$$(pwd)/$(OUT_BIN)" \
+	ops/scripts/smoke-first-deploy.sh
+
+.PHONY: backup
+backup:
+	ops/scripts/backup.sh "$(BACKUP_DATA_DIR)" "$(BACKUP_OUT_DIR)"
+
+.PHONY: restore
+restore:
+	@if [ -z "$(RESTORE_SNAPSHOT)" ]; then \
+		echo "set RESTORE_SNAPSHOT=<path-to-backup-snapshot>"; \
+		exit 1; \
+	fi
+	ops/scripts/restore.sh "$(RESTORE_SNAPSHOT)" "$(RESTORE_DATA_DIR)"
+
+.PHONY: backup-restore-drill
+backup-restore-drill:
+	ops/scripts/backup-restore-drill.sh "$(BACKUP_DATA_DIR)" "$(BACKUP_OUT_DIR)"
 
 $(OUT_DIR):
 	mkdir -p "$(OUT_DIR)"
