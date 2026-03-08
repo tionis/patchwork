@@ -7,6 +7,9 @@ The service now supports canonical DB-scoped APIs only.
 Update (2026-03-08): first-deploy automation was added in-repo (CI build gates, smoke suite script,
 backup/restore scripts + drill, monitoring rule baseline, production profile template). Deployment-specific
 values and rollout execution remain pending.
+Update (2026-03-08b): added OIDC smoke script (`make smoke-first-deploy-oidc`), release process scripts
+(`ops/scripts/release-check.sh`, `ops/scripts/release-tag.sh`), changelog baseline, and forwarded-header
+cookie-security OIDC tests.
 
 This file is the execution plan for implementing the new service in `projects/skald`.
 It combines architecture evaluation, sequencing, and definition-of-done checkpoints.
@@ -42,10 +45,10 @@ It combines architecture evaluation, sequencing, and definition-of-done checkpoi
   - [x] blob GC failures and growth trends
 - [ ] Edge deployment hardening is complete:
   - [ ] TLS reverse proxy in front of service
-  - [ ] forwarded-header/cookie security validated for OIDC web sessions
+  - [x] forwarded-header/cookie security validated for OIDC web sessions
   - [ ] network exposure and firewall scope are restricted
 - [ ] First-deploy smoke suite is scripted and repeatable:
-  - [ ] OIDC login + token minting
+  - [x] OIDC login + token minting
   - [x] DB open/query/watch
   - [x] message publish + subscribe replay
   - [x] streams req/res + queue

@@ -85,6 +85,12 @@ Optional OIDC login redirect check (when OIDC is configured):
 PATCHWORK_SMOKE_CHECK_OIDC_LOGIN=1 make smoke-first-deploy
 ```
 
+OIDC login + token minting smoke (test-harness provider):
+
+```bash
+make smoke-first-deploy-oidc
+```
+
 ## Backup and Restore
 
 - Back up `PATCHWORK_DATA_DIR` atomically where possible.
@@ -135,6 +141,22 @@ Use `ops/PRODUCTION_PROFILE.md` to lock deployment-specific values before releas
 - rate-limit values
 - SQLite extension paths and required compile options
 - backup/restore and alert routing details
+
+## Release Cut Discipline
+
+- Changelog: `CHANGELOG.md`
+- Process doc: `ops/RELEASE.md`
+- Release checks:
+
+```bash
+ops/scripts/release-check.sh
+```
+
+- Tag creation (after changelog version section is added):
+
+```bash
+ops/scripts/release-tag.sh <version>
+```
 
 ## Operational Controls
 

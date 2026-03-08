@@ -21,9 +21,11 @@ That document includes:
 ## Documentation Map
 
 - `README.md`: quick orientation, API surface summary, and current feature behavior
+- `CHANGELOG.md`: release notes and user-visible change tracking
 - `DESIGN.md`: architecture decisions, capability model, and long-form design rationale
 - `LLM_API.md`: machine-oriented integration contract and endpoint details
 - `ops/RUNBOOK.md`: operational setup, troubleshooting, and deployment notes
+- `ops/RELEASE.md`: release-cut process and tagging workflow
 - `ops/PRODUCTION_PROFILE.md`: environment-specific release profile template (OIDC, limits, backup/restore, edge)
 - `ops/monitoring/`: baseline alert rules and monitoring notes
 - `TODO.md`: implementation status and explicit first-deployment gap checklist

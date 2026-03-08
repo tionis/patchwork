@@ -57,6 +57,7 @@ help:
 	@echo "  make test                     Run go test ./..."
 	@echo "  make test-sqlitedriver-ext    Run sqlite driver extension tests with built artifacts"
 	@echo "  make smoke-first-deploy       Run first-deploy smoke suite (starts local server)"
+	@echo "  make smoke-first-deploy-oidc  Run OIDC login/token smoke checks"
 	@echo "  make backup                   Create timestamped backup snapshot"
 	@echo "  make restore                  Restore a snapshot into a target data dir"
 	@echo "  make backup-restore-drill     Run backup+restore drill and print measured timing"
@@ -134,6 +135,10 @@ test-sqlitedriver-ext: build-extensions
 smoke-first-deploy: build-patchwork
 	PATCHWORK_SMOKE_BINARY="$$(pwd)/$(OUT_BIN)" \
 	ops/scripts/smoke-first-deploy.sh
+
+.PHONY: smoke-first-deploy-oidc
+smoke-first-deploy-oidc:
+	ops/scripts/smoke-oidc-login.sh
 
 .PHONY: backup
 backup:

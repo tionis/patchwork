@@ -219,10 +219,70 @@ func TestOIDCAdminSessionAuthorizesDBAPIWithoutBearerToken(t *testing.T) {
 	}
 }
 
+func TestOIDCLoginSetsStateCookiesSecureWithForwardedHTTPS(t *testing.T) {
+	provider := newOIDCTestProvider(t, "oidc-user")
+	defer provider.close()
+
+	env := newWebhookTestEnvWithConfig(t, func(cfg *config.Config) {
+		cfg.OIDCIssuerURL = provider.issuerURL()
+		cfg.OIDCClientID = "patchwork-client"
+		cfg.OIDCClientSecret = "patchwork-secret"
+		cfg.OIDCRedirectURL = "https://patchwork.test/auth/oidc/callback"
+		cfg.OIDCAdminSubjects = []string{"oidc-user"}
+		cfg.WebSessionTTL = time.Hour
+	})
+	defer env.close()
+
+	loginReq := httptest.NewRequest(http.MethodGet, "/auth/oidc/login?next="+url.QueryEscape("/ui"), nil)
+	loginReq.Header.Set("X-Forwarded-Proto", "https")
+	loginRR := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(loginRR, loginReq)
+	if loginRR.Code != http.StatusFound {
+		t.Fatalf("oidc login expected %d, got %d: %s", http.StatusFound, loginRR.Code, loginRR.Body.String())
+	}
+
+	for _, cookie := range loginRR.Result().Cookies() {
+		if cookie.Name == oidcStateCookieName || cookie.Name == oidcNextCookieName {
+			if !cookie.Secure {
+				t.Fatalf("expected secure cookie for %s when forwarded proto is https", cookie.Name)
+			}
+		}
+	}
+}
+
+func TestOIDCCallbackSetsSessionCookieSecureWithForwardedHTTPS(t *testing.T) {
+	provider := newOIDCTestProvider(t, "oidc-user")
+	defer provider.close()
+
+	env := newWebhookTestEnvWithConfig(t, func(cfg *config.Config) {
+		cfg.OIDCIssuerURL = provider.issuerURL()
+		cfg.OIDCClientID = "patchwork-client"
+		cfg.OIDCClientSecret = "patchwork-secret"
+		cfg.OIDCRedirectURL = "https://patchwork.test/auth/oidc/callback"
+		cfg.OIDCAdminSubjects = []string{"oidc-user"}
+		cfg.WebSessionTTL = time.Hour
+	})
+	defer env.close()
+
+	sessionCookie := performOIDCLoginWithHeaders(t, env, map[string]string{
+		"X-Forwarded-Proto": "https",
+	})
+	if !sessionCookie.Secure {
+		t.Fatal("expected web session cookie to be secure when forwarded proto is https")
+	}
+}
+
 func performOIDCLogin(t *testing.T, env *webhookTestEnv) *http.Cookie {
+	return performOIDCLoginWithHeaders(t, env, nil)
+}
+
+func performOIDCLoginWithHeaders(t *testing.T, env *webhookTestEnv, headers map[string]string) *http.Cookie {
 	t.Helper()
 
 	loginReq := httptest.NewRequest(http.MethodGet, "/auth/oidc/login?next="+url.QueryEscape("/ui/tokens"), nil)
+	for key, value := range headers {
+		loginReq.Header.Set(key, value)
+	}
 	loginRR := httptest.NewRecorder()
 	env.server.Handler().ServeHTTP(loginRR, loginReq)
 	if loginRR.Code != http.StatusFound {
@@ -247,6 +307,9 @@ func performOIDCLogin(t *testing.T, env *webhookTestEnv) *http.Cookie {
 		"/auth/oidc/callback?code=oidc-code&state="+url.QueryEscape(state),
 		nil,
 	)
+	for key, value := range headers {
+		callbackReq.Header.Set(key, value)
+	}
 	for _, cookie := range loginRR.Result().Cookies() {
 		callbackReq.AddCookie(cookie)
 	}
