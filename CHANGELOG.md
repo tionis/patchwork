@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- In-server documentation endpoints: `GET /docs` and `GET /docs/llm`.
+
+### Changed
+
+- Updated UI pages to link built-in docs and refreshed repository/operator/LLM documentation for consistency.
+
 ## [0.1.0] - 2026-03-08
 
 ### Added

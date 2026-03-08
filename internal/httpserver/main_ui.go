@@ -235,6 +235,7 @@ const mainUIHTML = `<!doctype html>
         <li>Use <a href="/auth/oidc/login?next=/ui">OIDC Login</a> to start a web session.</li>
         <li>If needed, open <a href="/ui/tokens">Token Admin</a> and create a machine token.</li>
         <li>Set a DB ID below and run actions. Bearer token can stay empty for admin OIDC sessions.</li>
+        <li>Use <a href="/docs">Docs</a> and <a href="/docs/llm">LLM Quick Reference</a> for endpoint guidance.</li>
       </ol>
       <div class="quick-nav">
         <a class="chip" href="#session">Session</a>
@@ -259,6 +260,8 @@ const mainUIHTML = `<!doctype html>
       <p>
         <a href="/ui/tokens">Token Admin</a> |
         <a href="/ui/blobs">Blob Manager</a> |
+        <a href="/docs">Docs</a> |
+        <a href="/docs/llm">LLM Quick Ref</a> |
         <a href="/auth/oidc/login?next=/ui">OIDC Login</a> |
         <a href="/auth/logout">Logout</a>
       </p>

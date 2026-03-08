@@ -273,7 +273,7 @@ const tokenUIHTML = `<!doctype html>
       <label for="authToken">Admin Token Override (optional)</label>
       <input id="authToken" type="password" placeholder="Optional when logged in via OIDC" />
       <button class="secondary" onclick="loadTokens()">Load Tokens</button>
-      <p><a href="/ui">Console</a> | <a href="/ui/blobs">Blob Manager</a> | <a href="/auth/logout">Logout</a></p>
+      <p><a href="/ui">Console</a> | <a href="/ui/blobs">Blob Manager</a> | <a href="/docs">Docs</a> | <a href="/docs/llm">LLM Quick Ref</a> | <a href="/auth/logout">Logout</a></p>
     </div>
 
     <div class="card">
@@ -522,6 +522,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/ui", s.handleMainUI)
 	mux.HandleFunc("/ui/tokens", s.handleTokenUI)
 	mux.HandleFunc("/ui/blobs", s.handleBlobUI)
+	mux.HandleFunc("/docs", s.handleDocsUI)
+	mux.HandleFunc("/docs/llm", s.handleDocsLLM)
+	mux.HandleFunc("/docs/", s.handleDocsUI)
 	mux.HandleFunc("/o/", s.handlePublicBlobObject)
 	mux.HandleFunc("/auth/oidc/login", s.handleOIDCLogin)
 	mux.HandleFunc("/auth/oidc/callback", s.handleOIDCCallback)

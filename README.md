@@ -32,6 +32,11 @@ That document includes:
 - `TODO.md`: implementation status and explicit first-deployment gap checklist
 - `FUTURE_CONSIDERATIONS.md`: deferred design decisions and stretch goals
 
+In-server docs endpoints:
+
+- `GET /docs`: operator/developer quick reference
+- `GET /docs/llm`: compact LLM/tooling quick reference (plain text)
+
 ## Primary Use Cases
 
 - Build DB-scoped application backends where each SQLite DB is a document unit.
@@ -252,6 +257,7 @@ Behavior:
 
 - Main console route: `GET /` (also available as `GET /ui`)
 - Route: `GET /ui/tokens`
+- In-server docs: `GET /docs`, `GET /docs/llm`
 - UI theme toggle is available on `/ui`, `/ui/tokens`, and `/ui/blobs` with modes: `system` (default), `light`, `dark`.
 - When OIDC is configured:
   - `GET /`, `GET /ui`, and `GET /ui/blobs` require a valid web session and redirect to `/auth/oidc/login?next=...` when missing.
@@ -271,6 +277,12 @@ Behavior:
 - When OIDC is configured, web sessions are stored in `web_sessions`.
 - OIDC admin subjects can manage machine tokens without pasting a bearer token in the UI.
 - OIDC admin sessions are also accepted as admin authorization for DB-scoped APIs in the web UI (bearer token remains optional for non-admin scoped use).
+
+### In-Server Documentation
+
+- `GET /docs`: human-friendly in-server docs page with quick links and endpoint summary.
+- `GET /docs/llm`: plain-text quick reference intended for LLM/tooling agents.
+- Both endpoints are readable without authentication, including when OIDC UI login is enabled.
 
 ### Blob Control Plane
 

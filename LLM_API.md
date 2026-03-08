@@ -115,6 +115,20 @@ Admin token endpoints require one of:
   - bearer token works normally
   - OIDC admin sessions can authorize protected calls as admin
 
+### `GET /docs`
+
+- Auth: none (available even when OIDC is configured)
+- Built-in operator/developer documentation page with:
+  - capability overview
+  - endpoint table
+  - quick links to `/ui`, `/ui/tokens`, `/ui/blobs`, `/docs/llm`
+
+### `GET /docs/llm`
+
+- Auth: none (available even when OIDC is configured)
+- Plain-text compact quick reference for LLM/tooling agents.
+- Intended as a lightweight in-server shortcut; use `LLM_API.md` as full contract.
+
 ### `GET /ui/blobs`
 
 - Auth:

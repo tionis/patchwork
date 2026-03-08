@@ -121,6 +121,9 @@ func TestTokenUIPageServesHTML(t *testing.T) {
 	if body := rr.Body.String(); !strings.Contains(body, `<option value="light">Light</option>`) {
 		t.Fatalf("missing theme toggle option in token UI")
 	}
+	if body := rr.Body.String(); !strings.Contains(body, `/docs/llm`) {
+		t.Fatalf("missing llm docs link in token UI")
+	}
 }
 
 func TestMainUIPageServesHTML(t *testing.T) {
@@ -144,6 +147,9 @@ func TestMainUIPageServesHTML(t *testing.T) {
 	}
 	if body := rr.Body.String(); !strings.Contains(body, `<option value="system">System</option>`) {
 		t.Fatalf("missing system theme toggle option in main UI")
+	}
+	if body := rr.Body.String(); !strings.Contains(body, `/docs/llm`) {
+		t.Fatalf("missing llm docs link in main UI")
 	}
 }
 
@@ -185,6 +191,55 @@ func TestBlobUIPageServesHTML(t *testing.T) {
 	}
 	if body := rr.Body.String(); !strings.Contains(body, `<option value="dark">Dark</option>`) {
 		t.Fatalf("missing theme toggle option in blob UI")
+	}
+	if body := rr.Body.String(); !strings.Contains(body, `/docs/llm`) {
+		t.Fatalf("missing llm docs link in blob UI")
+	}
+}
+
+func TestDocsUIPageServesHTML(t *testing.T) {
+	env := newWebhookTestEnv(t)
+	defer env.close()
+
+	req := httptest.NewRequest(http.MethodGet, "/docs", nil)
+	rr := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d: %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("unexpected content type: %q", ct)
+	}
+
+	if body := rr.Body.String(); !strings.Contains(body, "Patchwork Documentation") {
+		t.Fatalf("unexpected docs HTML body: %s", body)
+	}
+}
+
+func TestDocsLLMEndpointServesText(t *testing.T) {
+	env := newWebhookTestEnv(t)
+	defer env.close()
+
+	req := httptest.NewRequest(http.MethodGet, "/docs/llm", nil)
+	rr := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d: %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	if ct := rr.Header().Get("Content-Type"); !strings.Contains(ct, "text/plain") {
+		t.Fatalf("unexpected content type: %q", ct)
+	}
+
+	body := rr.Body.String()
+	if !strings.Contains(body, "Patchwork LLM Quick Reference") {
+		t.Fatalf("unexpected llm docs body: %s", body)
+	}
+	if !strings.Contains(body, "/api/v1/db/:db_id/query/exec") {
+		t.Fatalf("llm docs missing core endpoint reference")
 	}
 }
 

@@ -152,7 +152,7 @@ const blobUIHTML = `<!doctype html>
       <label for="dbID">DB ID</label>
       <input id="dbID" value="public" />
       <button class="secondary" onclick="loadBlobs()">Load Blobs</button>
-      <p><a href="/ui">Console</a> | <a href="/ui/tokens">Token Admin</a> | <a href="/auth/logout">Logout</a></p>
+      <p><a href="/ui">Console</a> | <a href="/ui/tokens">Token Admin</a> | <a href="/docs">Docs</a> | <a href="/docs/llm">LLM Quick Ref</a> | <a href="/auth/logout">Logout</a></p>
     </div>
 
     <div class="card">

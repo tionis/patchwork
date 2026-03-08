@@ -279,10 +279,13 @@ Web UI entry points:
 - `GET /` and `GET /ui`: main multi-feature console
 - `GET /ui/tokens`: token admin UI
 - `GET /ui/blobs`: blob manager UI
+- `GET /docs`: in-server docs for operators/developers
+- `GET /docs/llm`: in-server plain-text quick reference for LLM/tooling agents
 - Theme selector on each page: `system` (default), `light`, `dark`
 - If OIDC is configured:
   - `/`, `/ui`, `/ui/blobs` redirect to OIDC login when session is missing
   - `/ui/tokens` requires admin subject
+  - `/docs` and `/docs/llm` remain publicly readable
 
 Containerized build/run:
 

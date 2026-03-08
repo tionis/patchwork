@@ -63,6 +63,7 @@ Minimum required docs update:
 
 1. `README.md`
 2. `LLM_API.md`
+3. in-server docs where applicable (`/docs` and `/docs/llm` content in `internal/httpserver/docs_ui.go`)
 
 Update these whenever there is any change to:
 

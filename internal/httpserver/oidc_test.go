@@ -130,6 +130,30 @@ func TestOIDCEnabledUIWithoutSessionRedirectsToLogin(t *testing.T) {
 	}
 }
 
+func TestOIDCEnabledDocsRemainAccessibleWithoutSession(t *testing.T) {
+	provider := newOIDCTestProvider(t, "oidc-user")
+	defer provider.close()
+
+	env := newWebhookTestEnvWithConfig(t, func(cfg *config.Config) {
+		cfg.OIDCIssuerURL = provider.issuerURL()
+		cfg.OIDCClientID = "patchwork-client"
+		cfg.OIDCClientSecret = "patchwork-secret"
+		cfg.OIDCRedirectURL = "http://patchwork.test/auth/oidc/callback"
+		cfg.OIDCAdminSubjects = []string{"oidc-user"}
+		cfg.WebSessionTTL = time.Hour
+	})
+	defer env.close()
+
+	for _, path := range []string{"/docs", "/docs/llm"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rr := httptest.NewRecorder()
+		env.server.Handler().ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("path %s expected %d, got %d: %s", path, http.StatusOK, rr.Code, rr.Body.String())
+		}
+	}
+}
+
 func TestOIDCEnabledUISessionCanAccessMainAndBlobPages(t *testing.T) {
 	provider := newOIDCTestProvider(t, "oidc-user")
 	defer provider.close()
