@@ -23,6 +23,7 @@ This runs:
 - `go test ./...`
 - `make smoke-first-deploy`
 - `make smoke-first-deploy-oidc`
+- `make edge-hardening-check`
 
 ## 3. Create tag
 

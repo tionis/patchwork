@@ -10,6 +10,9 @@ values and rollout execution remain pending.
 Update (2026-03-08b): added OIDC smoke script (`make smoke-first-deploy-oidc`), release process scripts
 (`ops/scripts/release-check.sh`, `ops/scripts/release-tag.sh`), changelog baseline, and forwarded-header
 cookie-security OIDC tests.
+Update (2026-03-08c): added edge hardening validation script (`make edge-hardening-check`), switched
+ops defaults to loopback bind (`127.0.0.1:8080`), and added hardened systemd service defaults.
+Update (2026-03-08d): release workflow executed with changelog version section + release tag.
 
 This file is the execution plan for implementing the new service in `projects/skald`.
 It combines architecture evaluation, sequencing, and definition-of-done checkpoints.
@@ -24,30 +27,30 @@ It combines architecture evaluation, sequencing, and definition-of-done checkpoi
 
 ## First Deployment Gaps (Release-Blocking)
 
-- [ ] Release cut discipline:
-  - [ ] finalize/commit pending changes
-  - [ ] publish an explicit release tag + changelog entry
+- [x] Release cut discipline:
+  - [x] finalize/commit pending changes
+  - [x] publish an explicit release tag + changelog entry
 - [ ] Production environment profile is finalized and documented:
   - [x] OIDC config (`issuer/client/redirect/admin subjects`) template documented (`ops/PRODUCTION_PROFILE.md`)
   - [x] bootstrap admin-token policy (enable/disable/rotation) template documented (`ops/PRODUCTION_PROFILE.md`)
   - [x] blob signing key + URL TTL policy template documented (`ops/PRODUCTION_PROFILE.md`)
   - [x] global/per-token rate-limit values template documented (`ops/PRODUCTION_PROFILE.md`)
   - [x] SQLite extension paths + required compile options template documented (`ops/PRODUCTION_PROFILE.md`)
-- [ ] Target-environment build verification is automated in CI/release pipeline:
+- [x] Target-environment build verification is automated in CI/release pipeline:
   - [x] `make build-all`
   - [x] `make test-sqlitedriver-ext`
-- [ ] Backup + restore is proven, not just documented:
+- [x] Backup + restore is proven, not just documented:
   - [x] scheduled backups for `service.db`, `documents/*.sqlite3`, and blob dirs
   - [x] restore drill with measured RTO/RPO
-- [ ] Monitoring and alerting baseline exists:
+- [x] Monitoring and alerting baseline exists:
   - [x] request error rates (`5xx`, `429`, auth failures)
   - [x] runtime/database health and disk usage
   - [x] blob GC failures and growth trends
-- [ ] Edge deployment hardening is complete:
-  - [ ] TLS reverse proxy in front of service
+- [x] Edge deployment hardening is complete:
+  - [x] TLS reverse proxy in front of service (reference config + validation script)
   - [x] forwarded-header/cookie security validated for OIDC web sessions
-  - [ ] network exposure and firewall scope are restricted
-- [ ] First-deploy smoke suite is scripted and repeatable:
+  - [x] network exposure and firewall scope are restricted (loopback bind default + validation script)
+- [x] First-deploy smoke suite is scripted and repeatable:
   - [x] OIDC login + token minting
   - [x] DB open/query/watch
   - [x] message publish + subscribe replay

@@ -14,5 +14,6 @@ go test ./...
 echo "[release-check] running deploy smoke checks"
 make smoke-first-deploy
 make smoke-first-deploy-oidc
+make edge-hardening-check
 
 echo "[release-check] all checks passed"

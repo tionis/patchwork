@@ -623,5 +623,6 @@ Operational verification helpers:
 - `make test-sqlitedriver-ext` verifies extension loading/probe tests.
 - `make smoke-first-deploy` runs an end-to-end API smoke flow.
 - `make smoke-first-deploy-oidc` runs OIDC login/token smoke checks (test harness provider).
+- `make edge-hardening-check` validates loopback bind + TLS proxy + OIDC https redirect settings.
 - `make backup`, `make restore`, `make backup-restore-drill` automate backup/restore checks.
 - `ops/scripts/release-check.sh` and `ops/scripts/release-tag.sh` automate release gates/tagging.

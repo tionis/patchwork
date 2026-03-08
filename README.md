@@ -28,6 +28,7 @@ That document includes:
 - `ops/RELEASE.md`: release-cut process and tagging workflow
 - `ops/PRODUCTION_PROFILE.md`: environment-specific release profile template (OIDC, limits, backup/restore, edge)
 - `ops/monitoring/`: baseline alert rules and monitoring notes
+- `ops/scripts/edge-hardening-check.sh`: edge deployment config checks (bind/proxy/https/firewall hints)
 - `TODO.md`: implementation status and explicit first-deployment gap checklist
 - `FUTURE_CONSIDERATIONS.md`: deferred design decisions and stretch goals
 

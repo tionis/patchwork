@@ -222,6 +222,23 @@ Blob GC failures currently surface as logs (`blob gc sweep failed`). Add a log a
 - Verify forwarded headers (`X-Forwarded-*`) and secure-cookie behavior for OIDC flows.
 - Keep OIDC redirect URL aligned with external HTTPS origin.
 - Reference Nginx config: `ops/nginx/patchwork.conf`
+- Validate deployment settings with:
+
+```bash
+make edge-hardening-check
+```
+
+Enable runtime listener verification against active `patchwork` sockets:
+
+```bash
+PATCHWORK_EDGE_RUNTIME_CHECK=true make edge-hardening-check
+```
+
+- For installed environments:
+
+```bash
+ops/scripts/edge-hardening-check.sh /etc/patchwork/patchwork.env /opt/patchwork/ops/nginx/patchwork.conf
+```
 
 ## Common Troubleshooting
 

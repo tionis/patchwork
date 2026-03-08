@@ -58,6 +58,7 @@ help:
 	@echo "  make test-sqlitedriver-ext    Run sqlite driver extension tests with built artifacts"
 	@echo "  make smoke-first-deploy       Run first-deploy smoke suite (starts local server)"
 	@echo "  make smoke-first-deploy-oidc  Run OIDC login/token smoke checks"
+	@echo "  make edge-hardening-check     Validate edge hardening config and bind/network policy"
 	@echo "  make backup                   Create timestamped backup snapshot"
 	@echo "  make restore                  Restore a snapshot into a target data dir"
 	@echo "  make backup-restore-drill     Run backup+restore drill and print measured timing"
@@ -139,6 +140,10 @@ smoke-first-deploy: build-patchwork
 .PHONY: smoke-first-deploy-oidc
 smoke-first-deploy-oidc:
 	ops/scripts/smoke-oidc-login.sh
+
+.PHONY: edge-hardening-check
+edge-hardening-check:
+	ops/scripts/edge-hardening-check.sh ops/env.example ops/nginx/patchwork.conf
 
 .PHONY: backup
 backup:
