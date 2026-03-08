@@ -439,7 +439,8 @@ Tag normalization:
 - `POST /api/v1/db/:db_id/blobs/:blob_id/publish` (`blob.publish`)
 - `POST /api/v1/db/:db_id/blobs/:blob_id/unpublish` (`blob.publish`)
 - `GET /o/:blob_hash` (public)
-- `HEAD /o/:blob_hash` (public)
+- `GET /o/:blob_hash.<suffix>` (public; same blob, extension-friendly URL)
+- `HEAD /o/:blob_hash` (public; suffix variant supported)
 
 Public object response headers:
 

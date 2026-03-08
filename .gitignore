@@ -3,3 +3,6 @@ data/
 
 # Local build artifacts
 build/
+
+.env
+patchwork

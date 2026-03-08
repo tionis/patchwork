@@ -603,6 +603,23 @@ func TestBlobPublishAndPublicReadByHash(t *testing.T) {
 		t.Fatalf("expected immutable cache-control, got %q", cc)
 	}
 
+	publicWithSuffixReq := httptest.NewRequest(http.MethodGet, "/o/"+blobID+".txt", nil)
+	publicWithSuffixRR := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(publicWithSuffixRR, publicWithSuffixReq)
+	if publicWithSuffixRR.Code != http.StatusOK {
+		t.Fatalf("public GET with suffix expected %d, got %d: %s", http.StatusOK, publicWithSuffixRR.Code, publicWithSuffixRR.Body.String())
+	}
+	if got := publicWithSuffixRR.Body.String(); got != string(payload) {
+		t.Fatalf("unexpected public payload with suffix: %q", got)
+	}
+
+	invalidSuffixReq := httptest.NewRequest(http.MethodGet, "/o/"+blobID+"txt", nil)
+	invalidSuffixRR := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(invalidSuffixRR, invalidSuffixReq)
+	if invalidSuffixRR.Code != http.StatusNotFound {
+		t.Fatalf("public GET with invalid suffix expected %d, got %d", http.StatusNotFound, invalidSuffixRR.Code)
+	}
+
 	etag := publicRR.Header().Get("ETag")
 	headReq := httptest.NewRequest(http.MethodHead, "/o/"+blobID, nil)
 	headReq.Header.Set("If-None-Match", etag)

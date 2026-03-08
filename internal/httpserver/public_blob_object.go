@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"os"
@@ -15,14 +16,14 @@ func (s *Server) handlePublicBlobObject(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	hashRaw := strings.TrimPrefix(r.URL.Path, "/o/")
-	hashRaw = strings.TrimSpace(hashRaw)
-	if hashRaw == "" || strings.Contains(hashRaw, "/") {
+	hashPathToken := strings.TrimPrefix(r.URL.Path, "/o/")
+	hashPathToken = strings.TrimSpace(hashPathToken)
+	if hashPathToken == "" || strings.Contains(hashPathToken, "/") {
 		http.NotFound(w, r)
 		return
 	}
 
-	blobID, err := normalizeBlobID(hashRaw)
+	blobID, err := parsePublicBlobPathToken(hashPathToken)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -63,6 +64,29 @@ func (s *Server) handlePublicBlobObject(w http.ResponseWriter, r *http.Request) 
 	}
 
 	http.ServeFile(w, r, objectPath)
+}
+
+func parsePublicBlobPathToken(token string) (string, error) {
+	token = strings.TrimSpace(strings.ToLower(token))
+	if len(token) < 64 {
+		return "", errors.New("invalid blob object path")
+	}
+
+	hashPart := token[:64]
+	if _, err := hex.DecodeString(hashPart); err != nil {
+		return "", errors.New("invalid blob hash")
+	}
+
+	suffix := token[64:]
+	if suffix != "" {
+		// Allow optional filename-style suffixes for CDN/app compatibility,
+		// e.g. /o/<hash>.png or /o/<hash>.archive.html.
+		if !strings.HasPrefix(suffix, ".") {
+			return "", errors.New("invalid blob suffix")
+		}
+	}
+
+	return hashPart, nil
 }
 
 func (s *Server) lookupPublishedBlobContentType(ctx context.Context, blobID string) (string, error) {

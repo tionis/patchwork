@@ -82,6 +82,12 @@ This file tracks important design/implementation decisions intentionally deferre
    - Consider supporting Automerge documents inside each `db_id` as an additive capability.
    - Keep it DB-scoped and optional; do not replace the SQLite-first runtime/query model.
 
+13. **`ws4sqlite`-inspired operator ergonomics**
+   - Evaluate a DB-scoped stored-statement catalog (server-side named SQL) and an optional strict mode that only allows named statements.
+   - Evaluate batch statement execution (`valuesBatch`) for high-throughput insert/update use cases.
+   - Evaluate scheduled DB maintenance tasks (vacuum, backup rotation, startup tasks) in the service runtime.
+   - Keep these additive and DB-scoped; do not weaken existing token/OIDC auth model.
+
 ## Notes
 
 - These items are intentionally deferred to keep prototype velocity high.
