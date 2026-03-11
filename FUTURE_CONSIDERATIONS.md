@@ -88,6 +88,26 @@ This file tracks important design/implementation decisions intentionally deferre
    - Evaluate scheduled DB maintenance tasks (vacuum, backup rotation, startup tasks) in the service runtime.
    - Keep these additive and DB-scoped; do not weaken existing token/OIDC auth model.
 
+14. **DB-scoped WebDAV endpoint**
+   - Evaluate adding WebDAV routes under DB scope (for example `/api/v1/db/:db_id/dav/...`).
+   - Likely storage model: DB-scoped metadata table + blob-backed content objects with path/version metadata.
+   - Consider a hybrid strategy for efficiency (small files inline in SQLite, larger files in blob storage).
+   - Define auth scopes for read/write/list operations consistent with existing DB-scoped ACL patterns.
+
+15. **Recorder endpoint mode (OwnTracks-inspired ingest)**
+   - Evaluate a DB-scoped recorder endpoint for append-only telemetry/event capture.
+   - Consider HTTP ingest compatibility patterns documented by OwnTracks:
+     - https://owntracks.org/booklet/tech/http/
+   - Also evaluate MQTT-based integration path:
+     - https://owntracks.org/booklet/tech/mqtt/
+   - Decide whether this should be a dedicated API surface or built on existing message/webhook pathways.
+
+16. **DB-scoped notification adapter endpoint**
+   - Evaluate a DB-scoped notification API that fans out to notification backends.
+   - Candidate backend integrations: Apprise or Shoutrrr.
+   - Define backend credential/secret model, delivery retry policy, and failure visibility/metrics.
+   - Keep this additive and DB-scoped, without weakening existing auth boundaries.
+
 ## Notes
 
 - These items are intentionally deferred to keep prototype velocity high.
