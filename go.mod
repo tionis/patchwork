@@ -1,8 +1,6 @@
 module github.com/tionis/patchwork
 
-go 1.24.0
-
-toolchain go1.24.4
+go 1.25.0
 
 require (
 	github.com/dusted-go/logging v1.3.0
@@ -11,7 +9,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/tionis/ssh-tools v0.0.0-20240919143858-d053c915c7d2
 	github.com/urfave/cli/v2 v2.27.7
-	golang.org/x/time v0.14.0
+	golang.org/x/time v0.15.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
