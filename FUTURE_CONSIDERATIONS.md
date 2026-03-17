@@ -108,6 +108,11 @@ This file tracks important design/implementation decisions intentionally deferre
    - Define backend credential/secret model, delivery retry policy, and failure visibility/metrics.
    - Keep this additive and DB-scoped, without weakening existing auth boundaries.
 
+17. **Git LFS server endpoint**
+   - Evaluate adding Git LFS-compatible API support (especially the batch API) as an optional Patchwork capability.
+   - Prefer DB-scoped auth/control while reusing global blob dedup and publication/storage primitives.
+   - Define LFS-specific scope model (upload/download/verify), object lifetime, and interoperability constraints with common Git clients/forges.
+
 ## Notes
 
 - These items are intentionally deferred to keep prototype velocity high.

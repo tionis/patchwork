@@ -281,6 +281,7 @@ Exit criteria:
 - [ ] Evaluate `ws4sqlite`-style stored statements + strict server-side statement mode (DB-scoped).
 - [ ] Evaluate batched statement execution API (`valuesBatch`) for write-heavy workflows.
 - [ ] Evaluate built-in scheduled maintenance tasks (vacuum/backup rotation/startup SQL) per DB.
+- [ ] Evaluate optional Git LFS server endpoint support (batch API + scoped auth + blob-store integration).
 
 ## Suggested Working Order for Immediate Next Steps
 
