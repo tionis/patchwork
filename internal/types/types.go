@@ -152,6 +152,12 @@ func (t *TokenInfo) UnmarshalYAML(node *yaml.Node) error {
 	// Convert string slices to sshUtil.Pattern slices
 	t.IsAdmin = temp.IsAdmin
 	t.ExpiresAt = temp.ExpiresAt
+	t.HuProxy = nil
+	t.GET = nil
+	t.POST = nil
+	t.PUT = nil
+	t.DELETE = nil
+	t.PATCH = nil
 
 	// Convert strings to patterns using sshUtil.NewPattern
 	for _, str := range temp.HuProxy {

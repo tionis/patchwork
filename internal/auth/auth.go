@@ -54,7 +54,7 @@ func AuthenticateToken(
 		if strings.Contains(err.Error(), "config.yaml not found") && token == "public" {
 			return false, "token not found", nil
 		}
-		
+
 		logger.Error(
 			"Token validation error",
 			"username",

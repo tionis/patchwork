@@ -83,6 +83,28 @@ func TestTokenInfoYAMLMarshalUnmarshal(t *testing.T) {
 	}
 }
 
+func TestTokenInfoUnmarshalYAMLClearsExistingPatterns(t *testing.T) {
+	var tokenInfo TokenInfo
+
+	if err := yaml.Unmarshal([]byte("GET:\n  - \"/old/*\"\nPOST:\n  - \"/old-post/*\""), &tokenInfo); err != nil {
+		t.Fatalf("Failed to unmarshal initial token: %v", err)
+	}
+
+	if err := yaml.Unmarshal([]byte("GET:\n  - \"/new/*\""), &tokenInfo); err != nil {
+		t.Fatalf("Failed to unmarshal replacement token: %v", err)
+	}
+
+	if got := len(tokenInfo.GET); got != 1 {
+		t.Fatalf("Expected exactly one GET pattern after replacement, got %d", got)
+	}
+	if got := tokenInfo.GET[0].String(); got != "/new/*" {
+		t.Fatalf("Expected replacement GET pattern, got %q", got)
+	}
+	if got := len(tokenInfo.POST); got != 0 {
+		t.Fatalf("Expected POST patterns to be cleared, got %d", got)
+	}
+}
+
 func TestTokenInfoWithExpirationYAML(t *testing.T) {
 	// Test with expiration time
 	expiresAt := time.Now().Add(24 * time.Hour)

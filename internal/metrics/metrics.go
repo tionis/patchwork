@@ -13,10 +13,10 @@ type Metrics struct {
 	HTTPRequestDuration *prometheus.HistogramVec
 
 	// Channel metrics
-	ChannelsTotal       prometheus.Gauge
-	MessagesTotal       *prometheus.CounterVec
-	ActiveConnections   prometheus.Gauge
-	MessageSizeBytes    *prometheus.HistogramVec
+	ChannelsTotal     prometheus.Gauge
+	MessagesTotal     *prometheus.CounterVec
+	ActiveConnections prometheus.Gauge
+	MessageSizeBytes  *prometheus.HistogramVec
 
 	// Authentication metrics
 	AuthRequestsTotal *prometheus.CounterVec
@@ -30,7 +30,7 @@ type Metrics struct {
 // NewMetrics creates a new Metrics instance with all metrics registered
 func NewMetrics() *Metrics {
 	registry := prometheus.NewRegistry()
-	
+
 	httpRequestsTotal := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "patchwork_http_requests_total",

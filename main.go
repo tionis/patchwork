@@ -30,12 +30,12 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tionis/patchwork/internal/huproxy"
-	"golang.org/x/time/rate"
 	"github.com/tionis/patchwork/internal/metrics"
 	"github.com/tionis/patchwork/internal/notification"
 	"github.com/tionis/patchwork/internal/types"
 	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/urfave/cli/v2"
+	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
 )
 
@@ -189,6 +189,12 @@ func (t *TokenInfo) UnmarshalYAML(node *yaml.Node) error {
 	// Convert string slices to sshUtil.Pattern slices
 	t.IsAdmin = temp.IsAdmin
 	t.ExpiresAt = temp.ExpiresAt
+	t.HuProxy = nil
+	t.GET = nil
+	t.POST = nil
+	t.PUT = nil
+	t.DELETE = nil
+	t.PATCH = nil
 
 	// Convert strings to patterns using sshUtil.NewPattern
 	for _, str := range temp.HuProxy {
@@ -1269,19 +1275,16 @@ func processPassthroughHeaders(headers http.Header, isRequest bool) map[string]s
 
 // addPassthroughHeaders adds headers to the response, handling Patch-H-* passthrough
 func addPassthroughHeaders(w http.ResponseWriter, streamHeaders map[string]string) {
-	// Handle Patch-Status header specially for HTTP status code
-	if status, exists := streamHeaders["Patch-Status"]; exists {
-		if statusCode, err := strconv.Atoi(status); err == nil {
-			w.WriteHeader(statusCode)
-		}
-		// Don't pass Patch-Status through as a regular header
-	}
+	var statusCode int
 
 	for key, value := range streamHeaders {
 		if key == "Patch-Status" {
-			// Already handled above, skip
+			if parsedStatus, err := strconv.Atoi(value); err == nil {
+				statusCode = parsedStatus
+			}
 			continue
 		}
+
 		if strings.HasPrefix(key, "Patch-H-") {
 			// Strip Patch-H- prefix and add as regular header
 			originalKey := strings.TrimPrefix(key, "Patch-H-")
@@ -1290,6 +1293,10 @@ func addPassthroughHeaders(w http.ResponseWriter, streamHeaders map[string]strin
 			// Regular headers pass through as-is
 			w.Header().Set(key, value)
 		}
+	}
+
+	if statusCode != 0 {
+		w.WriteHeader(statusCode)
 	}
 }
 
@@ -1859,7 +1866,7 @@ func (s *server) rateLimitMiddleware(handler http.HandlerFunc) http.HandlerFunc 
 				"client_ip", clientIP,
 				"path", r.URL.Path,
 				"method", r.Method)
-			
+
 			// Record rate limit metric
 			if s.metrics != nil {
 				s.metrics.HTTPRequestsTotal.WithLabelValues(r.Method, "public", "429").Inc()
@@ -1881,15 +1888,15 @@ func (s *server) rateLimitMiddleware(handler http.HandlerFunc) http.HandlerFunc 
 func (s *server) metricsMiddleware(namespace string, handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		
+
 		// Create a wrapper to capture the status code
 		wrapper := &responseWrapper{ResponseWriter: w, statusCode: 200}
-		
+
 		handler(wrapper, r)
-		
+
 		duration := time.Since(start).Seconds()
 		status := fmt.Sprintf("%d", wrapper.statusCode)
-		
+
 		s.metrics.RecordHTTPRequest(r.Method, namespace, status)
 		s.metrics.RecordHTTPDuration(r.Method, namespace, duration)
 	}
@@ -1913,13 +1920,13 @@ func (rw *responseWrapper) WriteHeader(code int) {
 // handlePatch implements the core duct-like channel communication logic.
 // It handles both GET and POST requests to create producer-consumer channels
 // where data can be passed through various namespaces (public, user, hooks).
-// 
+//
 // GET requests either:
 //   - Wait for data from a producer (consumer mode)
 //   - Return immediately if data is already available
 //
 // POST requests:
-//   - Send data to waiting consumers (producer mode)  
+//   - Send data to waiting consumers (producer mode)
 //   - Store data temporarily if no consumers are waiting
 //
 // The function manages WebSocket upgrades, responder/requester semantics,
@@ -2095,7 +2102,7 @@ func (s *server) handlePatch(
 				"client_ip", getClientIP(r))
 		}
 
-	case "POST", "PUT":
+	case "POST", "PUT", "PATCH":
 		// Producer: send data
 		s.logger.Info("Producing data to channel",
 			"channel_path", channelPath,
@@ -2629,7 +2636,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute) // Clean up every 5 minutes
 		defer ticker.Stop()
-		
+
 		for {
 			select {
 			case <-ctx.Done():

@@ -548,6 +548,98 @@ func TestTokenInfoUnmarshalYAML(t *testing.T) {
 		})
 	}
 }
+
+func TestTokenInfoUnmarshalYAMLClearsExistingPatterns(t *testing.T) {
+	var tokenInfo TokenInfo
+
+	if err := yaml.Unmarshal([]byte("GET:\n  - \"/old/*\"\nPOST:\n  - \"/old-post/*\""), &tokenInfo); err != nil {
+		t.Fatalf("Failed to unmarshal initial token: %v", err)
+	}
+
+	if err := yaml.Unmarshal([]byte("GET:\n  - \"/new/*\""), &tokenInfo); err != nil {
+		t.Fatalf("Failed to unmarshal replacement token: %v", err)
+	}
+
+	if got := len(tokenInfo.GET); got != 1 {
+		t.Fatalf("Expected exactly one GET pattern after replacement, got %d", got)
+	}
+	if got := tokenInfo.GET[0].String(); got != "/new/*" {
+		t.Fatalf("Expected replacement GET pattern, got %q", got)
+	}
+	if got := len(tokenInfo.POST); got != 0 {
+		t.Fatalf("Expected POST patterns to be cleared, got %d", got)
+	}
+}
+
+func TestAddPassthroughHeadersSetsHeadersBeforeStatus(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	addPassthroughHeaders(w, map[string]string{
+		"Patch-Status":    "201",
+		"Patch-H-X-Trace": "trace-id",
+		"Content-Type":    "text/plain",
+	})
+
+	if _, err := w.Write([]byte("created")); err != nil {
+		t.Fatalf("Failed to write response: %v", err)
+	}
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("Expected status %d, got %d", http.StatusCreated, resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Trace"); got != "trace-id" {
+		t.Fatalf("Expected X-Trace passthrough header, got %q", got)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "text/plain" {
+		t.Fatalf("Expected Content-Type passthrough header, got %q", got)
+	}
+}
+
+func TestHandlePatchAcceptsPATCHAsWrite(t *testing.T) {
+	server := createTestMainServer()
+	path := "/patch-write"
+
+	consumerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodGet, "/p"+path, nil)
+		w := httptest.NewRecorder()
+		server.handlePatch(w, req, "p", "", path)
+		consumerDone <- w
+	}()
+
+	producerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPatch, "/p"+path, strings.NewReader("patched body"))
+		w := httptest.NewRecorder()
+		server.handlePatch(w, req, "p", "", path)
+		producerDone <- w
+	}()
+
+	select {
+	case w := <-producerDone:
+		if w.Code != http.StatusOK {
+			t.Fatalf("Expected PATCH producer status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timed out waiting for PATCH producer to complete")
+	}
+
+	select {
+	case w := <-consumerDone:
+		if w.Code != http.StatusOK {
+			t.Fatalf("Expected consumer status %d, got %d", http.StatusOK, w.Code)
+		}
+		if got := w.Body.String(); got != "patched body" {
+			t.Fatalf("Expected consumer body %q, got %q", "patched body", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timed out waiting for consumer to receive PATCH body")
+	}
+}
+
 func TestPatchChannelCreation(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	authCache := NewAuthCache("https://test.example.com", "test-token", 5*time.Minute, logger)
@@ -1322,7 +1414,7 @@ func TestHandlePatch(t *testing.T) {
 			namespace:      "p",
 			username:       "",
 			path:           "/test",
-			method:         "PATCH",
+			method:         "HEAD",
 			expectedStatus: http.StatusMethodNotAllowed,
 			shouldTimeout:  false, // Method check happens before channel operations
 		},

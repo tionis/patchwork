@@ -107,7 +107,7 @@ func TestSecuredMetricsEndpoint(t *testing.T) {
 // createTestServerWithMetrics creates a minimal test server with metrics endpoint
 func createTestServerWithMetrics(forgejoToken string) http.Handler {
 	mux := http.NewServeMux()
-	
+
 	// Create a mock server that implements the secured metrics endpoint
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		// Get Authorization header or token from query parameter
@@ -240,7 +240,7 @@ func TestMetricsEndpointSecurity(t *testing.T) {
 
 func TestMetricsContentType(t *testing.T) {
 	testServer := createTestServerWithMetrics("test-token")
-	
+
 	// Test that metrics endpoint returns correct content type
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	req.Header.Set("X-Forwarded-For", "127.0.0.1") // Local IP, no auth needed
@@ -254,7 +254,7 @@ func TestMetricsContentType(t *testing.T) {
 
 	contentType := w.Header().Get("Content-Type")
 	expectedContentType := "text/plain; charset=utf-8"
-	
+
 	if contentType != expectedContentType {
 		t.Errorf("Expected Content-Type %q, got %q", expectedContentType, contentType)
 	}
