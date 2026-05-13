@@ -2630,8 +2630,6 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		}
 	})
 
-	http.Handle("/", router)
-
 	// Start rate limiter cleanup goroutine
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute) // Clean up every 5 minutes

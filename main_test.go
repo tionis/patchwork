@@ -793,6 +793,23 @@ func createTestMainServer() *server {
 	}
 }
 
+func waitForChannel(t *testing.T, server *server, channelPath string) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		server.channelsMutex.RLock()
+		_, exists := server.channels[channelPath]
+		server.channelsMutex.RUnlock()
+		if exists {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for channel %q", channelPath)
+}
+
 func TestPublicHandler(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -1565,6 +1582,321 @@ func TestHandlePatchProducerConsumer(t *testing.T) {
 	})
 }
 
+func TestHandlePatchConcurrentProducerConsumerStress(t *testing.T) {
+	server := createTestMainServer()
+	const pairs = 64
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	type producerResult struct {
+		index int
+		code  int
+	}
+
+	received := make(chan string, pairs)
+	produced := make(chan producerResult, pairs)
+
+	for i := 0; i < pairs; i++ {
+		go func() {
+			req := httptest.NewRequest(http.MethodGet, "/p/concurrent-stress", nil).WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/concurrent-stress")
+			if w.Code == http.StatusOK {
+				received <- w.Body.String()
+			}
+		}()
+	}
+
+	for i := 0; i < pairs; i++ {
+		go func(i int) {
+			body := fmt.Sprintf("message-%02d", i)
+			req := httptest.NewRequest(http.MethodPost, "/p/concurrent-stress", strings.NewReader(body)).WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/concurrent-stress")
+			produced <- producerResult{index: i, code: w.Code}
+		}(i)
+	}
+
+	for i := 0; i < pairs; i++ {
+		select {
+		case result := <-produced:
+			if result.code != http.StatusOK {
+				t.Fatalf("producer %d returned status %d", result.index, result.code)
+			}
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for producers: %v", ctx.Err())
+		}
+	}
+
+	seen := make(map[string]bool, pairs)
+	for i := 0; i < pairs; i++ {
+		select {
+		case body := <-received:
+			if seen[body] {
+				t.Fatalf("received duplicate body %q", body)
+			}
+			seen[body] = true
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for consumers: %v", ctx.Err())
+		}
+	}
+
+	for i := 0; i < pairs; i++ {
+		body := fmt.Sprintf("message-%02d", i)
+		if !seen[body] {
+			t.Fatalf("message %q was not delivered", body)
+		}
+	}
+}
+
+func TestHandlePatchSequentialDeliveryPreservesPayloads(t *testing.T) {
+	server := createTestMainServer()
+	const messages = 20
+
+	for i := 0; i < messages; i++ {
+		path := "/ordered-stream"
+		want := fmt.Sprintf("ordered-message-%02d", i)
+		consumerDone := make(chan *httptest.ResponseRecorder, 1)
+
+		go func() {
+			req := httptest.NewRequest(http.MethodGet, "/p"+path, nil)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", path)
+			consumerDone <- w
+		}()
+
+		producerDone := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			req := httptest.NewRequest(http.MethodPost, "/p"+path, strings.NewReader(want))
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", path)
+			producerDone <- w
+		}()
+
+		select {
+		case w := <-producerDone:
+			if w.Code != http.StatusOK {
+				t.Fatalf("producer %d returned status %d", i, w.Code)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("producer %d did not complete", i)
+		}
+
+		select {
+		case w := <-consumerDone:
+			if got := w.Body.String(); got != want {
+				t.Fatalf("consumer %d got %q, want %q", i, got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("consumer %d did not complete", i)
+		}
+	}
+}
+
+func TestHandlePatchPubSubBroadcastsToWaitingConsumers(t *testing.T) {
+	server := createTestMainServer()
+	const consumers = 8
+
+	results := make(chan string, consumers)
+	for i := 0; i < consumers; i++ {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			req := httptest.NewRequest(http.MethodGet, "/p/pubsub/reliable", nil).WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/pubsub/reliable")
+			results <- w.Body.String()
+		}()
+	}
+
+	waitForChannel(t, server, "p/pubsub/reliable")
+	time.Sleep(20 * time.Millisecond)
+
+	producerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/p/pubsub/reliable", strings.NewReader("broadcast-payload"))
+		w := httptest.NewRecorder()
+
+		server.handlePatch(w, req, "p", "", "/pubsub/reliable")
+		producerDone <- w
+	}()
+
+	select {
+	case w := <-producerDone:
+		if w.Code != http.StatusOK {
+			t.Fatalf("producer returned status %d", w.Code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pubsub producer did not complete")
+	}
+
+	for i := 0; i < consumers; i++ {
+		select {
+		case got := <-results:
+			if got != "broadcast-payload" {
+				t.Fatalf("consumer %d got %q", i, got)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("consumer %d did not receive broadcast", i)
+		}
+	}
+}
+
+func TestHandlePatchCanceledConsumerDoesNotStealMessage(t *testing.T) {
+	server := createTestMainServer()
+	path := "/canceled-consumer"
+
+	canceledCtx, cancelCanceled := context.WithCancel(context.Background())
+	cancelCanceled()
+
+	canceledDone := make(chan struct{})
+	go func() {
+		defer close(canceledDone)
+		req := httptest.NewRequest(http.MethodGet, "/p"+path, nil).WithContext(canceledCtx)
+		w := httptest.NewRecorder()
+		server.handlePatch(w, req, "p", "", path)
+	}()
+
+	select {
+	case <-canceledDone:
+	case <-time.After(time.Second):
+		t.Fatal("canceled consumer did not return promptly")
+	}
+
+	consumerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodGet, "/p"+path, nil)
+		w := httptest.NewRecorder()
+		server.handlePatch(w, req, "p", "", path)
+		consumerDone <- w
+	}()
+
+	producerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/p"+path, strings.NewReader("after-cancel"))
+		w := httptest.NewRecorder()
+		server.handlePatch(w, req, "p", "", path)
+		producerDone <- w
+	}()
+
+	select {
+	case w := <-producerDone:
+		if w.Code != http.StatusOK {
+			t.Fatalf("producer returned status %d", w.Code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("producer did not complete after canceled consumer")
+	}
+
+	select {
+	case w := <-consumerDone:
+		if got := w.Body.String(); got != "after-cancel" {
+			t.Fatalf("active consumer got %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active consumer did not receive message")
+	}
+}
+
+func TestHandlePatchCanceledProducerDoesNotLeaveStaleMessage(t *testing.T) {
+	server := createTestMainServer()
+
+	producerCtx, producerCancel := context.WithCancel(context.Background())
+	producerCancel()
+
+	producerReq := httptest.NewRequest(http.MethodPost, "/p/canceled-producer", strings.NewReader("stale message")).
+		WithContext(producerCtx)
+	producerRecorder := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.handlePatch(producerRecorder, producerReq, "p", "", "/canceled-producer")
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled producer did not return promptly")
+	}
+
+	consumerCtx, consumerCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer consumerCancel()
+
+	consumerReq := httptest.NewRequest(http.MethodGet, "/p/canceled-producer", nil).WithContext(consumerCtx)
+	consumerRecorder := httptest.NewRecorder()
+
+	server.handlePatch(consumerRecorder, consumerReq, "p", "", "/canceled-producer")
+	if consumerRecorder.Body.String() != "" {
+		t.Fatalf("consumer received stale data after producer cancellation: %q", consumerRecorder.Body.String())
+	}
+}
+
+func TestHTTPRouterPublicRouteMessagePassing(t *testing.T) {
+	t.Setenv("SECRET_KEY", "test-secret-key")
+	t.Setenv("FORGEJO_TOKEN", "test-token")
+	t.Setenv("FORGEJO_URL", "https://forgejo.example.test")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	srv := getHTTPServer(slog.New(slog.NewTextHandler(io.Discard, nil)), ctx, 0)
+	if srv == nil {
+		t.Fatal("expected HTTP server")
+	}
+
+	consumerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		reqCtx, reqCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer reqCancel()
+
+		req := httptest.NewRequest(http.MethodGet, "/public/queue/router-flow", nil).WithContext(reqCtx)
+		w := httptest.NewRecorder()
+
+		srv.Handler.ServeHTTP(w, req)
+		consumerDone <- w
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	producerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/public/queue/router-flow", strings.NewReader("router payload"))
+		w := httptest.NewRecorder()
+
+		srv.Handler.ServeHTTP(w, req)
+		producerDone <- w
+	}()
+
+	select {
+	case w := <-producerDone:
+		if w.Code != http.StatusOK {
+			t.Fatalf("producer route returned status %d: %s", w.Code, w.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("producer route did not complete")
+	}
+
+	select {
+	case w := <-consumerDone:
+		if w.Code != http.StatusOK {
+			t.Fatalf("consumer route returned status %d", w.Code)
+		}
+		if got := w.Body.String(); got != "router payload" {
+			t.Fatalf("consumer route got %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("consumer route did not receive payload")
+	}
+}
+
 func TestHandlePatchWithPubSub(t *testing.T) {
 	server := createTestMainServer()
 
@@ -2266,5 +2598,35 @@ func TestRequestResponderErrorCases(t *testing.T) {
 				t.Errorf("Expected status %d, got %d. Body: %s", tt.expectedStatus, w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func BenchmarkHandlePatchProducerConsumer(b *testing.B) {
+	server := createTestMainServer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		path := fmt.Sprintf("/bench/%d", i)
+		consumerDone := make(chan string, 1)
+
+		go func() {
+			req := httptest.NewRequest(http.MethodGet, "/p"+path, nil)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", path)
+			consumerDone <- w.Body.String()
+		}()
+
+		req := httptest.NewRequest(http.MethodPost, "/p"+path, strings.NewReader("benchmark payload"))
+		w := httptest.NewRecorder()
+
+		server.handlePatch(w, req, "p", "", path)
+		if w.Code != http.StatusOK {
+			b.Fatalf("producer returned status %d", w.Code)
+		}
+
+		if got := <-consumerDone; got != "benchmark payload" {
+			b.Fatalf("consumer got %q", got)
+		}
 	}
 }

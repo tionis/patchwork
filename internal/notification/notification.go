@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/tionis/patchwork/internal/types"
@@ -127,10 +128,8 @@ func (m *MatrixBackend) SendNotification(msg types.NotificationMessage) error {
 
 	// Prepare the Matrix message payload
 	matrixMsg := map[string]interface{}{
-		"msgtype":        "m.text",
-		"body":           msg.Content,
-		"formatted_body": body,
-		"format":         "org.matrix.custom.html",
+		"msgtype": "m.text",
+		"body":    body,
 	}
 
 	if format == "org.matrix.custom.html" {
@@ -155,15 +154,15 @@ func (m *MatrixBackend) SendNotification(msg types.NotificationMessage) error {
 // sendMatrixMessage sends a message to a Matrix room.
 func (m *MatrixBackend) sendMatrixMessage(roomID string, message map[string]interface{}) error {
 	// Construct the API URL using the configured endpoint
-	url := fmt.Sprintf("%s/_matrix/client/r0/rooms/%s/send/m.room.message",
-		m.endpoint, roomID)
+	apiURL := fmt.Sprintf("%s/_matrix/client/r0/rooms/%s/send/m.room.message",
+		m.endpoint, url.PathEscape(roomID))
 
 	m.logger.Debug("Sending Matrix message",
 		"roomID", roomID,
 		"message", message,
 		"matrixUser", m.user,
 		"endpoint", m.endpoint,
-		"url", url)
+		"url", apiURL)
 
 	// Marshal the message
 	payload, err := json.Marshal(message)
@@ -172,7 +171,7 @@ func (m *MatrixBackend) sendMatrixMessage(roomID string, message map[string]inte
 	}
 
 	// Create the request
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payload))
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payload))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -185,12 +184,13 @@ func (m *MatrixBackend) sendMatrixMessage(roomID string, message map[string]inte
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
+	defer resp.Body.Close()
+
 	response, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
 	m.logger.Debug("Matrix response", "response", string(response), "code", resp.StatusCode)
-	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("matrix API returned status %d", resp.StatusCode)
