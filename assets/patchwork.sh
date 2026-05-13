@@ -114,7 +114,7 @@ patchwork::get_uuid() {
 		uuidgen
 	else
 		# Fallback: generate a random hex string
-		printf "%08x-%04x-%04x-%04x-%012x\n" \
+		printf "%08x-%04x-%04x-%04x-%04x%08x\n" \
 			$((RANDOM * 65536 + RANDOM)) \
 			$((RANDOM)) \
 			$((RANDOM)) \
@@ -427,7 +427,7 @@ patchwork::listen() {
 		response="$(curl -s "$url" || echo "")"
 		
 		if [[ "$response" =~ ^$magic ]]; then
-			local message="${response#$magic}"
+			local message="${response#"$magic"}"
 			echo "$message"
 			# Optionally trigger desktop notification if notify-send is available
 			if command -v notify-send >/dev/null 2>&1; then
