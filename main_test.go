@@ -1897,6 +1897,295 @@ func TestHTTPRouterPublicRouteMessagePassing(t *testing.T) {
 	}
 }
 
+func newHTTPServerForTest(t *testing.T, forgejoURL string) *http.Server {
+	t.Helper()
+
+	t.Setenv("SECRET_KEY", "test-secret-key")
+	t.Setenv("FORGEJO_TOKEN", "test-token")
+	if forgejoURL == "" {
+		forgejoURL = "https://forgejo.example.test"
+	}
+	t.Setenv("FORGEJO_URL", forgejoURL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	srv := getHTTPServer(slog.New(slog.NewTextHandler(io.Discard, nil)), ctx, 0)
+	if srv == nil {
+		t.Fatal("expected HTTP server")
+	}
+
+	return srv
+}
+
+func TestHTTPRouterUserNamespaceAuthWithMockForgejo(t *testing.T) {
+	const configYAML = `
+tokens:
+  good-token:
+    GET:
+      - "/queue/user-flow"
+    POST:
+      - "/queue/user-flow"
+  limited-token:
+    GET:
+      - "/queue/user-flow"
+`
+
+	var (
+		fetchMu sync.Mutex
+		fetches int
+	)
+	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetchMu.Lock()
+		fetches++
+		fetchMu.Unlock()
+
+		if r.URL.Path != "/api/v1/repos/alice/.patchwork/media/config.yaml" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "token test-token" {
+			t.Errorf("unexpected Forgejo auth header %q", got)
+			http.Error(w, "bad auth", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte(configYAML))
+	}))
+	defer forgejo.Close()
+
+	srv := newHTTPServerForTest(t, forgejo.URL)
+
+	consumerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		reqCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		req := httptest.NewRequest(http.MethodGet, "/u/alice/queue/user-flow", nil).WithContext(reqCtx)
+		req.Header.Set("Authorization", "Bearer good-token")
+		w := httptest.NewRecorder()
+
+		srv.Handler.ServeHTTP(w, req)
+		consumerDone <- w
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	producerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/u/alice/queue/user-flow", strings.NewReader("private payload"))
+		req.Header.Set("Authorization", "Bearer good-token")
+		w := httptest.NewRecorder()
+
+		srv.Handler.ServeHTTP(w, req)
+		producerDone <- w
+	}()
+
+	select {
+	case w := <-producerDone:
+		if w.Code != http.StatusOK {
+			t.Fatalf("producer returned status %d: %s", w.Code, w.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("authenticated producer did not complete")
+	}
+
+	select {
+	case w := <-consumerDone:
+		if w.Code != http.StatusOK {
+			t.Fatalf("consumer returned status %d", w.Code)
+		}
+		if got := w.Body.String(); got != "private payload" {
+			t.Fatalf("consumer got %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("authenticated consumer did not receive payload")
+	}
+
+	deniedReq := httptest.NewRequest(http.MethodPost, "/u/alice/queue/user-flow", strings.NewReader("denied"))
+	deniedReq.Header.Set("Authorization", "Bearer limited-token")
+	denied := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(denied, deniedReq)
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatalf("limited token POST got status %d, want %d", denied.Code, http.StatusUnauthorized)
+	}
+
+	fetchMu.Lock()
+	defer fetchMu.Unlock()
+	if fetches == 0 {
+		t.Fatal("expected auth config to be fetched from mock Forgejo")
+	}
+}
+
+func TestHTTPRouterForwardHookMessagePassing(t *testing.T) {
+	srv := newHTTPServerForTest(t, "")
+
+	createReq := httptest.NewRequest(http.MethodGet, "/h", nil)
+	create := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(create, createReq)
+	if create.Code != http.StatusOK {
+		t.Fatalf("hook creation returned status %d: %s", create.Code, create.Body.String())
+	}
+
+	var hook HookResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &hook); err != nil {
+		t.Fatalf("failed to decode hook response: %v", err)
+	}
+	if hook.Channel == "" || hook.Secret == "" {
+		t.Fatalf("expected channel and secret, got %#v", hook)
+	}
+
+	invalidReq := httptest.NewRequest(http.MethodPost, "/h/"+hook.Channel+"?secret=wrong", strings.NewReader("payload"))
+	invalid := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(invalid, invalidReq)
+	if invalid.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid forward hook secret got status %d", invalid.Code)
+	}
+
+	consumerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		reqCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		req := httptest.NewRequest(http.MethodGet, "/h/"+hook.Channel, nil).WithContext(reqCtx)
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+		consumerDone <- w
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	producerReq := httptest.NewRequest(http.MethodPost, "/h/"+hook.Channel+"?secret="+url.QueryEscape(hook.Secret), strings.NewReader("hook payload"))
+	producer := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(producer, producerReq)
+	if producer.Code != http.StatusOK {
+		t.Fatalf("forward hook producer returned status %d", producer.Code)
+	}
+
+	select {
+	case consumer := <-consumerDone:
+		if got := consumer.Body.String(); got != "hook payload" {
+			t.Fatalf("forward hook consumer got %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("forward hook consumer did not receive payload")
+	}
+}
+
+func TestHTTPRouterReverseHookMessagePassing(t *testing.T) {
+	srv := newHTTPServerForTest(t, "")
+
+	createReq := httptest.NewRequest(http.MethodGet, "/r", nil)
+	create := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(create, createReq)
+	if create.Code != http.StatusOK {
+		t.Fatalf("reverse hook creation returned status %d: %s", create.Code, create.Body.String())
+	}
+
+	var hook HookResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &hook); err != nil {
+		t.Fatalf("failed to decode reverse hook response: %v", err)
+	}
+
+	invalidReq := httptest.NewRequest(http.MethodGet, "/r/"+hook.Channel+"?secret=wrong", nil)
+	invalid := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(invalid, invalidReq)
+	if invalid.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid reverse hook secret got status %d", invalid.Code)
+	}
+
+	consumerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		reqCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		req := httptest.NewRequest(http.MethodGet, "/r/"+hook.Channel+"?secret="+url.QueryEscape(hook.Secret), nil).WithContext(reqCtx)
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+		consumerDone <- w
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	producerReq := httptest.NewRequest(http.MethodPost, "/r/"+hook.Channel, strings.NewReader("reverse payload"))
+	producer := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(producer, producerReq)
+	if producer.Code != http.StatusOK {
+		t.Fatalf("reverse hook producer returned status %d", producer.Code)
+	}
+
+	select {
+	case consumer := <-consumerDone:
+		if got := consumer.Body.String(); got != "reverse payload" {
+			t.Fatalf("reverse hook consumer got %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reverse hook consumer did not receive payload")
+	}
+}
+
+func TestHTTPRouterPublicRateLimitConcurrentRequests(t *testing.T) {
+	srv := newHTTPServerForTest(t, "")
+
+	const requests = 40
+	statuses := make(chan int, requests)
+	var wg sync.WaitGroup
+
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			req := httptest.NewRequest(http.MethodPost, "/public/pubsub/rate-limit", strings.NewReader("payload"))
+			req.Header.Set("X-Forwarded-For", "203.0.113.10")
+			w := httptest.NewRecorder()
+
+			srv.Handler.ServeHTTP(w, req)
+			statuses <- w.Code
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent rate-limit requests did not complete")
+	}
+	close(statuses)
+
+	var okCount, limitedCount int
+	for status := range statuses {
+		switch status {
+		case http.StatusOK:
+			okCount++
+		case http.StatusTooManyRequests:
+			limitedCount++
+		default:
+			t.Fatalf("unexpected status from rate-limited route: %d", status)
+		}
+	}
+
+	if okCount == 0 {
+		t.Fatal("expected some requests to pass the rate limiter")
+	}
+	if limitedCount == 0 {
+		t.Fatal("expected some requests to be rate limited")
+	}
+
+	otherIPReq := httptest.NewRequest(http.MethodPost, "/public/pubsub/rate-limit", strings.NewReader("payload"))
+	otherIPReq.Header.Set("X-Forwarded-For", "203.0.113.11")
+	otherIP := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(otherIP, otherIPReq)
+	if otherIP.Code != http.StatusOK {
+		t.Fatalf("different IP should not inherit rate limit, got status %d", otherIP.Code)
+	}
+}
+
 func TestHandlePatchWithPubSub(t *testing.T) {
 	server := createTestMainServer()
 
@@ -2216,6 +2505,78 @@ func TestRequestResponderBasicCommunication(t *testing.T) {
 			t.Error("Responder did not complete within timeout")
 		}
 	})
+}
+
+func TestRequestResponderConcurrentSharedChannel(t *testing.T) {
+	server := createTestMainServer()
+	const exchanges = 12
+	channelID := "shared-concurrent"
+
+	responderDone := make(chan *httptest.ResponseRecorder, exchanges)
+	requesterDone := make(chan *httptest.ResponseRecorder, exchanges)
+
+	for i := 0; i < exchanges; i++ {
+		go func(i int) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			req := httptest.NewRequest(http.MethodPost, "/p/res/"+channelID, strings.NewReader(fmt.Sprintf("response-%02d", i))).WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/res/"+channelID)
+			responderDone <- w
+		}(i)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	for i := 0; i < exchanges; i++ {
+		go func(i int) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			req := httptest.NewRequest(http.MethodPost, "/p/req/"+channelID, strings.NewReader(fmt.Sprintf("request-%02d", i))).WithContext(ctx)
+			w := httptest.NewRecorder()
+
+			server.handlePatch(w, req, "p", "", "/req/"+channelID)
+			requesterDone <- w
+		}(i)
+	}
+
+	receivedResponses := make(map[string]bool, exchanges)
+	for i := 0; i < exchanges; i++ {
+		select {
+		case w := <-requesterDone:
+			if w.Code != http.StatusOK {
+				t.Fatalf("requester returned status %d", w.Code)
+			}
+			body := w.Body.String()
+			if !strings.HasPrefix(body, "response-") {
+				t.Fatalf("requester got unexpected response %q", body)
+			}
+			if receivedResponses[body] {
+				t.Fatalf("duplicate response delivered to requesters: %q", body)
+			}
+			receivedResponses[body] = true
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timed out waiting for requester %d", i)
+		}
+	}
+
+	for i := 0; i < exchanges; i++ {
+		select {
+		case w := <-responderDone:
+			if w.Code != http.StatusOK {
+				t.Fatalf("responder returned status %d", w.Code)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timed out waiting for responder %d", i)
+		}
+	}
+
+	if len(receivedResponses) != exchanges {
+		t.Fatalf("got %d unique responses, want %d", len(receivedResponses), exchanges)
+	}
 }
 
 func TestRequestResponderHeaders(t *testing.T) {
