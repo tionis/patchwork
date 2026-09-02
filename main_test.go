@@ -2072,6 +2072,35 @@ func TestHTTPRouterForwardHookMessagePassing(t *testing.T) {
 	}
 }
 
+func TestHTTPRouterForwardHookRejectsUnauthenticatedWrites(t *testing.T) {
+	srv := newHTTPServerForTest(t, "")
+	channel := "protected-hook"
+
+	tests := []struct {
+		name   string
+		method string
+		target string
+		want   int
+	}{
+		{name: "GET body shorthand", method: http.MethodGet, target: "/h/" + channel + "?body=payload", want: http.StatusUnauthorized},
+		{name: "PUT", method: http.MethodPut, target: "/h/" + channel, want: http.StatusMethodNotAllowed},
+		{name: "PATCH", method: http.MethodPatch, target: "/h/" + channel, want: http.StatusMethodNotAllowed},
+		{name: "DELETE", method: http.MethodDelete, target: "/h/" + channel, want: http.StatusMethodNotAllowed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.target, strings.NewReader("payload"))
+			w := httptest.NewRecorder()
+			srv.Handler.ServeHTTP(w, req)
+
+			if w.Code != tt.want {
+				t.Fatalf("got status %d, want %d: %s", w.Code, tt.want, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestHTTPRouterReverseHookMessagePassing(t *testing.T) {
 	srv := newHTTPServerForTest(t, "")
 
@@ -2121,6 +2150,25 @@ func TestHTTPRouterReverseHookMessagePassing(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("reverse hook consumer did not receive payload")
+	}
+}
+
+func TestHTTPRouterReverseHookMethodPolicy(t *testing.T) {
+	srv := newHTTPServerForTest(t, "")
+
+	for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/r/public-hook", strings.NewReader("payload"))
+			w := httptest.NewRecorder()
+			srv.Handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("got status %d, want %d: %s", w.Code, http.StatusMethodNotAllowed, w.Body.String())
+			}
+			if got := w.Header().Get("Allow"); got != "GET, POST" {
+				t.Fatalf("got Allow header %q", got)
+			}
+		})
 	}
 }
 

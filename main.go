@@ -1060,8 +1060,18 @@ func (s *server) forwardHookHandler(w http.ResponseWriter, r *http.Request) {
 	s.logRequest(r, "Forward hook access")
 	s.logger.Info("Forward hook details", "channel", path, "method", r.Method)
 
-	// For forward hooks, check secret on POST but allow anyone to GET
-	if r.Method == http.MethodPost {
+	// GET requests consume messages, except for the documented body query
+	// shorthand, which handlePatch treats as a write. All writes to a forward
+	// hook must present the channel secret.
+	isWrite := r.Method == http.MethodPost ||
+		(r.Method == http.MethodGet && r.URL.Query().Get("body") != "")
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if isWrite {
 		secret := r.URL.Query().Get("secret")
 		if secret == "" {
 			s.logger.Info(
@@ -1141,9 +1151,18 @@ func (s *server) reverseHookHandler(w http.ResponseWriter, r *http.Request) {
 	s.logRequest(r, "Reverse hook access")
 	s.logger.Info("Reverse hook details", "channel", path, "method", r.Method)
 
-	// For reverse hooks, check secret on GET but allow anyone to POST
-	switch r.Method {
-	case http.MethodGet:
+	// A GET with a non-empty body query is a write in handlePatch, so it has the
+	// same public access as POST. Plain GET requests consume messages and require
+	// the channel secret.
+	isWrite := r.Method == http.MethodPost ||
+		(r.Method == http.MethodGet && r.URL.Query().Get("body") != "")
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !isWrite {
 		secret := r.URL.Query().Get("secret")
 		if secret == "" {
 			s.logger.Info(
@@ -1173,7 +1192,7 @@ func (s *server) reverseHookHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.logger.Info("Reverse hook GET authorized", "channel", path, "client_ip", getClientIP(r))
-	case http.MethodPost:
+	} else {
 		s.logger.Info("Reverse hook POST access", "channel", path, "client_ip", getClientIP(r))
 	}
 
