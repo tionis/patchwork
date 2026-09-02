@@ -2207,9 +2207,6 @@ func startServer(port int) error {
 	}
 	logger := slog.New(prettylog.NewHandler(loggerOpts))
 
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-
 	srv := getHTTPServer(logger.WithGroup("http"), ctx, port)
 	if srv == nil {
 		logger.Error("Failed to create HTTP server, aborting")
@@ -2217,41 +2214,32 @@ func startServer(port int) error {
 		return errors.New("failed to create HTTP server")
 	}
 
+	serveErrors := make(chan error, 1)
 	go func() {
-		err := srv.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("Error starting http server", "error", err)
-		}
-		os.Exit(1)
+		serveErrors <- srv.ListenAndServe()
 	}()
 
-	stopLoop := false
-	for !stopLoop {
-		logger.Debug("Waiting for signal")
-
-		sig := <-c
-		switch sig {
-		case os.Interrupt, os.Kill:
-			logger.Info("Shutting down Patchwork")
-
-			err := srv.Shutdown(ctx)
-			if err != nil {
-				logger.Error("Error shutting down http server", "error", err)
-			}
-
-			logger.Info("Stopped http server")
-
-			stopLoop = true
-		default:
-			logger.Info("Received unknown signal", "signal", sig)
+	select {
+	case err := <-serveErrors:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
 		}
+		return fmt.Errorf("serve HTTP: %w", err)
+	case <-ctx.Done():
+		logger.Info("Shutting down Patchwork")
 	}
 
-	// wg.Wait()
-	logger.Info("Starting shutdown of remaining contexts")
-	<-ctx.Done()
-	logger.Info("Patchwork stopped")
+	shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelShutdown()
+	if err := srv.Shutdown(shutdownContext); err != nil {
+		_ = srv.Close()
+		return fmt.Errorf("shut down HTTP server: %w", err)
+	}
 
+	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("serve HTTP during shutdown: %w", err)
+	}
+	logger.Info("Patchwork stopped")
 	return nil
 }
 
@@ -2545,9 +2533,10 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	logger.Info("Starting Patchwork", "port", port)
 
 	return &http.Server{
-		Addr:         fmt.Sprintf(":%d", port),
-		WriteTimeout: 15 * time.Second,
-		ReadTimeout:  15 * time.Second,
-		Handler:      router,
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 }

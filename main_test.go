@@ -317,6 +317,15 @@ func TestGetHTTPServer(t *testing.T) {
 		if server.Handler == nil {
 			t.Error("Expected server to have a handler")
 		}
+		if server.WriteTimeout != 0 {
+			t.Fatalf("long-polling server must not have a write timeout, got %s", server.WriteTimeout)
+		}
+		if server.ReadHeaderTimeout != 10*time.Second {
+			t.Fatalf("unexpected read header timeout: %s", server.ReadHeaderTimeout)
+		}
+		if server.IdleTimeout != 60*time.Second {
+			t.Fatalf("unexpected idle timeout: %s", server.IdleTimeout)
+		}
 	})
 }
 
@@ -1222,6 +1231,7 @@ func TestForwardHookHandler(t *testing.T) {
 
 			if tt.expectTimeout {
 				ctx, cancel := context.WithCancel(req.Context())
+				defer cancel()
 				req = req.WithContext(ctx)
 				done := make(chan bool)
 				go func() {
@@ -1373,6 +1383,7 @@ func TestReverseHookHandler(t *testing.T) {
 
 			if tt.expectTimeout {
 				ctx, cancel := context.WithCancel(req.Context())
+				defer cancel()
 				req = req.WithContext(ctx)
 				done := make(chan bool)
 				go func() {
