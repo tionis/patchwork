@@ -11,7 +11,6 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
-	"github.com/tionis/patchwork/internal/utils"
 )
 
 var (
@@ -25,22 +24,33 @@ var (
 // This function was moved from the original huproxy/lib package.
 func File2WS(ctx context.Context, cancel func(), src io.Reader, dst *websocket.Conn) error {
 	defer cancel()
+	buffer := make([]byte, 32*1024)
 
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 
-		b := make([]byte, 32*1024)
-		if n, err := src.Read(b); err != nil {
-			return err
-		} else {
-			b = b[:n]
+		n, readErr := src.Read(buffer)
+		if n > 0 {
+			if err := dst.SetWriteDeadline(time.Now().Add(HuProxyWriteTimeout)); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
+			}
+			if err := dst.WriteMessage(websocket.BinaryMessage, buffer[:n]); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
+			}
 		}
-
-		err := dst.WriteMessage(websocket.BinaryMessage, b)
-		if err != nil {
-			return err
+		if readErr != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return readErr
 		}
 	}
 }
@@ -58,6 +68,7 @@ type ServerInterface interface {
 		Info(msg string, args ...interface{})
 		Error(msg string, args ...interface{})
 	}
+	GetClientIP(r *http.Request) string
 }
 
 // HuproxyHandler handles HuProxy WebSocket tunnel requests.
@@ -69,7 +80,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 		port := vars["port"]
 		address := net.JoinHostPort(host, port)
 
-		clientIP := utils.GetClientIP(r)
+		clientIP := srv.GetClientIP(r)
 		logger := srv.GetLogger()
 
 		logger.Info("HUProxy connection request",
@@ -99,12 +110,10 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 			authToken = after
 		}
 
-		clientIPStr := r.Header.Get("X-Forwarded-For")
-		if clientIPStr == "" {
-			clientIPStr = r.RemoteAddr
+		clientIPParsed := net.ParseIP(clientIP)
+		if clientIPParsed == nil {
+			clientIPParsed = net.IPv4zero
 		}
-
-		clientIPParsed := net.ParseIP(clientIPStr)
 
 		// Authenticate token against user's config.yaml file for huproxy permissions
 		allowed, reason, err := srv.AuthenticateToken(
@@ -206,6 +215,10 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 					"client_ip", clientIP)
 			}
 		}(targetConn)
+		stopCancellation := context.AfterFunc(ctx, func() {
+			_ = targetConn.Close()
+		})
+		defer stopCancellation()
 
 		logger.Info("HUProxy tunnel established successfully",
 			"user", user,
@@ -214,6 +227,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 
 		// websocket -> server
 		go func() {
+			defer cancel()
 			totalBytes := int64(0)
 
 			for {
@@ -260,7 +274,7 @@ func HuproxyHandler(srv ServerInterface) http.HandlerFunc {
 						"client_ip", clientIP,
 						"bytes_written", bytesWritten,
 						"total_bytes_ws_to_tcp", totalBytes)
-					cancel()
+					return
 				} else {
 					totalBytes += bytesWritten
 				}

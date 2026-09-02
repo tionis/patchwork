@@ -16,6 +16,18 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type finalChunkReader struct {
+	read bool
+}
+
+func (r *finalChunkReader) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	return copy(p, "final chunk"), io.EOF
+}
+
 // MockLogger implements a simple logger for testing
 type MockLogger struct {
 	logs []string
@@ -69,6 +81,7 @@ type MockServer struct {
 	shouldAuth       bool
 	authReason       string
 	authError        error
+	clientIP         string
 }
 
 func NewMockServer() *MockServer {
@@ -76,6 +89,7 @@ func NewMockServer() *MockServer {
 		logger:     &MockLogger{},
 		shouldAuth: true,
 		authReason: "authenticated",
+		clientIP:   "192.0.2.1",
 	}
 }
 
@@ -100,6 +114,10 @@ func (m *MockServer) GetLogger() interface {
 	Error(msg string, args ...interface{})
 } {
 	return m.logger
+}
+
+func (m *MockServer) GetClientIP(_ *http.Request) string {
+	return m.clientIP
 }
 
 // MockTCPEchoServer creates a simple TCP echo server for testing
@@ -224,8 +242,8 @@ func TestFile2WS(t *testing.T) {
 	defer wsConn.Close()
 
 	// Test data to send
-	testData := "Hello, WebSocket!"
-	reader := strings.NewReader(testData)
+	testData := "final chunk"
+	reader := &finalChunkReader{}
 
 	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -578,8 +596,8 @@ func TestHuproxyHandlerClientIPExtraction(t *testing.T) {
 		expectedIP    string
 	}{
 		{
-			name:          "X-Forwarded-For header",
-			xForwardedFor: "192.168.1.100",
+			name:          "server-provided trusted proxy result",
+			xForwardedFor: "127.0.0.1",
 			remoteAddr:    "10.0.0.1:12345",
 			expectedIP:    "192.168.1.100",
 		},
@@ -594,6 +612,7 @@ func TestHuproxyHandlerClientIPExtraction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockSrv := NewMockServer()
+			mockSrv.clientIP = tt.expectedIP
 
 			// Set up auth function to capture client IP
 			var capturedClientIP net.IP

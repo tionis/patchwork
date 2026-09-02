@@ -99,6 +99,12 @@ func (s *server) GetLogger() interface {
 	return s.logger
 }
 
+// GetClientIP gives HuProxy the same trusted-proxy-aware address used by the
+// HTTP authentication and rate-limit paths.
+func (s *server) GetClientIP(r *http.Request) string {
+	return s.clientIP(r)
+}
+
 // Configuration template data for rendering index.html.
 type ConfigData struct {
 	ForgejoURL   string
