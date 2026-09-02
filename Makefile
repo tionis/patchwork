@@ -6,6 +6,9 @@ IMAGE_TAG ?= latest
 REGISTRY ?= ghcr.io/tionis
 PLATFORMS ?= linux/amd64,linux/arm64
 DOCKERFILE ?= Dockerfile
+GO ?= go
+GO_TEST_FLAGS ?= -mod=vendor -timeout=90s
+COVERAGE_MIN ?= 70
 
 # If REGISTRY is set, prepend it to the image name
 ifdef REGISTRY
@@ -98,9 +101,36 @@ remove-buildx: ## Remove the buildx builder instance
 	docker buildx rm patchwork-builder || true
 
 # Test targets
+.PHONY: fmt-check
+fmt-check: ## Verify that tracked Go files are formatted
+	@files="$$(gofmt -l $$(git ls-files '*.go' ':!vendor/**'))"; \
+		test -z "$$files" || { echo "Unformatted Go files:"; echo "$$files"; exit 1; }
+
+.PHONY: vet
+vet: ## Run Go static analysis against vendored dependencies
+	$(GO) vet -mod=vendor ./...
+
 .PHONY: test
-test: ## Run tests
-	go test -v ./...
+test: ## Run the shuffled test suite
+	$(GO) test $(GO_TEST_FLAGS) -shuffle=on ./...
+
+.PHONY: test-race
+test-race: ## Run all tests with the race detector
+	$(GO) test $(GO_TEST_FLAGS) -race -shuffle=on ./...
+
+.PHONY: test-stress
+test-stress: ## Repeatedly stress the relay's concurrent state transitions
+	$(GO) test $(GO_TEST_FLAGS) -race -shuffle=on -count=100 ./internal/relay
+
+.PHONY: test-cover
+test-cover: ## Enforce statement coverage and write coverage.out
+	$(GO) test $(GO_TEST_FLAGS) -coverprofile=coverage.out ./...
+	@total="$$( $(GO) tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $$3); print $$3}' )"; \
+		echo "Total coverage: $$total%"; \
+		awk -v total="$$total" -v minimum="$(COVERAGE_MIN)" 'BEGIN { exit !(total >= minimum) }'
+
+.PHONY: verify
+verify: fmt-check vet test-race test-cover ## Run the complete local/CI verification suite
 
 .PHONY: test-docker
 test-docker: ## Run tests in Docker container
@@ -115,7 +145,7 @@ test-docker: ## Run tests in Docker container
 .PHONY: build-local
 build-local: ## Build Go binary locally
 	@echo "Building Go binary locally..."
-	CGO_ENABLED=0 go build -o patchwork .
+	CGO_ENABLED=0 $(GO) build -mod=vendor -o patchwork .
 
 .PHONY: run-local
 run-local: build-local ## Build and run locally

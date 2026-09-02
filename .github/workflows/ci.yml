@@ -33,20 +33,17 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    - name: Download dependencies
-      run: go mod download
+    - name: Verify vendored build and tests
+      run: make verify
 
-    - name: Verify dependencies
-      run: go mod verify
-
-    - name: Run tests
-      run: go test -v -race -coverprofile=coverage.out ./...
+    - name: Stress relay concurrency
+      run: make test-stress
 
     - name: Upload coverage reports to Codecov
       if: env.CODECOV_TOKEN != ''
       uses: codecov/codecov-action@v5
       with:
-        file: ./coverage.out
+        files: ./coverage.out
         flags: unittests
         name: codecov-umbrella
       env:

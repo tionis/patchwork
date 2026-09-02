@@ -34,11 +34,11 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    - name: Download dependencies
-      run: go mod download
+    - name: Verify vendored build and tests
+      run: make verify
 
-    - name: Run tests
-      run: go test -v -race ./...
+    - name: Stress relay concurrency
+      run: make test-stress
 
   release:
     needs: test

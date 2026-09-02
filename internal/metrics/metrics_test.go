@@ -97,11 +97,11 @@ func TestMetricsTypes(t *testing.T) {
 	m := NewMetrics()
 
 	// Record various metric types
-	m.RecordHTTPRequest("GET", "test", "200")    // Counter
-	m.RecordHTTPDuration("GET", "test", 0.5)     // Histogram
-	m.SetChannelsTotal(10)                       // Gauge
-	m.SetActiveConnections(5)                    // Gauge
-	m.RecordMessage("test", "blocking", 512)     // Counter + Histogram
+	m.RecordHTTPRequest("GET", "test", "200") // Counter
+	m.RecordHTTPDuration("GET", "test", 0.5)  // Histogram
+	m.SetChannelsTotal(10)                    // Gauge
+	m.SetActiveConnections(5)                 // Gauge
+	m.RecordMessage("test", "blocking", 512)  // Counter + Histogram
 
 	registry := m.GetRegistry()
 	metricFamilies, err := registry.Gather()
@@ -110,7 +110,7 @@ func TestMetricsTypes(t *testing.T) {
 	}
 
 	foundTypes := make(map[string]bool)
-	
+
 	for _, mf := range metricFamilies {
 		switch *mf.Name {
 		case "patchwork_http_requests_total":
@@ -138,7 +138,7 @@ func TestMetricsTypes(t *testing.T) {
 // TestMetricsEndpointIntegration tests the HTTP metrics endpoint
 func TestMetricsEndpointIntegration(t *testing.T) {
 	m := NewMetrics()
-	
+
 	// Record some test metrics
 	m.RecordHTTPRequest("GET", "public", "200")
 	m.SetChannelsTotal(3)
@@ -160,7 +160,7 @@ func TestMetricsEndpointIntegration(t *testing.T) {
 		// Simple metrics output for testing
 		w.Write([]byte("# HELP patchwork_http_requests_total Total number of HTTP requests\n"))
 		w.Write([]byte("# TYPE patchwork_http_requests_total counter\n"))
-		
+
 		for _, mf := range metricFamilies {
 			if *mf.Name == "patchwork_http_requests_total" {
 				for range mf.Metric {

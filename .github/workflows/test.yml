@@ -28,29 +28,11 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    - name: Download dependencies
-      run: go mod download
+    - name: Verify vendored build and tests
+      run: make verify
 
-    - name: Verify dependencies
-      run: go mod verify
-
-    - name: Run vet
-      run: go vet ./...
-
-    - name: Run tests
-      run: go test -v -race -coverprofile=coverage.out ./...
-
-    - name: Check test coverage
-      run: |
-        go tool cover -func=coverage.out
-        total_coverage=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
-        echo "Total test coverage: ${total_coverage}%"
-        if (( $(echo "$total_coverage < 50" | bc -l) )); then
-          echo "❌ Test coverage is below 50%"
-          exit 1
-        else
-          echo "✅ Test coverage is above 50%"
-        fi
+    - name: Stress relay concurrency
+      run: make test-stress
 
   lint:
     runs-on: ubuntu-latest
@@ -66,7 +48,7 @@ jobs:
       uses: golangci/golangci-lint-action@v9
       with:
         version: latest
-        args: --timeout=5m --config=.golangci.yml
+        args: --timeout=5m
 
   build:
     runs-on: ubuntu-latest
@@ -88,11 +70,8 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    - name: Download dependencies
-      run: go mod download
-
     - name: Build
-      run: go build -v -o patchwork .
+      run: go build -mod=vendor -v -o patchwork .
 
     - name: Test binary
       run: |

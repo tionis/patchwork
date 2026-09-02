@@ -1,15 +1,15 @@
-FROM golang:1.25.5 AS build
+FROM golang:1.26.2 AS build
 WORKDIR /app
 COPY go.mod go.sum ./
 COPY ./vendor ./vendor
 COPY ./*.go ./
 COPY ./internal ./internal
 COPY ./assets ./assets
-RUN CGO_ENABLED=0 GOOS=linux go build -o /patchwork
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -o /patchwork
 
 # Run the tests in the container
 FROM build AS run-test
-RUN go test -v ./...
+RUN go test -mod=vendor -race -timeout=90s -shuffle=on ./...
 
 FROM gcr.io/distroless/base-debian11 AS build-release-stage
 
