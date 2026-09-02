@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -38,13 +39,19 @@ func GetClientIP(r *http.Request) string {
 
 // LogRequest logs HTTP request details at info level.
 func LogRequest(r *http.Request, message string, logger *slog.Logger) {
+	queryKeys := make([]string, 0, len(r.URL.Query()))
+	for key := range r.URL.Query() {
+		queryKeys = append(queryKeys, key)
+	}
+	slices.Sort(queryKeys)
+
 	logger.Info(message,
 		"method", r.Method,
 		"path", r.URL.Path,
 		"client_ip", GetClientIP(r),
 		"user_agent", r.Header.Get("User-Agent"),
 		"content_length", r.ContentLength,
-		"query", r.URL.RawQuery)
+		"query_keys", queryKeys)
 }
 
 // GenerateUUID generates a simple UUID-like string using crypto/rand.

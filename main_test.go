@@ -321,19 +321,29 @@ func TestGetHTTPServer(t *testing.T) {
 }
 
 func TestServerLogRequest(t *testing.T) {
+	var logs strings.Builder
 	server := &server{
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		logger: slog.New(slog.NewTextHandler(&logs, nil)),
 	}
 
-	req := httptest.NewRequest("GET", "/test/path?param=value", nil)
+	req := httptest.NewRequest("GET", "/test/path?param=value&secret=hook-secret&token=user-token&body=payload", nil)
 	req.Header.Set("User-Agent", "test-agent")
-	req.Header.Set("Referer", "https://example.com")
+	req.Header.Set("Referer", "https://example.com/?token=referer-token")
 	req.RemoteAddr = "192.168.1.100:12345"
 
-	// This test mainly ensures the function doesn't panic
 	server.logRequest(req, "Test message")
-	// Since we're using the default logger, we can't easily capture the output
-	// but we can ensure it doesn't crash
+
+	output := logs.String()
+	for _, sensitive := range []string{"hook-secret", "user-token", "payload", "referer-token"} {
+		if strings.Contains(output, sensitive) {
+			t.Fatalf("request log exposed sensitive value %q: %s", sensitive, output)
+		}
+	}
+	for _, key := range []string{"body", "param", "secret", "token"} {
+		if !strings.Contains(output, key) {
+			t.Fatalf("request log omitted query key %q: %s", key, output)
+		}
+	}
 }
 
 func TestStatusHandler(t *testing.T) {
@@ -2430,6 +2440,24 @@ func TestPrepareRequestHeaders(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPrepareRequestHeadersRedactsCredentialsFromPatchURI(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/req/hook?keep=value&secret=hook-secret&token=user-token&body=payload", nil)
+	headers := prepareRequestHeaders(req)
+
+	patchURI, err := url.Parse(headers["Patch-Uri"])
+	if err != nil {
+		t.Fatalf("parse Patch-Uri: %v", err)
+	}
+	if got := patchURI.Query().Get("keep"); got != "value" {
+		t.Fatalf("non-sensitive query value changed to %q", got)
+	}
+	for _, key := range []string{"body", "secret", "token"} {
+		if got := patchURI.Query().Get(key); got != "[REDACTED]" {
+			t.Fatalf("query value %q was not redacted: %q", key, got)
+		}
 	}
 }
 

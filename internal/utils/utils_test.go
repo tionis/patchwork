@@ -99,13 +99,16 @@ func TestLogRequest(t *testing.T) {
 		"client_ip=192.168.1.100",
 		"user_agent=test-client/1.0",
 		"content_length=9",
-		"param=value", // The query value might be quoted, so just check for the content
+		"query_keys=[param]",
 	}
 
 	for _, expected := range expectedStrings {
 		if !strings.Contains(logOutput, expected) {
 			t.Errorf("Expected log output to contain %q, got: %s", expected, logOutput)
 		}
+	}
+	if strings.Contains(logOutput, "value") {
+		t.Fatalf("log output exposed query value: %s", logOutput)
 	}
 }
 
@@ -391,6 +394,24 @@ func TestLogRequestEdgeCases(t *testing.T) {
 		logOutput := logBuffer.String()
 		if !strings.Contains(logOutput, "Special chars test") {
 			t.Error("Expected log message to be included for special characters")
+		}
+	})
+
+	t.Run("Query values are not logged", func(t *testing.T) {
+		logBuffer.Reset()
+		req := httptest.NewRequest("GET", "/test?token=top-secret&ordinary=private-value", nil)
+		LogRequest(req, "Sensitive query test", logger)
+
+		logOutput := logBuffer.String()
+		for _, value := range []string{"top-secret", "private-value"} {
+			if strings.Contains(logOutput, value) {
+				t.Fatalf("log exposed query value %q: %s", value, logOutput)
+			}
+		}
+		for _, key := range []string{"ordinary", "token"} {
+			if !strings.Contains(logOutput, key) {
+				t.Fatalf("log omitted query key %q: %s", key, logOutput)
+			}
 		}
 	})
 }

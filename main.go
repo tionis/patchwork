@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -301,11 +302,32 @@ func (s *server) logRequest(r *http.Request, message string) {
 	s.logger.Info(message,
 		"method", r.Method,
 		"path", r.URL.Path,
-		"query", r.URL.RawQuery,
+		"query_keys", queryKeys(r.URL.Query()),
 		"client_ip", clientIP,
 		"user_agent", r.Header.Get("User-Agent"),
-		"referer", r.Header.Get("Referer"),
 	)
+}
+
+func queryKeys(values url.Values) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func redactedQuery(values url.Values) string {
+	redacted := make(url.Values, len(values))
+	for key, value := range values {
+		switch strings.ToLower(key) {
+		case "body", "secret", "token":
+			redacted[key] = []string{"[REDACTED]"}
+		default:
+			redacted[key] = append([]string(nil), value...)
+		}
+	}
+	return redacted.Encode()
 }
 
 // statusHandler handles health check requests.
@@ -1322,7 +1344,7 @@ func prepareRequestHeaders(r *http.Request) map[string]string {
 	if r.URL.Path != "" {
 		uri := r.URL.Path
 		if r.URL.RawQuery != "" {
-			uri += "?" + r.URL.RawQuery
+			uri += "?" + redactedQuery(r.URL.Query())
 		}
 		headers["Patch-Uri"] = uri
 	}
@@ -2281,7 +2303,7 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 	slog.Info("404 Not Found",
 		"method", r.Method,
 		"path", r.URL.Path,
-		"query", r.URL.RawQuery,
+		"query_keys", queryKeys(r.URL.Query()),
 		"client_ip", clientIP,
 		"user_agent", r.Header.Get("User-Agent"))
 	w.WriteHeader(http.StatusNotFound)
