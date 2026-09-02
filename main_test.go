@@ -3610,6 +3610,9 @@ func TestRequestResponderSwitchMode(t *testing.T) {
 		go func() {
 			req := httptest.NewRequest("POST", "/p/"+newChannelID, strings.NewReader("final response"))
 			req.Header.Set("Content-Type", "text/plain")
+			req.Header.Set("Patch-Status", "202")
+			req.Header.Set("Patch-H-X-Worker", "ready")
+			req.Header.Set("X-Internal", "must-not-be-reflected")
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			req = req.WithContext(ctx)
@@ -3622,8 +3625,8 @@ func TestRequestResponderSwitchMode(t *testing.T) {
 		// Check that requester got the final response
 		select {
 		case requesterResult := <-requesterDone:
-			if requesterResult.Code != http.StatusOK {
-				t.Errorf("Requester: Expected status %d, got %d", http.StatusOK, requesterResult.Code)
+			if requesterResult.Code != http.StatusAccepted {
+				t.Errorf("Requester: Expected status %d, got %d", http.StatusAccepted, requesterResult.Code)
 			}
 
 			body := requesterResult.Body.String()
@@ -3634,6 +3637,12 @@ func TestRequestResponderSwitchMode(t *testing.T) {
 			contentType := requesterResult.Header().Get("Content-Type")
 			if contentType != "text/plain" {
 				t.Errorf("Requester: Expected Content-Type 'text/plain', got %q", contentType)
+			}
+			if got := requesterResult.Header().Get("X-Worker"); got != "ready" {
+				t.Errorf("Requester: Expected X-Worker 'ready', got %q", got)
+			}
+			if got := requesterResult.Header().Get("X-Internal"); got != "" {
+				t.Errorf("Requester: Reflected non-control header X-Internal=%q", got)
 			}
 
 		case <-time.After(6 * time.Second):
@@ -3750,6 +3759,47 @@ func TestRequestResponderErrorCases(t *testing.T) {
 				t.Errorf("Expected status %d, got %d. Body: %s", tt.expectedStatus, w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestInvalidResponderMetadataDoesNotConsumeRequest(t *testing.T) {
+	server := createTestMainServer()
+	channelID := "invalid-responder-metadata"
+	requesterDone := make(chan *httptest.ResponseRecorder, 1)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		req := httptest.NewRequest(http.MethodPost, "/p/req/"+channelID, strings.NewReader("request"))
+		w := httptest.NewRecorder()
+		server.handlePatch(w, req.WithContext(ctx), "p", "", "/req/"+channelID)
+		requesterDone <- w
+	}()
+	waitForChannel(t, server, "p/req/"+channelID)
+
+	invalid := httptest.NewRequest(http.MethodPost, "/p/res/"+channelID, strings.NewReader("bad"))
+	invalid.Header.Set("Patch-Status", "700")
+	invalidResult := httptest.NewRecorder()
+	server.handlePatch(invalidResult, invalid, "p", "", "/res/"+channelID)
+	if invalidResult.Code != http.StatusBadRequest {
+		t.Fatalf("invalid responder status = %d, want 400", invalidResult.Code)
+	}
+
+	valid := httptest.NewRequest(http.MethodPost, "/p/res/"+channelID, strings.NewReader("response"))
+	valid.Header.Set("Patch-Status", "201")
+	validResult := httptest.NewRecorder()
+	server.handlePatch(validResult, valid, "p", "", "/res/"+channelID)
+	if validResult.Code != http.StatusOK {
+		t.Fatalf("valid responder status = %d, want 200", validResult.Code)
+	}
+
+	select {
+	case result := <-requesterDone:
+		if result.Code != http.StatusCreated || result.Body.String() != "response" {
+			t.Fatalf("requester got status=%d body=%q", result.Code, result.Body.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("requester did not receive valid responder's response")
 	}
 }
 

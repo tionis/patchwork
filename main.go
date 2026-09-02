@@ -1635,6 +1635,49 @@ func prepareRequestHeaders(r *http.Request) http.Header {
 	return headers
 }
 
+// prepareResponseHeaders extracts the protocol metadata a regular responder is
+// allowed to control. Validate it before claiming a request so a malformed
+// responder cannot consume work that another responder could have handled.
+func prepareResponseHeaders(r *http.Request) (http.Header, error) {
+	headers := make(http.Header)
+	if contentType := r.Header.Values("Content-Type"); len(contentType) > 0 {
+		headers["Content-Type"] = append([]string(nil), contentType...)
+	} else {
+		headers.Set("Content-Type", "text/plain")
+	}
+	for key, values := range r.Header {
+		if isPatchPassthroughHeader(key) || strings.EqualFold(key, "Patch-Status") {
+			headers[key] = append([]string(nil), values...)
+		}
+	}
+	if _, _, err := validatedPassthroughHeaders(headers); err != nil {
+		return nil, err
+	}
+	return headers, nil
+}
+
+// prepareSwitchedResponseHeaders removes the request-envelope layer added by
+// prepareRequestHeaders. Only explicit responder controls are decoded; normal
+// headers on the channel POST are not reflected into the requester's response.
+func prepareSwitchedResponseHeaders(streamHeaders http.Header) (http.Header, error) {
+	headers := make(http.Header)
+	if values := streamHeaders.Values("Content-Type"); len(values) > 0 {
+		headers["Content-Type"] = append([]string(nil), values...)
+	}
+	for key, values := range streamHeaders {
+		switch {
+		case strings.EqualFold(key, "Patch-H-Patch-Status"):
+			headers["Patch-Status"] = append([]string(nil), values...)
+		case len(key) >= len("Patch-H-Patch-H-") && strings.EqualFold(key[:len("Patch-H-Patch-H-")], "Patch-H-Patch-H-"):
+			headers[key[len("Patch-H-"):]] = append([]string(nil), values...)
+		}
+	}
+	if _, _, err := validatedPassthroughHeaders(headers); err != nil {
+		return nil, err
+	}
+	return headers, nil
+}
+
 // handleRequestResponder implements the request-responder communication logic.
 func (s *server) handleRequestResponder(
 	w http.ResponseWriter,
@@ -1797,6 +1840,13 @@ func (s *server) handleResponderRegular(
 			"client_ip", s.clientIP(r),
 			"content_type", r.Header.Get("Content-Type"))
 
+		headers, err := prepareResponseHeaders(r)
+		if err != nil {
+			s.logger.Warn("Rejected invalid responder metadata", "channel_id", channelID, "error", err)
+			http.Error(w, "Invalid response metadata", http.StatusBadRequest)
+			return
+		}
+
 		// Wait for a request to arrive first
 		request, err := s.broker.Receive(ctx, reqChannelPath)
 		if err == nil {
@@ -1806,29 +1856,6 @@ func (s *server) handleResponderRegular(
 			if err := copyRelayStream(ctx, io.Discard, request); err != nil {
 				s.logger.Error("Error consuming request stream", "error", err)
 				return
-			}
-
-			// Prepare response headers
-			headers := make(http.Header)
-
-			// Set content type
-			contentType := r.Header.Get("Content-Type")
-			if contentType != "" {
-				headers.Set("Content-Type", contentType)
-			} else {
-				headers.Set("Content-Type", "text/plain")
-			}
-
-			// Process Patch-H-* headers for passthrough
-			for key, values := range r.Header {
-				if strings.HasPrefix(key, "Patch-H-") && len(values) > 0 {
-					headers[key] = append([]string(nil), values...)
-				}
-			}
-
-			// Process Patch-Status header
-			if status := r.Header.Values("Patch-Status"); len(status) > 0 {
-				headers["Patch-Status"] = append([]string(nil), status...)
 			}
 
 			// Send the response to requester
@@ -1847,6 +1874,7 @@ func (s *server) handleResponderRegular(
 		}
 
 	} else {
+		w.Header().Set("Allow", "GET, POST, PUT")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
@@ -1860,6 +1888,7 @@ func (s *server) handleResponderSwitch(
 	channelID string,
 ) {
 	if r.Method != "POST" && r.Method != "PUT" {
+		w.Header().Set("Allow", "POST, PUT")
 		http.Error(w, "Switch mode requires POST or PUT method", http.StatusMethodNotAllowed)
 		return
 	}
@@ -1940,6 +1969,30 @@ func (s *server) handleResponderSwitch(
 				s.logger.Info("Response received on switched channel, forwarding to original requester",
 					"original_channel", channelID,
 					"new_channel", newChannelID)
+
+				responseHeaders, metadataErr := prepareSwitchedResponseHeaders(responseMessage.Headers)
+				if metadataErr != nil {
+					responseMessage.Complete(metadataErr)
+					s.logger.Warn("Rejected invalid switched response metadata",
+						"original_channel", channelID,
+						"new_channel", newChannelID,
+						"error", metadataErr)
+					errorMessage := "Invalid switched response metadata"
+					errorStream := relay.NewStream(
+						io.NopCloser(strings.NewReader(errorMessage)),
+						http.Header{
+							"Content-Type": {"text/plain"},
+							"Patch-Status": {"502"},
+						},
+						int64(len(errorMessage)),
+					)
+					if sendErr := s.broker.Send(ctx, resChannelPath, errorStream); sendErr != nil {
+						s.logger.Debug("Requester left before switched response error could be delivered",
+							"original_channel", channelID)
+					}
+					return
+				}
+				responseMessage.Headers = responseHeaders
 
 				// Forward the response to the original response channel
 				if err := s.broker.Send(ctx, resChannelPath, responseMessage); err == nil {
@@ -2393,6 +2446,7 @@ func (s *server) handlePatch(
 		w.WriteHeader(http.StatusOK)
 
 	default:
+		w.Header().Set("Allow", "GET, POST, PUT, PATCH")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }

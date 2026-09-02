@@ -132,7 +132,8 @@ curl -X POST "{{.BaseURL}}/public/res/myservice?switch=true" -d "new-channel-123
 # This returns the request data to the responder
 
 # Terminal 3: Send the actual response on the new channel
-curl -X POST -d '{"result":"processed"}' {{.BaseURL}}/public/new-channel-123
+curl -X POST -H 'Patch-Status: 201' -H 'Patch-H-X-Worker: ready' \
+  -d '{"result":"processed"}' {{.BaseURL}}/public/new-channel-123
 # The original requester receives this response</pre>
 
   <h2>Passthrough Headers</h2>
@@ -369,7 +370,7 @@ curl {{.BaseURL}}/status</pre>
   <ul>
     <li><strong>queue</strong>: Each message is received by exactly one receiver (default)</li>
     <li><strong>pubsub</strong>: All receivers receive the published message</li>
-    <li><strong>req/res</strong>: Request/response pattern (not implemented yet)</li>
+    <li><strong>req/res</strong>: Request/response rendezvous, including dynamic switch mode</li>
   </ul>
 
   <h2>Examples</h2>

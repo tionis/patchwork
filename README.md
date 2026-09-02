@@ -412,7 +412,8 @@ curl -X POST "https://patchwork.example.com/public/res/myservice?switch=true" -d
 # Returns the request data and switches to channel "worker-123"
 
 # Terminal 3: Send response on the new channel
-curl -X POST -d '{"result":"completed"}' https://patchwork.example.com/public/worker-123
+curl -X POST -H 'Patch-Status: 201' -H 'Patch-H-X-Worker: ready' \
+  -d '{"result":"completed"}' https://patchwork.example.com/public/worker-123
 # Original requester receives this response
 ```
 
@@ -833,7 +834,7 @@ Each endpoint supports multiple modes:
 
 - **queue**: Each message is received by exactly one receiver (default)
 - **pubsub**: All receivers receive the published message
-- **req/res**: Request/response pattern (not implemented yet)
+- **req/res**: Request/response rendezvous, including dynamic switch mode
 
 ## Examples
 
