@@ -1328,6 +1328,23 @@ func addPassthroughHeaders(w http.ResponseWriter, streamHeaders map[string]strin
 	}
 }
 
+func addRelayStreamHeaders(w http.ResponseWriter, stream *relay.Stream) {
+	if stream.ContentLength >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(stream.ContentLength, 10))
+	}
+	addPassthroughHeaders(w, stream.Headers)
+}
+
+func copyRelayStream(ctx context.Context, destination io.Writer, stream *relay.Stream) error {
+	stopCancellation := context.AfterFunc(ctx, func() {
+		stream.Complete(ctx.Err())
+	})
+	_, err := io.Copy(destination, stream.Body)
+	stopCancellation()
+	stream.Complete(err)
+	return err
+}
+
 // prepareRequestHeaders prepares headers for the stream, adding Patch-H-* prefixes for passthrough
 func prepareRequestHeaders(r *http.Request) map[string]string {
 	headers := make(map[string]string)
@@ -1430,19 +1447,6 @@ func (s *server) handleRequester(
 		"client_ip", getClientIP(r),
 		"content_type", r.Header.Get("Content-Type"))
 
-	// Read request body
-	var buf []byte
-	var err error
-
-	if r.Body != nil {
-		buf, err = io.ReadAll(r.Body)
-		if err != nil {
-			s.logger.Error("Error reading request body", "error", err)
-			http.Error(w, "Error reading request body", http.StatusInternalServerError)
-			return
-		}
-	}
-
 	// Prepare headers with full HTTP request information
 	headers := prepareRequestHeaders(r)
 
@@ -1450,7 +1454,8 @@ func (s *server) handleRequester(
 	defer cancel()
 
 	// Send the request to responders
-	if err := s.broker.Send(ctx, reqChannelPath, relay.Message{Body: buf, Headers: headers}); err != nil {
+	requestStream := relay.NewStream(r.Body, headers, r.ContentLength)
+	if err := s.broker.Send(ctx, reqChannelPath, requestStream); err != nil {
 		s.logger.Debug("Requester canceled", "channel_id", channelID)
 		return
 	}
@@ -1470,8 +1475,8 @@ func (s *server) handleRequester(
 		"channel_id", channelID,
 		"client_ip", getClientIP(r),
 		"content_type", response.Headers["Content-Type"])
-	addPassthroughHeaders(w, response.Headers)
-	if _, err := w.Write(response.Body); err != nil {
+	addRelayStreamHeaders(w, response)
+	if err := copyRelayStream(ctx, w, response); err != nil {
 		s.logger.Error("Error writing response message", "error", err)
 	}
 }
@@ -1525,8 +1530,8 @@ func (s *server) handleResponderRegular(
 			"channel_id", channelID,
 			"client_ip", getClientIP(r),
 			"content_type", request.Headers["Content-Type"])
-		addPassthroughHeaders(w, request.Headers)
-		if _, err := w.Write(request.Body); err != nil {
+		addRelayStreamHeaders(w, request)
+		if err := copyRelayStream(ctx, w, request); err != nil {
 			s.logger.Error("Error writing request message", "error", err)
 		}
 
@@ -1537,21 +1542,16 @@ func (s *server) handleResponderRegular(
 			"client_ip", getClientIP(r),
 			"content_type", r.Header.Get("Content-Type"))
 
-		// Read the response body that will be sent after receiving request
-		responseBody, err := io.ReadAll(r.Body)
-		if err != nil {
-			s.logger.Error("Error reading response body", "error", err)
-			http.Error(w, "Error reading response body", http.StatusInternalServerError)
-			return
-		}
-
 		// Wait for a request to arrive first
 		request, err := s.broker.Receive(ctx, reqChannelPath)
 		if err == nil {
 			s.logger.Info("Request received, sending response",
 				"channel_id", channelID,
 				"client_ip", getClientIP(r))
-			_ = request
+			if err := copyRelayStream(ctx, io.Discard, request); err != nil {
+				s.logger.Error("Error consuming request stream", "error", err)
+				return
+			}
 
 			// Prepare response headers
 			headers := make(map[string]string)
@@ -1577,7 +1577,8 @@ func (s *server) handleResponderRegular(
 			}
 
 			// Send the response to requester
-			if err := s.broker.Send(ctx, resChannelPath, relay.Message{Body: responseBody, Headers: headers}); err == nil {
+			responseStream := relay.NewStream(r.Body, headers, r.ContentLength)
+			if err := s.broker.Send(ctx, resChannelPath, responseStream); err == nil {
 				s.logger.Debug("Response sent to requester", "channel_id", channelID)
 				w.WriteHeader(http.StatusOK)
 			} else {
@@ -1613,7 +1614,7 @@ func (s *server) handleResponderSwitch(
 		"client_ip", getClientIP(r))
 
 	// Read the new channel ID from the request body
-	buf, err := io.ReadAll(r.Body)
+	buf, err := io.ReadAll(io.LimitReader(r.Body, 257))
 	if err != nil {
 		s.logger.Error("Error reading switch channel", "error", err)
 		http.Error(w, "Error reading switch channel", http.StatusInternalServerError)
@@ -1621,6 +1622,10 @@ func (s *server) handleResponderSwitch(
 	}
 
 	newChannelID := strings.TrimSpace(string(buf))
+	if len(newChannelID) > 256 {
+		http.Error(w, "New channel ID must not exceed 256 bytes", http.StatusRequestEntityTooLarge)
+		return
+	}
 	if newChannelID == "" {
 		s.logger.Error("Empty channel ID provided in switch mode",
 			"channel_id", channelID,
@@ -1699,13 +1704,14 @@ func (s *server) handleResponderSwitch(
 
 				// Send timeout error to the original requester if possible
 				timeoutError := fmt.Sprintf("Double clutch timeout: no response received on channel %q within %s", newChannelID, timeout)
-				errorMessage := relay.Message{
-					Body: []byte(timeoutError),
-					Headers: map[string]string{
+				errorMessage := relay.NewStream(
+					io.NopCloser(strings.NewReader(timeoutError)),
+					map[string]string{
 						"Content-Type": "text/plain",
 						"Patch-Status": "504", // Gateway Timeout
 					},
-				}
+					int64(len(timeoutError)),
+				)
 
 				errorContext, errorCancel := context.WithTimeout(context.Background(), time.Second)
 				defer errorCancel()
@@ -1733,13 +1739,15 @@ func (s *server) handleResponderSwitch(
 		// Set CORS headers for browser compatibility
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Content-Type", requestMessage.Headers["Content-Type"])
+		if requestMessage.ContentLength >= 0 {
+			w.Header().Set("Content-Length", strconv.FormatInt(requestMessage.ContentLength, 10))
+		}
 
 		// Write the request body to the responder so they can process it
 		w.WriteHeader(http.StatusOK)
 
 		// Copy the request body to the responder
-		_, err = w.Write(requestMessage.Body)
-		if err != nil {
+		if err = copyRelayStream(ctx, w, requestMessage); err != nil {
 			s.logger.Error("Error copying request to responder", "error", err)
 		}
 
@@ -2004,14 +2012,14 @@ func (s *server) handlePatch(
 		)
 
 		var (
-			message relay.Message
-			err     error
+			stream *relay.Stream
+			err    error
 		)
 		if pubsub {
 			subscription := s.broker.Subscribe(channelPath)
-			message, err = subscription.Receive(requestContext)
+			stream, err = subscription.Receive(requestContext)
 		} else {
-			message, err = s.broker.Receive(requestContext, channelPath)
+			stream, err = s.broker.Receive(requestContext, channelPath)
 		}
 		if err != nil {
 			s.logger.Info("Consumer request canceled",
@@ -2023,9 +2031,9 @@ func (s *server) handlePatch(
 		s.logger.Info("Delivering data to consumer",
 			"channel_path", channelPath,
 			"client_ip", getClientIP(r),
-			"content_type", message.Headers["Content-Type"])
-		addPassthroughHeaders(w, message.Headers)
-		if _, err := w.Write(message.Body); err != nil {
+			"content_type", stream.Headers["Content-Type"])
+		addRelayStreamHeaders(w, stream)
+		if err := copyRelayStream(requestContext, w, stream); err != nil {
 			s.logger.Error("Error writing message to response", "error", err)
 		}
 
@@ -2037,44 +2045,45 @@ func (s *server) handlePatch(
 			"content_type", r.Header.Get("Content-Type"),
 			"pubsub", pubsub)
 
-		var (
-			buf []byte
-			err error
-		)
-
+		source := r.Body
+		contentLength := r.ContentLength
 		if bodyParam != "" {
-			buf = []byte(bodyParam)
-		} else {
-			buf, err = io.ReadAll(r.Body)
-			if err != nil {
-				s.logger.Error("Error reading request body", "error", err)
-				http.Error(w, "Error reading request body", http.StatusInternalServerError)
-
-				return
-			}
+			source = io.NopCloser(strings.NewReader(bodyParam))
+			contentLength = int64(len(bodyParam))
 		}
 
 		// Create stream with headers including passthrough headers
 		headers := prepareRequestHeaders(r)
 
-		// Track message metrics
-		behaviorStr := getBehaviorString(behavior)
-		s.metrics.RecordMessage(namespace, behaviorStr, float64(len(buf)))
-
+		var bytesTransferred int64
 		if !pubsub {
 			// Regular mode: one-to-one communication
 			s.logger.Debug("Sending data (regular mode)", "channelPath", channelPath)
-			if err := s.broker.Send(requestContext, channelPath, relay.Message{Body: buf, Headers: headers}); err != nil {
+			stream := relay.NewStream(source, headers, contentLength)
+			if err := s.broker.Send(requestContext, channelPath, stream); err != nil {
 				s.logger.Debug("Producer canceled", "channelPath", channelPath)
+				if requestContext.Err() == nil {
+					http.Error(w, "Message transfer failed", http.StatusBadGateway)
+				}
 				return
 			}
+			bytesTransferred = stream.BytesRead()
 			s.logger.Debug("Connected to consumer", "channelPath", channelPath)
 		} else {
 			// Pubsub mode: broadcast to all connected consumers
 			s.logger.Debug("Sending data (pubsub mode)", "channelPath", channelPath)
-			delivered := s.broker.Publish(channelPath, relay.Message{Body: buf, Headers: headers})
+			delivered, bytesRead, err := s.broker.Broadcast(requestContext, channelPath, source, headers, contentLength)
+			if err != nil {
+				s.logger.Debug("Publisher canceled", "channelPath", channelPath, "error", err)
+				if requestContext.Err() == nil {
+					http.Error(w, "Message broadcast failed", http.StatusBadGateway)
+				}
+				return
+			}
+			bytesTransferred = bytesRead
 			s.logger.Debug("Published message", "channelPath", channelPath, "subscribers", delivered)
 		}
+		s.metrics.RecordMessage(namespace, getBehaviorString(behavior), float64(bytesTransferred))
 
 		w.WriteHeader(http.StatusOK)
 

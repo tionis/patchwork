@@ -24,6 +24,25 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type observingResponseWriter struct {
+	header http.Header
+	writes chan []byte
+	status int
+}
+
+func newObservingResponseWriter() *observingResponseWriter {
+	return &observingResponseWriter{header: make(http.Header), writes: make(chan []byte, 8)}
+}
+
+func (w *observingResponseWriter) Header() http.Header { return w.header }
+
+func (w *observingResponseWriter) WriteHeader(status int) { w.status = status }
+
+func (w *observingResponseWriter) Write(p []byte) (int, error) {
+	w.writes <- append([]byte(nil), p...)
+	return len(p), nil
+}
+
 func TestGetClientIP(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1588,6 +1607,86 @@ func TestHandlePatchProducerConsumer(t *testing.T) {
 			t.Error("Consumer did not receive data within timeout")
 		}
 	})
+}
+
+func TestHandlePatchStreamsBeforeUploadCompletes(t *testing.T) {
+	server := createTestMainServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	uploadReader, uploadWriter := io.Pipe()
+	producerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodPost, "/p/live-stream", uploadReader).WithContext(ctx)
+		req.ContentLength = -1
+		w := httptest.NewRecorder()
+		server.handlePatch(w, req, "p", "", "/live-stream")
+		producerDone <- w
+	}()
+	waitForChannel(t, server, "p/live-stream")
+
+	consumer := newObservingResponseWriter()
+	consumerDone := make(chan struct{})
+	go func() {
+		defer close(consumerDone)
+		req := httptest.NewRequest(http.MethodGet, "/p/live-stream", nil).WithContext(ctx)
+		server.handlePatch(consumer, req, "p", "", "/live-stream")
+	}()
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := uploadWriter.Write([]byte("first-chunk"))
+		writeDone <- err
+	}()
+	select {
+	case chunk := <-consumer.writes:
+		if got := string(chunk); got != "first-chunk" {
+			t.Fatalf("consumer got first chunk %q", got)
+		}
+	case <-ctx.Done():
+		t.Fatalf("first chunk did not stream before upload completion: %v", ctx.Err())
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatalf("write first chunk: %v", err)
+	}
+	select {
+	case <-producerDone:
+		t.Fatal("producer completed before its upload reached EOF")
+	default:
+	}
+
+	go func() {
+		_, err := uploadWriter.Write([]byte("-last-chunk"))
+		if err == nil {
+			err = uploadWriter.Close()
+		}
+		writeDone <- err
+	}()
+	select {
+	case chunk := <-consumer.writes:
+		if got := string(chunk); got != "-last-chunk" {
+			t.Fatalf("consumer got final chunk %q", got)
+		}
+	case <-ctx.Done():
+		t.Fatalf("final chunk did not stream: %v", ctx.Err())
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatalf("write final chunk: %v", err)
+	}
+
+	select {
+	case producer := <-producerDone:
+		if producer.Code != http.StatusOK {
+			t.Fatalf("producer got status %d: %s", producer.Code, producer.Body.String())
+		}
+	case <-ctx.Done():
+		t.Fatalf("producer did not complete after stream EOF: %v", ctx.Err())
+	}
+	select {
+	case <-consumerDone:
+	case <-ctx.Done():
+		t.Fatalf("consumer did not complete after stream EOF: %v", ctx.Err())
+	}
 }
 
 func TestHandlePatchConcurrentProducerConsumerStress(t *testing.T) {

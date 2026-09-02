@@ -49,8 +49,8 @@
   <p>
     The default mode is a MPMC queue, where the first to connect are able to
     publish/subscribe. But you can also specify publish-subscribe (pubsub) mode.
-    In pubsub mode, the publisher will become non-blocking and their data will be
-    transmitted to each connected subscriber:
+    In pubsub mode, the publisher streams data to each connected subscriber.
+    The slowest subscriber applies backpressure:
   </p>
   <pre>curl {{.BaseURL}}/public/pubsub/a61b1f42 -d "hello, world"</pre>
   
@@ -69,17 +69,17 @@
 
   <h3>Queue Behavior (Blocking)</h3>
   <p><strong>Paths:</strong> <code>/queue/...</code> or <code>/./...</code> (default)</p>
-  <p>In queue mode, producers will block until a consumer is available to receive the data. This ensures one-to-one communication and guarantees message delivery.</p>
+  <p>In queue mode, producers block until one consumer receives and finishes the stream. Bytes flow directly with end-to-end backpressure and are not buffered by Patchwork.</p>
   <pre># Producer blocks until consumer connects
 curl {{.BaseURL}}/public/queue/jobs -d "process-file.txt"
 
 # Consumer receives the message
 curl {{.BaseURL}}/public/queue/jobs</pre>
 
-  <h3>Pubsub Behavior (Non-blocking)</h3>
+  <h3>Pubsub Behavior (Streaming broadcast)</h3>
   <p><strong>Paths:</strong> <code>/pubsub/...</code> or <code>/./...?pubsub=true</code></p>
-  <p>In pubsub mode, producers send data immediately and don't wait for consumers. All connected consumers receive the same message (broadcast).</p>
-  <pre># Producer sends immediately (non-blocking)
+  <p>In pubsub mode, producers stream to all consumers connected when publishing begins. The slowest consumer backpressures the publisher; disconnected consumers are dropped independently.</p>
+  <pre># Producer streams to current subscribers
 curl {{.BaseURL}}/public/pubsub/events -d "user-login"
 
 # Multiple consumers can receive the same event
@@ -92,7 +92,7 @@ curl {{.BaseURL}}/public/pubsub/events  # Consumer 2</pre>
   <pre># Default: queue behavior (blocking)
 curl {{.BaseURL}}/public/./notifications -d "alert"
 
-# Override: pubsub behavior (non-blocking)
+# Override: streaming pubsub behavior
 curl {{.BaseURL}}/public/./notifications?pubsub=true -d "broadcast"</pre>
 
   <h3>Request-Responder Behavior</h3>
@@ -189,7 +189,7 @@ curl -H "Patch-Status: 201" -d '{"created": true}' {{.BaseURL}}/public/res/api/u
   <ul>
     <li><strong>/_/...</strong> → Special control endpoints (user-owned namespaces only)</li>
     <li><strong>/./...</strong> → Flexible space - defaults to blocking/queue behavior, can be switched to pubsub with <code>?pubsub=true</code></li>
-    <li><strong>/pubsub/...</strong> → All requests use pubsub behavior (non-blocking, broadcast to all consumers)</li>
+    <li><strong>/pubsub/...</strong> → Streaming broadcast to all currently connected consumers</li>
     <li><strong>/queue/...</strong> → All requests use blocking/queue behavior (one-to-one communication)</li>
     <li><strong>/req/...</strong> → Request side of request-responder pattern</li>
     <li><strong>/res/...</strong> → Response side of request-responder pattern (pairs with matching /req/ paths)</li>
@@ -380,8 +380,8 @@ curl {{.BaseURL}}/public/queue/jobs -d "encode-video.mp4"
 # Consumer receives the job
 curl {{.BaseURL}}/public/queue/jobs</pre>
 
-  <p><strong>Pubsub behavior</strong> (broadcast, non-blocking):</p>
-  <pre># Producer sends immediately to all consumers
+  <p><strong>Pubsub behavior</strong> (streaming broadcast):</p>
+  <pre># Producer streams to all current consumers
 curl {{.BaseURL}}/public/pubsub/events -d "user-login:alice"
 
 # Multiple consumers can listen

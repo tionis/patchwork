@@ -55,8 +55,8 @@ then the post will block until it is received.
 
 The default mode is a MPMC queue, where the first to connect are able to
 publish/subscribe. But you can also specify publish-subscribe (pubsub) mode.
-In pubsub mode, the publisher will become non-blocking and their data will be
-transmitted to each connected subscriber:
+In pubsub mode, the publisher streams data to each connected subscriber. The
+slowest subscriber applies backpressure:
 
 ```bash
 curl https://patchwork.example.com/p/a61b1f42?pubsub=true -d "hello, world"
@@ -95,7 +95,7 @@ All namespaces (public, user, etc.) now support the following sub-paths:
 
 - **`/_/...`** → Special control endpoints (user-owned namespaces only)
 - **`/./...`** → Flexible space - defaults to blocking/queue behavior, can be switched to pubsub with `?pubsub=true`
-- **`/pubsub/...`** → All requests use pubsub behavior (non-blocking, broadcast to all consumers)
+- **`/pubsub/...`** → Streaming broadcast to all currently connected consumers
 - **`/queue/...`** → All requests use blocking/queue behavior (one-to-one communication)
 - **`/req/...`** → Request side of request-responder pattern
 - **`/res/...`** → Response side of request-responder pattern (pairs with matching /req/ paths)
@@ -129,7 +129,9 @@ Patchwork supports behavior determination based on the path structure, providing
 ### Queue Behavior (Blocking)
 **Paths**: `/queue/...` or `/./...` (default)
 
-In queue mode, producers will block until a consumer is available to receive the data. This ensures one-to-one communication and guarantees message delivery.
+In queue mode, producers block until one consumer receives and finishes the
+stream. Bytes flow directly between the two HTTP requests with end-to-end
+backpressure; Patchwork does not buffer the payload.
 
 ```bash
 # Producer blocks until consumer connects
@@ -139,13 +141,16 @@ curl https://patchwork.example.com/public/queue/jobs -d "process-file.txt"
 curl https://patchwork.example.com/public/queue/jobs
 ```
 
-### Pubsub Behavior (Non-blocking)
+### Pubsub Behavior (Streaming broadcast)
 **Paths**: `/pubsub/...` or `/./...?pubsub=true`
 
-In pubsub mode, producers send data immediately and don't wait for consumers. All connected consumers receive the same message (broadcast).
+In pubsub mode, producers stream to all consumers connected when publishing
+begins. A slow consumer backpressures the publisher; a disconnected consumer is
+dropped without interrupting the others. If nobody is connected, the request
+returns immediately without buffering its body.
 
 ```bash
-# Producer sends immediately (non-blocking)
+# Producer streams to current subscribers
 curl https://patchwork.example.com/public/pubsub/events -d "user-login"
 
 # Multiple consumers can receive the same event
@@ -162,7 +167,7 @@ The flexible space defaults to queue behavior but can be switched to pubsub with
 # Default: queue behavior (blocking)
 curl https://patchwork.example.com/public/./notifications -d "alert"
 
-# Override: pubsub behavior (non-blocking)
+# Override: streaming pubsub behavior
 curl https://patchwork.example.com/public/./notifications?pubsub=true -d "broadcast"
 ```
 
@@ -354,9 +359,9 @@ curl https://patchwork.example.com/public/queue/jobs -d "encode-video.mp4"
 curl https://patchwork.example.com/public/queue/jobs
 ```
 
-**Pubsub behavior** (broadcast, non-blocking):
+**Pubsub behavior** (streaming broadcast):
 ```bash
-# Producer sends immediately to all consumers
+# Producer streams to all current consumers
 curl https://patchwork.example.com/public/pubsub/events -d "user-login:alice"
 
 # Multiple consumers can listen
@@ -714,8 +719,8 @@ then the post will block until it is received.
 
 The default mode is a MPMC queue, where the first to connect are able to
 publish/subscribe. But you can also specify publish-subscribe (pubsub) mode.
-In pubsub mode, the publisher will become non-blocking and their data will be
-transmitted to each connected subscriber:
+In pubsub mode, the publisher streams data to each connected subscriber with
+end-to-end backpressure:
 
 ```bash
 curl https://patchwork.example.com/p/a61b1f42?pubsub=true -d "hello, world"
