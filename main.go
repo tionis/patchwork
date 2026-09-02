@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/netip"
@@ -257,6 +258,7 @@ func (t *TokenInfo) UnmarshalYAML(node *yaml.Node) error {
 // UserAuth represents the config.yaml configuration for a user.
 type UserAuth struct {
 	Tokens    map[string]TokenInfo `yaml:"tokens"`
+	Ntfy      types.NtfyConfig     `yaml:"ntfy,omitempty"`
 	UpdatedAt time.Time            `yaml:"-"`
 }
 
@@ -291,6 +293,7 @@ type authFetchFailure struct {
 var errAuthCacheInvalidated = errors.New("auth cache invalidated during refresh")
 
 const maxAuthConfigBytes = 1 << 20
+const maxNotificationBytes = 1 << 20
 
 // =============================================================================
 // UTILITY FUNCTIONS
@@ -979,57 +982,47 @@ func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch user configuration to get notification settings
-	userConfig, err := s.fetchUserConfig(username)
-	if err != nil {
-		s.logger.Error("Failed to fetch user config", "error", err, "username", username)
-		http.Error(w, "Failed to fetch user configuration", http.StatusInternalServerError)
-		return
-	}
-
-	// Check if notification backend is configured
-	if userConfig.Ntfy.Type == "" {
-		s.logger.Error("No notification backend configured for user", "username", username)
-		http.Error(w, "Notification backend not configured", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Create notification backend
-	backend, err := notification.BackendFactory(s.logger, userConfig.Ntfy)
-	if err != nil {
-		s.logger.Error("Failed to create notification backend", "error", err, "username", username)
-		http.Error(w, "Failed to create notification backend", http.StatusInternalServerError)
-		return
-	}
-	defer backend.Close()
-
 	// Parse the notification message
 	var msg types.NotificationMessage
 	var parseErr error
 
 	if r.Method == http.MethodPost {
-		contentType := r.Header.Get("Content-Type")
+		if r.ContentLength > maxNotificationBytes {
+			http.Error(w, "Notification body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxNotificationBytes)
+		defer r.Body.Close()
 
-		if strings.Contains(contentType, "application/json") {
-			// Parse JSON body
-			body, err := io.ReadAll(r.Body)
+		contentType := ""
+		if rawContentType := r.Header.Get("Content-Type"); rawContentType != "" {
+			var err error
+			contentType, _, err = mime.ParseMediaType(rawContentType)
 			if err != nil {
-				s.logger.Error("Failed to read request body", "error", err)
-				http.Error(w, "Failed to read request body", http.StatusBadRequest)
+				http.Error(w, "Invalid Content-Type", http.StatusBadRequest)
 				return
 			}
-			defer r.Body.Close()
+		}
 
-			if err := json.Unmarshal(body, &msg); err != nil {
+		switch contentType {
+		case "application/json":
+			// Parse JSON body
+			decoder := json.NewDecoder(r.Body)
+			if err := decoder.Decode(&msg); err != nil {
 				s.logger.Error("Failed to parse JSON", "error", err)
-				http.Error(w, "Invalid JSON", http.StatusBadRequest)
+				writeNotificationParseError(w, "Invalid JSON", err)
 				return
 			}
-		} else if strings.Contains(contentType, "application/x-www-form-urlencoded") {
+			var trailing any
+			if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+				http.Error(w, "JSON body must contain exactly one value", http.StatusBadRequest)
+				return
+			}
+		case "application/x-www-form-urlencoded":
 			// Parse form data
 			if err := r.ParseForm(); err != nil {
 				s.logger.Error("Failed to parse form", "error", err)
-				http.Error(w, "Failed to parse form", http.StatusBadRequest)
+				writeNotificationParseError(w, "Failed to parse form", err)
 				return
 			}
 
@@ -1039,20 +1032,22 @@ func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, parseErr.Error(), http.StatusBadRequest)
 				return
 			}
-		} else {
+		case "", "text/plain":
 			// Treat as plain text
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				s.logger.Error("Failed to read request body", "error", err)
-				http.Error(w, "Failed to read request body", http.StatusBadRequest)
+				writeNotificationParseError(w, "Failed to read request body", err)
 				return
 			}
-			defer r.Body.Close()
 
 			msg = types.NotificationMessage{
 				Type:    "plain",
 				Content: string(body),
 			}
+		default:
+			http.Error(w, "Unsupported Content-Type", http.StatusUnsupportedMediaType)
+			return
 		}
 	} else if r.Method == http.MethodGet {
 		// Parse query parameters
@@ -1074,6 +1069,32 @@ func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Content is required", http.StatusBadRequest)
 		return
 	}
+	if msg.Type != "plain" && msg.Type != "markdown" && msg.Type != "html" {
+		http.Error(w, "Unsupported notification type", http.StatusBadRequest)
+		return
+	}
+
+	// Authentication and notification configuration come from the same cached
+	// document, avoiding a second Forgejo request and a mixed-version decision.
+	userAuth, err := s.authCache.GetUserAuth(username)
+	if err != nil {
+		s.logger.Error("Failed to fetch user config", "error", err, "username", username)
+		http.Error(w, "Failed to fetch user configuration", http.StatusInternalServerError)
+		return
+	}
+	if userAuth.Ntfy.Type == "" {
+		s.logger.Error("No notification backend configured for user", "username", username)
+		http.Error(w, "Notification backend not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	backend, err := notification.BackendFactory(s.logger, userAuth.Ntfy)
+	if err != nil {
+		s.logger.Error("Failed to create notification backend", "error", err, "username", username)
+		http.Error(w, "Failed to create notification backend", http.StatusInternalServerError)
+		return
+	}
+	defer backend.Close()
 
 	// Send the notification
 	if err := backend.SendNotification(msg); err != nil {
@@ -1098,55 +1119,13 @@ func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// fetchUserConfig fetches the user's configuration from Forgejo.
-func (s *server) fetchUserConfig(username string) (*types.Config, error) {
-	return s.fetchUserConfigFile(username, "config.yaml")
-}
-
-// fetchUserConfigFile fetches a config.yaml file from Forgejo.
-func (s *server) fetchUserConfigFile(username, filename string) (*types.Config, error) {
-	data, err := s.fetchFileFromForgejo(username, filename)
-	if err != nil {
-		return nil, err
+func writeNotificationParseError(w http.ResponseWriter, message string, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		http.Error(w, "Notification body too large", http.StatusRequestEntityTooLarge)
+		return
 	}
-
-	var config types.Config
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse %s: %w", filename, err)
-	}
-
-	return &config, nil
-}
-
-// fetchUserAuthFile fetches a config.yaml file from Forgejo.
-// fetchFileFromForgejo fetches a file from a user's .patchwork repository.
-func (s *server) fetchFileFromForgejo(username, filename string) ([]byte, error) {
-	apiURL := fmt.Sprintf("%s/api/v1/repos/%s/.patchwork/media/%s", s.forgejoURL, username, filename)
-
-	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Accept", "application/octet-stream")
-	req.Header.Set("Authorization", "token "+s.forgejoToken)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch %s: %w", filename, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("%s not found", filename)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	return io.ReadAll(resp.Body)
+	http.Error(w, message, http.StatusBadRequest)
 }
 
 // parseNotificationFromQuery parses notification data from URL query parameters.

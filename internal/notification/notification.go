@@ -33,6 +33,8 @@ type MatrixBackend struct {
 	logger      *slog.Logger
 }
 
+const maxMatrixResponseBytes = 64 << 10
+
 // NewMatrixBackend creates a new Matrix notification backend.
 func NewMatrixBackend(logger *slog.Logger, config map[string]interface{}) (*MatrixBackend, error) {
 	accessToken, ok := config["access_token"].(string)
@@ -159,7 +161,6 @@ func (m *MatrixBackend) sendMatrixMessage(roomID string, message map[string]inte
 
 	m.logger.Debug("Sending Matrix message",
 		"roomID", roomID,
-		"message", message,
 		"matrixUser", m.user,
 		"endpoint", m.endpoint,
 		"url", apiURL)
@@ -186,11 +187,14 @@ func (m *MatrixBackend) sendMatrixMessage(roomID string, message map[string]inte
 	}
 	defer resp.Body.Close()
 
-	response, err := io.ReadAll(resp.Body)
+	response, err := io.ReadAll(io.LimitReader(resp.Body, maxMatrixResponseBytes+1))
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
-	m.logger.Debug("Matrix response", "response", string(response), "code", resp.StatusCode)
+	if len(response) > maxMatrixResponseBytes {
+		return fmt.Errorf("matrix API response exceeds %d bytes", maxMatrixResponseBytes)
+	}
+	m.logger.Debug("Matrix response", "response_bytes", len(response), "code", resp.StatusCode)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("matrix API returned status %d", resp.StatusCode)

@@ -404,6 +404,18 @@ func TestMatrixBackendSendNotificationErrors(t *testing.T) {
 			t.Fatalf("expected status error, got %v", err)
 		}
 	})
+
+	t.Run("oversized matrix response is rejected", func(t *testing.T) {
+		backend, _ := newMatrixBackendForTest(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, strings.Repeat("x", maxMatrixResponseBytes+1))
+		})
+
+		err := backend.SendNotification(types.NotificationMessage{Type: "plain", Content: "message"})
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("expected oversized response error, got %v", err)
+		}
+	})
 }
 
 func TestMatrixBackendConcurrentSendNotification(t *testing.T) {

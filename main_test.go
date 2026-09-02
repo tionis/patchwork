@@ -2466,6 +2466,108 @@ tokens:
 	}
 }
 
+func TestHTTPRouterNotificationUsesOneBoundedConfigSnapshot(t *testing.T) {
+	var matrixRequests atomic.Int32
+	matrix := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		matrixRequests.Add(1)
+		if got := r.Header.Get("Authorization"); got != "Bearer matrix-token" {
+			t.Errorf("Matrix authorization = %q", got)
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("Matrix method = %s, want POST", r.Method)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer matrix.Close()
+
+	var forgejoRequests atomic.Int32
+	config := fmt.Sprintf(`
+tokens:
+  notify-token:
+    POST: ["/_/ntfy"]
+ntfy:
+  type: matrix
+  config:
+    access_token: matrix-token
+    user: "@bot:example.test"
+    endpoint: %q
+    room_id: "!room:example.test"
+`, matrix.URL)
+	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		forgejoRequests.Add(1)
+		_, _ = io.WriteString(w, config)
+	}))
+	defer forgejo.Close()
+
+	srv := newHTTPServerForTest(t, forgejo.URL)
+	req := httptest.NewRequest(http.MethodPost, "/u/alice/_/ntfy", strings.NewReader(`{"type":"plain","message":"hello"}`))
+	req.Header.Set("Authorization", "Bearer notify-token")
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	w := httptest.NewRecorder()
+
+	srv.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Notification status = %d: %s", w.Code, w.Body.String())
+	}
+	if got := forgejoRequests.Load(); got != 1 {
+		t.Fatalf("Notification fetched config %d times, want one shared snapshot", got)
+	}
+	if got := matrixRequests.Load(); got != 1 {
+		t.Fatalf("Matrix received %d notifications, want 1", got)
+	}
+}
+
+func TestHTTPRouterNotificationBodyLimit(t *testing.T) {
+	var forgejoRequests atomic.Int32
+	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		forgejoRequests.Add(1)
+		_, _ = io.WriteString(w, "tokens:\n  notify-token:\n    POST: ['/_/ntfy']\n")
+	}))
+	defer forgejo.Close()
+	srv := newHTTPServerForTest(t, forgejo.URL)
+
+	tests := []struct {
+		name          string
+		contentLength int64
+		body          string
+		contentType   string
+	}{
+		{
+			name:          "known content length",
+			contentLength: maxNotificationBytes + 1,
+			body:          strings.Repeat("x", maxNotificationBytes+1),
+			contentType:   "text/plain",
+		},
+		{
+			name:          "chunked JSON body",
+			contentLength: -1,
+			body:          `{"message":"` + strings.Repeat("x", maxNotificationBytes) + `"}`,
+			contentType:   "application/json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/u/alice/_/ntfy", strings.NewReader(tt.body))
+			req.ContentLength = tt.contentLength
+			req.Header.Set("Authorization", "Bearer notify-token")
+			req.Header.Set("Content-Type", tt.contentType)
+			w := httptest.NewRecorder()
+
+			srv.Handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("Status = %d, want 413: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+	if got := forgejoRequests.Load(); got != 1 {
+		t.Fatalf("Config fetched %d times across cached requests, want 1", got)
+	}
+}
+
 func TestHTTPRouterForwardHookMessagePassing(t *testing.T) {
 	srv := newHTTPServerForTest(t, "")
 

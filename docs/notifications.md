@@ -2,6 +2,10 @@
 
 Patchwork now includes a built-in notification system that allows scripts to send notifications through various backends like Matrix, Discord, and more.
 
+Notification request bodies are limited to 1 MiB because they are structured
+control messages parsed in memory. This limit does not apply to relay channel
+payloads, which stream end to end.
+
 ## Quick Start
 
 1. **Create a config.yaml file** in your `.patchwork` repository:
