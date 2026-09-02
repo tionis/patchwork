@@ -262,12 +262,34 @@ type UserAuth struct {
 // AuthCache represents cached auth data with expiration.
 type AuthCache struct {
 	data         map[string]*UserAuth
-	mutex        sync.RWMutex
+	mutex        sync.Mutex
 	ttl          time.Duration
+	staleGrace   time.Duration
 	forgejoURL   string
 	forgejoToken string
 	logger       *slog.Logger
+	httpClient   *http.Client
+	now          func() time.Time
+	inflight     map[string]*authFetch
+	generations  map[string]uint64
+	failures     map[string]authFetchFailure
+	retryDelay   time.Duration
 }
+
+type authFetch struct {
+	done chan struct{}
+	auth *UserAuth
+	err  error
+}
+
+type authFetchFailure struct {
+	at  time.Time
+	err error
+}
+
+var errAuthCacheInvalidated = errors.New("auth cache invalidated during refresh")
+
+const maxAuthConfigBytes = 1 << 20
 
 // =============================================================================
 // UTILITY FUNCTIONS
@@ -440,7 +462,7 @@ func (s *server) authenticateToken(
 		)
 		s.metrics.RecordAuthRequest("error")
 
-		return false, fmt.Sprintf("token validation error: %v", err), nil
+		return false, "token validation error", err
 	}
 
 	if !valid {
@@ -510,11 +532,17 @@ func NewAuthCache(
 ) *AuthCache {
 	return &AuthCache{
 		data:         make(map[string]*UserAuth),
-		mutex:        sync.RWMutex{},
 		ttl:          ttl,
+		staleGrace:   time.Minute,
 		forgejoURL:   forgejoURL,
 		forgejoToken: forgejoToken,
 		logger:       logger,
+		httpClient:   &http.Client{Timeout: 10 * time.Second},
+		now:          time.Now,
+		inflight:     make(map[string]*authFetch),
+		generations:  make(map[string]uint64),
+		failures:     make(map[string]authFetchFailure),
+		retryDelay:   time.Second,
 	}
 }
 
@@ -538,9 +566,7 @@ func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 	req.Header.Set("Accept", "application/octet-stream")
 	req.Header.Set("Authorization", "token "+cache.forgejoToken)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	resp, err := client.Do(req)
+	resp, err := cache.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch auth: %w", err)
 	}
@@ -558,7 +584,7 @@ func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 
 		return &UserAuth{
 			Tokens:    make(map[string]TokenInfo),
-			UpdatedAt: time.Now(),
+			UpdatedAt: cache.now(),
 		}, nil
 	}
 
@@ -571,11 +597,14 @@ func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAuthConfigBytes+1))
 	if err != nil {
 		cache.logger.Error("Failed to read response body", "username", username, "error", err)
 
 		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if len(body) > maxAuthConfigBytes {
+		return nil, fmt.Errorf("auth config exceeds %d bytes", maxAuthConfigBytes)
 	}
 
 	var auth UserAuth
@@ -585,7 +614,10 @@ func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
-	auth.UpdatedAt = time.Now()
+	if auth.Tokens == nil {
+		auth.Tokens = make(map[string]TokenInfo)
+	}
+	auth.UpdatedAt = cache.now()
 	cache.logger.Info("Fetched auth from Forgejo", "username", username, "tokens", len(auth.Tokens))
 
 	return &auth, nil
@@ -594,46 +626,99 @@ func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 // GetUserAuth retrieves auth data for a user, using cache if available and not expired.
 func (cache *AuthCache) GetUserAuth(username string) (*UserAuth, error) {
 	cache.logger.Debug("Getting user auth from cache", "username", username)
-	cache.mutex.RLock()
-	auth, exists := cache.data[username]
-	cache.mutex.RUnlock()
-
-	// Check if cached data is still valid
-	if exists && time.Since(auth.UpdatedAt) < cache.ttl {
-		cache.logger.Debug("Using cached auth data", "username", username)
-		cache.logger.Debug("Returning auth data", "username", username, "auth", auth)
-		return auth, nil
-	}
-
-	// Fetch fresh data
-	cache.logger.Debug("Fetching fresh auth data", "username", username)
-	freshAuth, err := cache.fetchUserAuth(username)
-	if err != nil {
-		cache.logger.Error("Failed to fetch auth", "username", username, "error", err)
-		// Return cached data if available, even if expired
-		if exists {
-			cache.logger.Warn("Using expired auth data", "username", username)
-			cache.logger.Debug("Returning auth data", "username", username, "auth", auth)
+	for {
+		cache.mutex.Lock()
+		auth, exists := cache.data[username]
+		if exists && cache.cacheAge(auth) < cache.ttl {
+			cache.mutex.Unlock()
+			cache.logger.Debug("Using cached auth data", "username", username)
 			return auth, nil
 		}
+		if failure, failedRecently := cache.failures[username]; failedRecently {
+			failureAge := cache.now().Sub(failure.at)
+			if failureAge >= 0 && failureAge < cache.retryDelay {
+				cache.mutex.Unlock()
+				return cache.staleAuthOrError(username, failure.err)
+			}
+		}
 
-		return nil, err
+		if fetch, fetching := cache.inflight[username]; fetching {
+			cache.mutex.Unlock()
+			<-fetch.done
+			if errors.Is(fetch.err, errAuthCacheInvalidated) {
+				continue
+			}
+			if fetch.err == nil {
+				return fetch.auth, nil
+			}
+			return cache.staleAuthOrError(username, fetch.err)
+		}
+
+		generation := cache.generations[username]
+		fetch := &authFetch{done: make(chan struct{})}
+		cache.inflight[username] = fetch
+		cache.mutex.Unlock()
+
+		cache.logger.Debug("Fetching fresh auth data", "username", username)
+		freshAuth, fetchErr := cache.fetchUserAuth(username)
+
+		cache.mutex.Lock()
+		if cache.generations[username] != generation {
+			fetchErr = errAuthCacheInvalidated
+			freshAuth = nil
+		} else if fetchErr == nil {
+			cache.data[username] = freshAuth
+			delete(cache.failures, username)
+		} else {
+			cache.failures[username] = authFetchFailure{at: cache.now(), err: fetchErr}
+		}
+		fetch.auth = freshAuth
+		fetch.err = fetchErr
+		delete(cache.inflight, username)
+		close(fetch.done)
+		cache.mutex.Unlock()
+
+		if errors.Is(fetchErr, errAuthCacheInvalidated) {
+			continue
+		}
+		if fetchErr == nil {
+			cache.logger.Debug("Updated auth cache", "username", username)
+			return freshAuth, nil
+		}
+		cache.logger.Error("Failed to fetch auth", "username", username, "error", fetchErr)
+		return cache.staleAuthOrError(username, fetchErr)
 	}
+}
 
-	// Update cache
+func (cache *AuthCache) cacheAge(auth *UserAuth) time.Duration {
+	age := cache.now().Sub(auth.UpdatedAt)
+	if age < 0 {
+		return 0
+	}
+	return age
+}
+
+func (cache *AuthCache) staleAuthOrError(username string, fetchErr error) (*UserAuth, error) {
 	cache.mutex.Lock()
-	cache.data[username] = freshAuth
+	auth, exists := cache.data[username]
 	cache.mutex.Unlock()
 
-	cache.logger.Debug("Updated auth cache", "username", username)
-	cache.logger.Debug("Returning auth data", "username", username, "auth", freshAuth)
-	return freshAuth, nil
+	if exists && cache.staleGrace > 0 && cache.cacheAge(auth) < cache.ttl+cache.staleGrace {
+		cache.logger.Warn("Using stale auth data during backend outage",
+			"username", username,
+			"age", cache.cacheAge(auth),
+			"max_age", cache.ttl+cache.staleGrace)
+		return auth, nil
+	}
+	return nil, fmt.Errorf("refresh auth for %q: %w", username, fetchErr)
 }
 
 // InvalidateUser removes a user's auth data from the cache.
 func (cache *AuthCache) InvalidateUser(username string) {
 	cache.mutex.Lock()
 	delete(cache.data, username)
+	delete(cache.failures, username)
+	cache.generations[username]++
 	cache.mutex.Unlock()
 	cache.logger.Info("Invalidated auth cache", "username", username)
 }
@@ -647,7 +732,7 @@ func (cache *AuthCache) validateToken(
 	if err != nil {
 		cache.logger.Debug("Failed to get user auth", "username", username, "error", err)
 
-		return false, "user not found", nil, nil
+		return false, "authentication backend unavailable", nil, err
 	}
 
 	tokenInfo, exists := auth.Tokens[token]
@@ -2577,9 +2662,22 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	aclTTL := 5 * time.Minute // default value
 
 	if aclTTLStr != "" {
-		if parsedTTL, err := time.ParseDuration(aclTTLStr); err == nil {
-			aclTTL = parsedTTL
+		parsedTTL, err := time.ParseDuration(aclTTLStr)
+		if err != nil || parsedTTL <= 0 {
+			logger.Error("Invalid ACL_TTL, aborting server start", "value", aclTTLStr)
+			return nil
 		}
+		aclTTL = parsedTTL
+	}
+
+	aclStaleGrace := time.Minute
+	if value := os.Getenv("ACL_STALE_GRACE"); value != "" {
+		parsedGrace, err := time.ParseDuration(value)
+		if err != nil || parsedGrace < 0 {
+			logger.Error("Invalid ACL_STALE_GRACE, aborting server start", "value", value)
+			return nil
+		}
+		aclStaleGrace = parsedGrace
 	}
 
 	// Read server secret key
@@ -2606,6 +2704,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 
 	// Initialize auth cache
 	authCache := NewAuthCache(forgejoURL, forgejoToken, aclTTL, logger.WithGroup("auth"))
+	authCache.staleGrace = aclStaleGrace
 
 	// Initialize metrics
 	metricsInstance := metrics.NewMetrics()

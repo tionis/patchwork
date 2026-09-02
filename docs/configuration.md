@@ -200,6 +200,8 @@ Server configuration is provided via environment variables:
 - `FORGEJO_URL` - Forgejo/Gitea instance URL (default: https://forge.tionis.dev)
 - `FORGEJO_TOKEN` - Forgejo/Gitea API token for accessing repositories
 - `ACL_TTL` - Cache TTL for configuration files (default: 5m)
+- `ACL_STALE_GRACE` - Additional time an expired ACL can be used when Forgejo
+  cannot be reached (default: 1m, `0` disables stale authorization)
 - `SECRET_KEY` - Server secret key for HMAC generation (required for hooks)
 - `TRUSTED_PROXY_CIDRS` - Comma-separated CIDR ranges for reverse proxies that
   are allowed to supply `X-Forwarded-For`, `CF-Connecting-IP`, or

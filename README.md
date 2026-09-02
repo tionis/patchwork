@@ -577,6 +577,8 @@ go build -o patchwork .
 - `FORGEJO_TOKEN`: API token for accessing Forgejo/Gitea (required)
 - `FORGEJO_URL`: URL of your Forgejo/Gitea instance (default: https://forge.tionis.dev)
 - `ACL_TTL`: Cache duration for ACL files (default: 5m)
+- `ACL_STALE_GRACE`: Maximum additional time an expired ACL may be used during
+  a Forgejo outage (default: 1m; set to `0` to fail closed immediately)
 - `TRUSTED_PROXY_CIDRS`: Comma-separated proxy networks whose forwarded client
   headers may be trusted (for example `127.0.0.1/32,10.0.0.0/8`). Forwarded
   headers are ignored by default.

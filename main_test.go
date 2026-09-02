@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -341,9 +343,13 @@ func TestGetHTTPServer(t *testing.T) {
 	originalForgejoToken := os.Getenv("FORGEJO_TOKEN")
 	originalSecretKey := os.Getenv("SECRET_KEY")
 	originalACLTTL := os.Getenv("ACL_TTL")
+	originalACLStaleGrace := os.Getenv("ACL_STALE_GRACE")
 	originalTrustedProxies := os.Getenv("TRUSTED_PROXY_CIDRS")
 	if err := os.Setenv("TRUSTED_PROXY_CIDRS", ""); err != nil {
 		t.Fatalf("Failed to clear TRUSTED_PROXY_CIDRS: %v", err)
+	}
+	if err := os.Setenv("ACL_STALE_GRACE", ""); err != nil {
+		t.Fatalf("Failed to clear ACL_STALE_GRACE: %v", err)
 	}
 
 	defer func() {
@@ -358,6 +364,9 @@ func TestGetHTTPServer(t *testing.T) {
 		}
 		if err := os.Setenv("ACL_TTL", originalACLTTL); err != nil {
 			t.Logf("Failed to restore ACL_TTL: %v", err)
+		}
+		if err := os.Setenv("ACL_STALE_GRACE", originalACLStaleGrace); err != nil {
+			t.Logf("Failed to restore ACL_STALE_GRACE: %v", err)
 		}
 		if err := os.Setenv("TRUSTED_PROXY_CIDRS", originalTrustedProxies); err != nil {
 			t.Logf("Failed to restore TRUSTED_PROXY_CIDRS: %v", err)
@@ -816,6 +825,139 @@ func TestNewAuthCache(t *testing.T) {
 
 	if len(cache.data) != 0 {
 		t.Errorf("Expected empty data map, got %d entries", len(cache.data))
+	}
+}
+
+func TestAuthCacheCoalescesConcurrentRefreshes(t *testing.T) {
+	var requests atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		_, _ = io.WriteString(w, "tokens:\n  shared:\n    GET: ['*']\n")
+	}))
+	defer forgejo.Close()
+
+	cache := NewAuthCache(forgejo.URL, "token", time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	const callers = 64
+	results := make(chan error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			auth, err := cache.GetUserAuth("alice")
+			if err == nil {
+				if _, ok := auth.Tokens["shared"]; !ok {
+					err = errors.New("refreshed auth omitted shared token")
+				}
+			}
+			results <- err
+		}()
+	}
+	<-started
+	close(release)
+	wg.Wait()
+	close(results)
+
+	for err := range results {
+		if err != nil {
+			t.Fatalf("concurrent refresh failed: %v", err)
+		}
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("Concurrent cache miss made %d backend requests, want 1", got)
+	}
+}
+
+func TestAuthCacheInvalidationWinsAgainstInflightRefresh(t *testing.T) {
+	var requests atomic.Int32
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		request := requests.Add(1)
+		if request == 1 {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		_, _ = fmt.Fprintf(w, "tokens:\n  fetch-%d:\n    GET: ['*']\n", request)
+	}))
+	defer forgejo.Close()
+
+	cache := NewAuthCache(forgejo.URL, "token", time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	result := make(chan *UserAuth, 1)
+	errResult := make(chan error, 1)
+	go func() {
+		auth, err := cache.GetUserAuth("alice")
+		result <- auth
+		errResult <- err
+	}()
+
+	<-firstStarted
+	cache.InvalidateUser("alice")
+	close(releaseFirst)
+
+	auth := <-result
+	if err := <-errResult; err != nil {
+		t.Fatalf("refresh after invalidation: %v", err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("Invalidated in-flight refresh made %d requests, want 2", got)
+	}
+	if _, stale := auth.Tokens["fetch-1"]; stale {
+		t.Fatal("In-flight result repopulated cache after invalidation")
+	}
+	if _, fresh := auth.Tokens["fetch-2"]; !fresh {
+		t.Fatalf("Second refresh result missing: %#v", auth.Tokens)
+	}
+}
+
+func TestAuthCacheStaleGraceIsBounded(t *testing.T) {
+	var requests atomic.Int32
+	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer forgejo.Close()
+
+	cache := NewAuthCache(forgejo.URL, "token", time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cache.staleGrace = 30 * time.Second
+	now := time.Unix(1_700_000_000, 0)
+	cache.now = func() time.Time { return now }
+	cache.data["alice"] = &UserAuth{
+		Tokens:    map[string]TokenInfo{"old-token": {}},
+		UpdatedAt: now.Add(-70 * time.Second),
+	}
+
+	auth, err := cache.GetUserAuth("alice")
+	if err != nil || auth == nil {
+		t.Fatalf("Expected bounded stale fallback, auth=%v err=%v", auth, err)
+	}
+
+	now = now.Add(21 * time.Second)
+	if _, err := cache.GetUserAuth("alice"); err == nil {
+		t.Fatal("Authorization remained fail-open beyond stale grace")
+	}
+	if _, _, _, err := cache.validateToken("alice", "old-token", http.MethodGet, "/", false); err == nil {
+		t.Fatal("Authentication backend failure was hidden as an ordinary token denial")
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("Backend outage caused %d refresh attempts, want retry backoff to keep it at 2", got)
+	}
+}
+
+func TestAuthCacheRejectsOversizedConfig(t *testing.T) {
+	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("x", maxAuthConfigBytes+1))
+	}))
+	defer forgejo.Close()
+
+	cache := NewAuthCache(forgejo.URL, "token", time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if _, err := cache.GetUserAuth("alice"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Oversized auth config error = %v", err)
 	}
 }
 
@@ -2140,6 +2282,7 @@ func TestHTTPRouterPublicRouteMessagePassing(t *testing.T) {
 	t.Setenv("SECRET_KEY", "test-secret-key")
 	t.Setenv("FORGEJO_TOKEN", "test-token")
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("ACL_STALE_GRACE", "")
 	t.Setenv("FORGEJO_URL", "https://forgejo.example.test")
 
 	ctx, cancel := context.WithCancel(context.Background())
