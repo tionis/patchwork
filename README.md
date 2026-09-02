@@ -1,1106 +1,263 @@
 # Patchwork
 
-[![CI](https://github.com/tionis/patchwork/workflows/CI/badge.svg)](https://github.com/tionis/patchwork/actions/workflows/ci.yml)
-[![Test](https://github.com/tionis/patchwork/workflows/Test/badge.svg)](https://github.com/tionis/patchwork/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/tionis/patchwork/branch/main/graph/badge.svg)](https://codecov.io/gh/tionis/patchwork)
-[![Go Report Card](https://goreportcard.com/badge/github.com/tionis/patchwork)](https://goreportcard.com/report/github.com/tionis/patchwork)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+Patchwork is a small HTTP relay for connecting two requests as a live byte
+stream. It is inspired by [patchbay.pub](https://patchbay.pub/) and
+[duct](https://github.com/schollz/duct), and is particularly useful as a
+webhook receiver when the real consumer is behind NAT or only runs on demand.
 
-A simple communication backend for scripts and other small applications.
-Patchwork enables IFTTT-type applications by providing infinite HTTP endpoints
-that serve as a multi-process, multi-consumer (MPMC) queue.
+Patchwork does not store relay bodies. A queue producer and consumer rendezvous,
+then bytes flow directly from the producer request to the consumer response with
+end-to-end backpressure. Cancellation on either side tears down the transfer.
 
-## Features
+## Quick start
 
-- **Channel-based Communication**: HTTP endpoints that act as communication channels
-- **Multiple Operating Modes**: Queue, pubsub, and request-responder patterns for different use cases
-- **Multiple Namespaces**: Public (`/p`), hooks (`/h`, `/r`), user (`/u/{username}`) namespaces
-- **Notification System**: Built-in notification backend support (Matrix, Discord, etc.)
-- **WebSocket Tunneling**: SSH/TCP tunneling via HuProxy integration
-- **Token-based Authentication**: Forgejo-integrated ACL system with caching
-- **Administrative API**: Cache invalidation and user management endpoints
-- **Prometheus Metrics**: Optional endpoint secured by a dedicated bearer token
-- **Rate Limiting**: Built-in rate limiting for public namespaces to prevent abuse
-
-## What does it do?
-
-Patchwork provides infinite HTTP endpoints that can be used to implement powerful
-serverless applications - including desktop notifications, SMS notifications,
-job queues, web hosting, and file sharing. These applications are basically
-just a few lines of bash that wrap a `curl` command.
-
-The philosophy behind this is that the main logic happens on the local machine
-with small scripts. There is a server with an infinite number of virtual channels
-that will relay messages between the publisher and the subscriber.
-
-## Quick Start
-
-### Basic Usage
-
-To subscribe to a channel you can simply make a `GET` request:
-```bash
-curl https://patchwork.example.com/p/a61b1f42
-```
-
-The above will block until something is published to the channel `a61b1f42`. 
-You can easily publish to a channel using a `POST` request:
-```bash
-curl https://patchwork.example.com/p/a61b1f42 -d "hello, world"
-```
-
-The subscriber will immediately receive that data. If you reverse the order,
-then the post will block until it is received.
-
-### Pubsub mode
-
-The default mode is a MPMC queue, where the first to connect are able to
-publish/subscribe. But you can also specify publish-subscribe (pubsub) mode.
-In pubsub mode, the publisher streams data to each connected subscriber. The
-slowest subscriber applies backpressure:
+Builds use the vendored dependency tree and Go 1.26.2:
 
 ```bash
-curl https://patchwork.example.com/p/a61b1f42?pubsub=true -d "hello, world"
+go build -mod=vendor -o patchwork .
+SECRET_KEY="$(openssl rand -hex 32)" ./patchwork start --port 8080
 ```
 
-### Publish with GET
-
-You can also publish with a `GET` request by using the parameter
-`body=X`, making it easier to write href links that can trigger hooks:
+In separate terminals, connect a consumer and producer:
 
 ```bash
-curl https://patchwork.example.com/p/a61b1f42?pubsub=true&body=hello,%20world
+curl --no-buffer http://localhost:8080/public/events
+curl --data-binary @payload.json http://localhost:8080/public/events
 ```
 
-### Request-Responder mode
+Either side may arrive first. Both requests remain open until they are paired
+and the body has been consumed. There is no offline message queue.
 
-Patchwork supports a request-responder pattern using `/req/...` and `/res/...` subnamespaces. This enables HTTP request/response communication through the relay:
+## Relay modes
+
+### Queue
+
+Queue mode is the default. Each producer is paired with exactly one consumer.
+All of these select queue behavior:
+
+```text
+/public/name
+/public/queue/name
+/public/./name
+```
+
+Producers use `POST`, `PUT`, or `PATCH`; consumers use `GET`. The legacy `/p/`
+prefix is an alias for `/public/`. A GET with a non-empty `body` query parameter
+acts as a small producer for shell and browser use:
 
 ```bash
-# Responder waits for requests
-curl https://patchwork.example.com/public/res/api/users
-
-# Requester sends request (blocks until response)
-curl -X POST -d '{"name":"Alice"}' https://patchwork.example.com/public/req/api/users
+curl 'http://localhost:8080/public/demo?body=hello'
 ```
 
-The request-responder mode supports all HTTP methods, header passthrough (including `Patch-Uri` for request path information), and a "double clutch" mode using `?switch=true` that allows dynamic response routing.
+### Pub/sub
 
-## Namespaces
-
-The server is organized by namespaces with different access patterns. Each namespace now supports structured sub-paths that determine the communication behavior:
-
-### Namespace Structure
-
-All namespaces (public, user, etc.) now support the following sub-paths:
-
-- **`/_/...`** → Special control endpoints (user-owned namespaces only)
-- **`/./...`** → Flexible space - defaults to blocking/queue behavior, can be switched to pubsub with `?pubsub=true`
-- **`/pubsub/...`** → Streaming broadcast to all currently connected consumers
-- **`/queue/...`** → All requests use blocking/queue behavior (one-to-one communication)
-- **`/req/...`** → Request side of request-responder pattern
-- **`/res/...`** → Response side of request-responder pattern (pairs with matching /req/ paths)
-
-### Available Namespaces
-
-- **`/public/**`**: Public namespace - no authentication required.
-  Everyone can read and write. Perfect for testing and public communication channels.
-  - Example: `/public/queue/notifications` (blocking), `/public/pubsub/events` (broadcast)
-- **`/p/**`**: Legacy public namespace - maintained for backward compatibility.
-  Maps to the public namespace with default behavior.
-- **`/h/**`**: Forward hooks - GET `/h` to obtain a new channel and secret,
-  then use the secret to POST data to that channel. Anyone can GET data from the channel.
-  Useful for webhooks and notifications where you want to control who can send.
-- **`/r/**`**: Reverse hooks - GET `/r` to obtain a new channel and secret,
-  then anyone can POST data to that channel. Use the secret to GET data from the channel.
-  Useful for collecting data from multiple sources where you want to control who can read.
-- **`/u/{username}/**`**: User namespace - controlled by ACL lists.
-  Access is controlled by YAML ACL files stored in Forgejo/Gitea repositories 
-  that specify which tokens can access which paths. Includes notification endpoints
-  (`/_/ntfy`) for sending alerts and messages.
-- **`/huproxy/{user}/{host}/{port}`**: HTTP-to-TCP WebSocket proxy for tunneling 
-  SSH and other protocols. Based on Google's HUProxy project, this endpoint provides 
-  WebSocket tunneling primarily for SSH connections. Uses token-based authentication 
-  via `Authorization` header.
-
-## Behavior Patterns
-
-Patchwork supports behavior determination based on the path structure, providing more predictable and explicit communication patterns:
-
-### Queue Behavior (Blocking)
-**Paths**: `/queue/...` or `/./...` (default)
-
-In queue mode, producers block until one consumer receives and finishes the
-stream. Bytes flow directly between the two HTTP requests with end-to-end
-backpressure; Patchwork does not buffer the payload.
+Pub/sub sends one live body stream to every subscriber already waiting when the
+publisher starts:
 
 ```bash
-# Producer blocks until consumer connects
-curl https://patchwork.example.com/public/queue/jobs -d "process-file.txt"
-
-# Consumer receives the message
-curl https://patchwork.example.com/public/queue/jobs
+curl --no-buffer http://localhost:8080/public/pubsub/events
+curl --no-buffer http://localhost:8080/public/pubsub/events
+curl -d event http://localhost:8080/public/pubsub/events
 ```
 
-### Pubsub Behavior (Streaming broadcast)
-**Paths**: `/pubsub/...` or `/./...?pubsub=true`
+`/public/./events?pubsub=true` is equivalent. A subscription receives one
+publication and then closes. A publisher with no current subscribers succeeds
+without publishing or retaining the body. Memory use is bounded; the slowest
+connected subscriber applies backpressure while disconnected subscribers are
+removed independently.
 
-In pubsub mode, producers stream to all consumers connected when publishing
-begins. A slow consumer backpressures the publisher; a disconnected consumer is
-dropped without interrupting the others. If nobody is connected, the request
-returns immediately without buffering its body.
+## Webhook hooks
+
+`GET /h` and `GET /r` create an unguessable channel name and a deterministic
+HMAC secret. `SECRET_KEY` must remain stable across restarts if existing hook
+URLs should remain valid.
+
+Forward hooks protect the producing side:
 
 ```bash
-# Producer streams to current subscribers
-curl https://patchwork.example.com/public/pubsub/events -d "user-login"
+hook=$(curl -s http://localhost:8080/h)
+# Read `channel` and `secret` from the JSON response.
 
-# Multiple consumers can receive the same event
-curl https://patchwork.example.com/public/pubsub/events  # Consumer 1
-curl https://patchwork.example.com/public/pubsub/events  # Consumer 2
+# Public consumer, normally kept connected before the webhook arrives:
+curl --no-buffer http://localhost:8080/h/CHANNEL
+
+# Protected producer URL configured at the webhook source:
+curl --data-binary @event.json \
+  'http://localhost:8080/h/CHANNEL?secret=SECRET'
 ```
 
-### Flexible Behavior
-**Paths**: `/./...`
-
-The flexible space defaults to queue behavior but can be switched to pubsub with the `?pubsub=true` query parameter:
+Reverse hooks protect the consuming side:
 
 ```bash
-# Default: queue behavior (blocking)
-curl https://patchwork.example.com/public/./notifications -d "alert"
-
-# Override: streaming pubsub behavior
-curl https://patchwork.example.com/public/./notifications?pubsub=true -d "broadcast"
+curl -d event http://localhost:8080/r/CHANNEL
+curl --no-buffer 'http://localhost:8080/r/CHANNEL?secret=SECRET'
 ```
 
-## Passthrough Headers
+Hook secrets are accepted only in the `secret` query parameter. Request logs
+record query parameter names, not values.
 
-Patchwork preserves webhook request metadata alongside the streamed body.
+## Relayed HTTP metadata
 
-### How It Works
+The consumer receives the original request body plus:
 
-- **Incoming requests**: All end-to-end headers, including repeated values and
-  webhook signature headers, are delivered to the consumer under their original
-  names. Hop-by-hop framing headers are excluded.
-- **Request identity**: `Patch-Method` contains the original method and
-  `Patch-Uri` contains the exact path and query string.
-- **Responder controls**: A request-responder client uses `Patch-Status` for the
-  final status and `Patch-H-*` to set final response headers.
+- `Patch-Method`: the exact producer method.
+- `Patch-Uri`: the exact producer path and query string.
+- Every end-to-end request header under its original name, including repeated
+  webhook signature headers and `Authorization`.
 
-### Example Usage
+Connection-specific and framing headers are discarded. This includes headers
+named by `Connection`, `Content-Length`, `Transfer-Encoding`, and `Upgrade`.
+Patchwork owns response framing and flushes chunks as they arrive.
 
-**Producer side** (sending headers):
+`Patch-Uri` can contain credentials supplied in the producer URL. Treat relay
+consumers as trusted data-plane peers even though Patchwork redacts those values
+from its own logs.
+
+## Request/response rendezvous
+
+Paths below `/req/` and `/res/` form a paired exchange. A requester first sends
+its body on `/req/name`, then waits for a stream on `/res/name`.
+
+A regular responder can predeclare a fixed response while waiting for a request:
+
 ```bash
-curl -X POST \
-  -H "X-Original-IP: 192.168.1.100" \
-  -H "X-User-ID: alice123" \
-  -H "User-Agent: MyApp/1.0" \
-  -d "request data" \
-  https://patchwork.example.com/public/queue/api
+# Start first. The body and controls become the eventual requester response.
+curl -H 'Patch-Status: 201' -H 'Patch-H-X-Result: created' \
+  -d '{"created":true}' http://localhost:8080/public/res/create
+
+curl -d '{"name":"example"}' http://localhost:8080/public/req/create
 ```
 
-**Consumer side** (receiving headers):
+Use switch mode when a worker must inspect the request before constructing a
+response:
+
 ```bash
-curl -v https://patchwork.example.com/public/queue/api
-# Response includes:
-# X-Original-IP: 192.168.1.100
-# X-User-ID: alice123
-# User-Agent: MyApp/1.0
-# Patch-Method: POST
-# Patch-Uri: /public/queue/api
+# Requester; blocks for the final response.
+curl -d '{"task":"build"}' http://localhost:8080/public/req/jobs
+
+# Worker selects a temporary response channel. Its response contains the
+# request body and the relayed Patch-Method, Patch-Uri, and Patch-H-* metadata.
+curl -d worker-42 'http://localhost:8080/public/res/jobs?switch=true'
+
+# Worker posts the computed response. Only these explicit controls are decoded
+# into the original requester's response.
+curl -H 'Patch-Status: 202' -H 'Patch-H-X-Worker: worker-42' \
+  -d accepted http://localhost:8080/public/worker-42
 ```
 
-This enables building proxy-like applications where the original request context is preserved through the relay.
+`Patch-Status` must contain exactly one status from 200 through 599.
+`Patch-H-Name` supplies a final response header. Invalid or unsafe metadata is
+rejected before a regular responder can claim a request. Switch workers time out
+after 30 seconds by default and produce a 504 response.
 
-## Authentication
+## User namespaces
 
-Patchwork uses a Forgejo-integrated authentication system. Each user maintains a `config.yaml` file in their `.patchwork` repository to define access tokens, permissions, notification settings, and HuProxy access.
-
-### User Configuration (`config.yaml`)
-
-For user namespaces (`/u/{username}/`), create a `.patchwork` repository with a `config.yaml` file:
+`/u/{username}/...` is optional and backed by a `config.yaml` file in that
+user's Forgejo repository named `.patchwork`. Supply a token using
+`Authorization: Bearer TOKEN`; an omitted token selects a literal token named
+`public` from the ACL.
 
 ```yaml
-# Unified config.yaml structure - tokens directly at root level
 tokens:
-  "my_token_name":
-    is_admin: false
-    POST: 
-      - "/projects/*/data"  # Can POST to any project's data endpoint
-      - "/_/ntfy"          # Can send notifications
-    GET: 
-      - "/projects/myproject/*"  # Can GET from all paths under myproject
-      - "!/projects/myproject/secret/*" # But nothing in my secret project
-    huproxy:
-      - "*.example.com:*"  # Can access specific hosts via HuProxy
-      - "localhost:*"
-
-  "restricted_token":
-    is_admin: false
-    POST: []  # No POST access
-    GET: 
-      - "*"  # Can GET from all subpaths in this namespace
-
-  "webhook_token":
-    is_admin: false
-    POST: 
-      - "/webhooks/*"  # Can POST to any webhook endpoint
-      - "/_/ntfy"      # Can send notifications
-    GET: 
-      - "/status"  # Can only GET the status endpoint
-
-  "admin_token":
+  public:
+    GET: ["/published/*"]
+  webhook-client:
+    POST: ["/incoming/*", "/_/ntfy"]
+  administrator:
     is_admin: true
-    POST: ["*"]
-    GET: ["*"]
+  tunnel-client:
+    huproxy: ["git.internal.example:22"]
 
-# Optional: Configure notification backend
 ntfy:
   type: matrix
   config:
-    access_token: "your_matrix_access_token"
-    user: "@bot:matrix.org"
-    endpoint: "https://matrix.org"  # optional: Matrix server endpoint
-    room_id: "!roomid:matrix.org"   # optional: specific room ID
+    access_token: "..."
+    user: "@patchwork:example.com"
+    endpoint: "https://matrix.example.com"
+    room_id: "!room:example.com"
 ```
 
-### Permission System
+Permissions use OpenSSH-style pattern lists and are selected by HTTP method.
+ACL fetches are coalesced per user, limited to 1 MiB, cached for `ACL_TTL`, and
+may use stale data only within `ACL_STALE_GRACE`. Administrative cache
+invalidation is available at `/u/{username}/_/invalidate_cache` to an admin
+token.
 
-Each token can have `POST`, `GET`, and `huproxy` permissions defined with glob patterns:
-- Empty array (`[]`) denies all access for that method
-- `"*"` allows access to all subpaths
-- Specific glob patterns like `projects/*/data` allow fine-grained control
-- Negation patterns like `!secret/*` can exclude specific paths
-- Admin tokens (`is_admin: true`) have access to administrative endpoints
+See [configuration](docs/configuration.md) and
+[notifications](docs/notifications.md) for the full formats.
 
-#### Public Token Behavior
+## HuProxy
 
-When no token is provided in user namespaces, the request is treated as using a "public" token. This allows users to create public endpoints within their namespace:
+`/huproxy/{user}/{host}/{port}` tunnels a TCP connection over a binary WebSocket
+after checking the user's `huproxy` ACL. It requires a Forgejo-backed user token:
 
-```yaml
-tokens:
-  "public":
-    is_admin: false
-    GET: 
-      - "/status"     # Allow public status checks
-      - "/health"     # Allow public health checks
-    POST: []          # No public POST access
-  
-  "private_token":
-    is_admin: false
-    GET: ["*"]        # Full read access with token
-    POST: ["/data/*"] # Write access to data endpoints
+```text
+wss://patchwork.example/huproxy/alice/git.internal.example/22
+Authorization: Bearer TOKEN
 ```
 
-**Examples**:
-```bash
-# Public access (no token needed, uses "public" token)
-curl https://patchwork.example.com/u/alice/status
+Only binary WebSocket messages are accepted. Tunnel cancellation closes both
+the WebSocket and TCP sides so blocked reads do not leak connections.
 
-# Authenticated access
-curl https://patchwork.example.com/u/alice/data/logs?token=private_token -d "log entry"
-```
+## Configuration
 
-If no "public" token is defined, requests without authentication will be denied with "token not found".
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SECRET_KEY` | required | HMAC key for hook secrets |
+| `FORGEJO_URL` | `https://forge.tionis.dev` | Forgejo/Gitea base URL |
+| `FORGEJO_TOKEN` | unset | Enables user namespaces, notifications, and HuProxy |
+| `ACL_TTL` | `5m` | Fresh ACL cache duration |
+| `ACL_STALE_GRACE` | `1m` | Maximum stale ACL use after refresh failure; `0` fails closed |
+| `METRICS_TOKEN` | unset | Enables authenticated `/metrics` when set |
+| `TRUSTED_PROXY_CIDRS` | unset | Comma-separated proxies trusted to supply client-IP headers |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN`, or `ERROR` |
+| `LOG_SOURCE` | `false` | Include source locations in logs |
 
-### HuProxy Access
+Only `SECRET_KEY` is required for a public or hook-only deployment. When
+`FORGEJO_TOKEN` is absent, Forgejo-dependent routes fail closed without making
+backend requests. Forwarding headers are ignored unless the direct network peer
+belongs to `TRUSTED_PROXY_CIDRS`.
 
-HuProxy access is configured within each token's definition using the `huproxy` field:
+`GET /healthz` and `GET /status` are liveness endpoints. `/metrics` returns 404
+unless `METRICS_TOKEN` is configured, then requires
+`Authorization: Bearer METRICS_TOKEN`. Do not reuse the more privileged Forgejo
+token.
 
-```yaml
-tokens:
-  "production_ssh_token":
-    huproxy:
-      - "*.production.com:*"
-  "development_access":
-    huproxy:
-      - "*.dev.com:*"
-      - "localhost:*"
-  "backup_script_token":
-    huproxy:
-      - "backup.example.com:22"
-```
+## Containers
 
-### Notification System
-
-The notification endpoint is available at `/u/{username}/_/ntfy` and supports:
-- Multiple message types: `plain`, `markdown`, `html`
-- Various input methods: JSON POST, form POST, GET with query parameters
-- Backend integration: Matrix, Discord, and other notification services
-
-Example notification usage:
-```bash
-curl -X POST "https://patchwork.example.com/u/username/_/ntfy" \
-  -H "Authorization: Bearer your-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "markdown",
-    "title": "Alert",
-    "message": "Something **important** happened!"
-  }'
-```
-
-### Repository Setup
-
-1. **Create `.patchwork` repository**: Each user/organization creates a repository named `.patchwork`
-2. **Add `config.yaml`**: Place the unified configuration in a file named `config.yaml` in the repository root
-3. **Grant access**: Give the special `patchwork` user read access to the `.patchwork` repository
-4. **Caching**: The patchwork server pulls and caches these configuration files as needed
-
-Example repository structure:
-```
-user/.patchwork/
-├── config.yaml
-└── README.md (optional)
-```
-
-## Examples
-
-### Namespace Behavior Examples
-
-**Queue behavior** (one-to-one, blocking):
-```bash
-# Producer waits until consumer connects
-curl https://patchwork.example.com/public/queue/jobs -d "encode-video.mp4"
-
-# Consumer receives the job
-curl https://patchwork.example.com/public/queue/jobs
-```
-
-**Pubsub behavior** (streaming broadcast):
-```bash
-# Producer streams to all current consumers
-curl https://patchwork.example.com/public/pubsub/events -d "user-login:alice"
-
-# Multiple consumers can listen
-curl https://patchwork.example.com/public/pubsub/events  # Logger service
-curl https://patchwork.example.com/public/pubsub/events  # Analytics service
-```
-
-**Flexible behavior** with override:
-```bash
-# Default blocking behavior
-curl https://patchwork.example.com/public/./alerts -d "server-down"
-
-# Override to pubsub
-curl https://patchwork.example.com/public/./alerts?pubsub=true -d "system-update"
-```
-
-**Request-responder pattern**:
-```bash
-# Responder waits for API requests
-curl https://patchwork.example.com/public/res/api/users
-
-# Requester sends GET request (blocks until response)
-curl https://patchwork.example.com/public/req/api/users
-
-# POST request with data and headers
-curl -X POST \
-  -H "Authorization: Bearer token123" \
-  -d '{"name":"Alice"}' \
-  https://patchwork.example.com/public/req/api/users
-
-# Responder can set status code in response
-curl -H "Patch-Status: 201" \
-  -d '{"id":123,"name":"Alice"}' \
-  https://patchwork.example.com/public/res/api/users
-
-# Double clutch mode with dynamic response routing
-# Terminal 1: Requester (blocks waiting for response)
-curl -X POST -d '{"task":"process"}' https://patchwork.example.com/public/req/myservice
-
-# Terminal 2: Responder in switch mode (body = new channel ID)
-curl -X POST "https://patchwork.example.com/public/res/myservice?switch=true" -d "worker-123"
-# Returns the request data and switches to channel "worker-123"
-
-# Terminal 3: Send response on the new channel
-curl -X POST -H 'Patch-Status: 201' -H 'Patch-H-X-Worker: ready' \
-  -d '{"result":"completed"}' https://patchwork.example.com/public/worker-123
-# Original requester receives this response
-```
-
-**Using passthrough headers**:
-```bash
-# Send with context headers
-curl -X POST \
-  -H "Patch-H-Client-IP: 10.0.1.5" \
-  -H "Patch-H-Trace-ID: req-12345" \
-  -d "api-request" \
-  https://patchwork.example.com/public/queue/api
-
-# Receive with original context
-curl -v https://patchwork.example.com/public/queue/api
-# Headers include: Client-IP: 10.0.1.5, Trace-ID: req-12345
-```
-
-### File Sharing
-
-Sending a file:
-```bash
-curl -X POST --data-binary "@test.txt" https://patchwork.example.com/public/queue/files
-```
-
-Receiving a file:
-```bash
-curl https://patchwork.example.com/public/queue/files > test.txt
-```
-
-### Desktop Notifications (Linux)
+The Dockerfile builds and tests with the vendored dependencies:
 
 ```bash
-#!/bin/bash
-MAGIC="notify"
-URL="https://patchwork.example.com/p/notifications"
-
-while [ 1 ]
-do
-  X="$(curl $URL)"
-  if [[ $X =~ ^$MAGIC ]]; then
-    Y="$(echo "$X" | sed "s/$MAGIC*//")"
-    notify-send "$Y"
-  else
-    sleep 10
-  fi
-done
+docker build -t patchwork .
+docker run --rm -p 8080:8080 \
+  -e SECRET_KEY="a-long-random-secret" patchwork
 ```
 
-### Job Queue
-
-Adding jobs to a queue:
-```bash
-#!/bin/bash
-for filename in *.mp3
-do
-  curl https://patchwork.example.com/p/jobs -d $filename
-done
-```
-
-Processing jobs from the queue:
-```bash
-#!/bin/bash
-while true
-do
-  filename=$(curl -s https://patchwork.example.com/p/jobs)
-  if [ "$filename" != "Too Many Requests" ]
-  then
-    echo "Processing: $filename"
-    # Process the file here
-    ffmpeg -i "$filename" "$filename.ogg"
-  else
-    sleep 1
-  fi
-done
-```
-
-### Forward Hook Example
-
-To use forward hooks, first obtain a channel and secret by making a GET request to `/h`:
-
-```bash
-# Get a new channel and secret
-curl https://patchwork.example.com/h
-# Returns: {"channel":"abc123-def456-...","secret":"sha256hash..."}
-```
-
-Then use the channel and secret for secure communication:
-
-```bash
-# Send notification (requires secret)
-curl https://patchwork.example.com/h/abc123-def456-...?secret=sha256hash... -d "Server is down!"
-
-# Anyone can listen for notifications
-curl https://patchwork.example.com/h/abc123-def456-...
-```
-
-### Reverse Hook Example
-
-Similarly, for reverse hooks, obtain a channel and secret by making a GET request to `/r`:
-
-```bash
-# Get a new channel and secret
-curl https://patchwork.example.com/r
-# Returns: {"channel":"xyz789-abc123-...","secret":"sha256hash..."}
-```
-
-Then collect data from multiple sources:
-
-```bash
-# Anyone can submit metrics
-curl https://patchwork.example.com/r/xyz789-abc123-... -d "cpu:85%"
-curl https://patchwork.example.com/r/xyz789-abc123-... -d "memory:67%"
-
-# Reading requires secret
-curl https://patchwork.example.com/r/xyz789-abc123-...?secret=sha256hash...
-```
-
-### User Namespace Example
-
-Using ACL-controlled user namespaces with tokens:
-
-```bash
-# Send data to a user namespace (requires appropriate token)
-curl https://patchwork.example.com/u/alice/projects/web/logs?token=webhook_token -d "Deploy completed"
-
-# Read from user namespace (requires token with GET permission)
-curl https://patchwork.example.com/u/alice/projects/web/status?token=some_token_name
-```
-
-### SSH over WebSocket Tunneling
-
-Using the huproxy endpoint to tunnel SSH through HTTP/HTTPS:
-
-```bash
-# Using token-based authentication
-curl -H "Authorization: Bearer your_huproxy_token" \
-  https://patchwork.example.com/huproxy/alice/localhost/22
-
-# With SSH client (requires huproxyclient tool)
-ssh -o 'ProxyCommand=huproxyclient -auth=Bearer:your_token wss://patchwork.example.com/huproxy/alice/targethost/22' user@targethost
-```
-
-## Installation
-
-### Docker
-
-```bash
-docker run -d \
-  -p 8080:8080 \
-  -e SECRET_KEY="your-secret-key" \
-  -e FORGEJO_TOKEN="your-forgejo-token" \
-  -e FORGEJO_URL="https://git.example.com" \
-  ghcr.io/tionis/patchwork:latest
-```
-
-### From Source
-
-```bash
-git clone https://github.com/tionis/patchwork.git
-cd patchwork
-go build -o patchwork .
-./patchwork start --port 8080
-```
-
-### Environment Variables
-
-- `SECRET_KEY`: Secret key for HMAC generation (required)
-- `FORGEJO_TOKEN`: API token for Forgejo-backed user namespaces, notifications,
-  and HuProxy. Optional for public and hook-only relay deployments.
-- `FORGEJO_URL`: URL of your Forgejo/Gitea instance (default: https://forge.tionis.dev)
-- `ACL_TTL`: Cache duration for ACL files (default: 5m)
-- `ACL_STALE_GRACE`: Maximum additional time an expired ACL may be used during
-  a Forgejo outage (default: 1m; set to `0` to fail closed immediately)
-- `METRICS_TOKEN`: Dedicated bearer token that enables `/metrics`; the endpoint
-  returns 404 when this is unset
-- `TRUSTED_PROXY_CIDRS`: Comma-separated proxy networks whose forwarded client
-  headers may be trusted (for example `127.0.0.1/32,10.0.0.0/8`). Forwarded
-  headers are ignored by default.
-- `LOG_LEVEL`: Logging level (DEBUG, INFO, WARN, ERROR)
-- `LOG_SOURCE`: Add source information to logs (true/false)
-
-### Forgejo/Gitea Backend Setup
-
-To enable user namespaces with ACL control:
-
-1. **Set up Forgejo/Gitea instance**: Ensure you have a running Forgejo or Gitea server
-2. **Create patchwork user**: Create a dedicated `patchwork` user account on your Forgejo/Gitea instance
-3. **Generate API token**: Create an API token for the `patchwork` user
-4. **Configure environment**: Set `FORGEJO_URL` and `FORGEJO_TOKEN` environment variables
-5. **User setup**: Users create `.patchwork` repositories and grant read access to the `patchwork` user
-
-## Health Checks and Monitoring
-
-Patchwork includes health check endpoints and monitoring capabilities:
-
-- `/healthz`: Returns "OK!" if the server is running
-- `/status`: Alias for `/healthz`
-- `/metrics`: Prometheus metrics endpoint with authentication
-
-### Metrics Endpoint
-
-The `/metrics` endpoint provides Prometheus-compatible metrics for monitoring server performance, request patterns, and system health. The endpoint includes comprehensive security controls:
-
-#### Authentication
-
-Set `METRICS_TOKEN` to enable the endpoint. Every request must use the standard
-`Authorization: Bearer <token>` header. A separate token avoids exposing the
-more privileged Forgejo API credential, and query-string tokens are not accepted
-because URLs are commonly retained in access logs and monitoring systems. If
-`METRICS_TOKEN` is unset, `/metrics` returns 404.
-
-#### Usage Examples
-
-```bash
-curl -H "Authorization: Bearer your-metrics-token" https://patchwork.example.com/metrics
-```
-
-#### Available Metrics
-
-- `patchwork_http_requests_total`: Total number of HTTP requests by method, namespace, and status code
-- `patchwork_http_request_duration_seconds`: HTTP request duration histograms
-- `patchwork_channels_total`: Current number of active channels
-- `patchwork_active_connections`: Number of active WebSocket/long-polling connections
-- `patchwork_messages_total`: Total messages processed by namespace and behavior
-- `patchwork_message_size_bytes`: Message size histograms
-- `patchwork_auth_requests_total`: Authentication attempts by result
-- `patchwork_cache_operations_total`: Cache hit/miss statistics
-
-#### Monitoring Setup
-
-For production monitoring, configure your monitoring system (Prometheus, Grafana, etc.) to scrape the metrics endpoint:
-
-```yaml
-# prometheus.yml
-scrape_configs:
-  - job_name: 'patchwork'
-    static_configs:
-      - targets: ['patchwork.example.com:80']
-    scheme: https
-    authorization:
-      credentials: "your-metrics-token"
-    metrics_path: /metrics
-```
-
-For Docker deployments, a health check is automatically configured.
-
-## License
-
-MIT
-curl -H "Authorization: Bearer your_secure_token_here" 
-     --http1.1 
-     --upgrade websocket 
-     https://patchwork.example.com/huproxy/alice/localhost/22
-```
-
-#### Token-based Authentication
-
-Authentication is managed through `config.yaml` files stored in each user's `.patchwork` repository:
-
-```yaml
-# .patchwork/config.yaml
-tokens:
-  "production_ssh_token_abc123":
-    huproxy:
-      - "*.production.com:*"
-  "development_access_def456":
-    huproxy:
-      - "*.dev.com:*"
-      - "localhost:*"
-  "backup_script_token_789xyz":
-    huproxy:
-      - "backup.example.com:22"
-```
-
-**Security Notes:**
-- Tokens are validated against the user's `.patchwork/config.yaml` file
-- Each user controls their own token list through their repository
-- Tokens should be long, random strings (recommended: 32+ characters)
-- The proxy supports any TCP service, not just SSH (databases, VNC, etc.)
-
-**Original Project**: This implementation is based on [Google's HUProxy](https://github.com/google/huproxy)
-with added user-specific authentication and integration into the Patchwork ecosystem.TP endpoints that can be used to implement powerful
-serverless applications - including desktop notifications, SMS notifications,
-job queues, web hosting, and file sharing. These applications are basically
-just a few lines of bash that wrap a `curl` command.
-
-The philosophy behind this is that the main logic happens on the local machine
-with small scripts. There is a server with an infinite number of virtual channels
-that will relay messages between the publisher and the subscriber.
-
-## Quick Start
-
-### Basic Usage
-
-To subscribe to a channel you can simply make a `GET` request:
-```bash
-curl https://patchwork.example.com/p/a61b1f42
-```
-
-The above will block until something is published to the channel `a61b1f42`. 
-You can easily publish to a channel using a `POST` request:
-```bash
-curl https://patchwork.example.com/p/a61b1f42 -d "hello, world"
-```
-
-The subscriber will immediately receive that data. If you reverse the order,
-then the post will block until it is received.
-
-### Pubsub mode
-
-The default mode is a MPMC queue, where the first to connect are able to
-publish/subscribe. But you can also specify publish-subscribe (pubsub) mode.
-In pubsub mode, the publisher streams data to each connected subscriber with
-end-to-end backpressure:
-
-```bash
-curl https://patchwork.example.com/p/a61b1f42?pubsub=true -d "hello, world"
-```
-
-### Publish with GET
-
-You can also publish with a `GET` request by using the parameter
-`body=X`, making it easier to write href links that can trigger hooks:
-
-```bash
-curl https://patchwork.example.com/p/a61b1f42?pubsub=true&body=hello,%20world
-```
-
-## Namespaces
-
-The server is organized by namespaces with different access patterns:
-
-- **`/p/**`**: Public namespace - no authentication required.
-  Everyone can read and write. Perfect for testing and public communication channels.
-- **`/h/**`**: Forward hooks - GET `/h` to obtain a new channel and secret,
-  then use the secret to POST data to that channel. Anyone can GET data from the channel.
-  Useful for webhooks and notifications where you want to control who can send.
-- **`/r/**`**: Reverse hooks - GET `/r` to obtain a new channel and secret,
-  then anyone can POST data to that channel. Use the secret to GET data from the channel.
-  Useful for collecting data from multiple sources where you want to control who can read.
-- **`/u/{username}/**`**: User namespace - controlled by ACL lists
-  (not implemented yet). Access is controlled by YAML ACL files stored in
-  Forgejo/Gitea repositories that specify which tokens can access which paths.
-- **`/huproxy/{user}/{host}/{port}`**: HTTP-to-TCP WebSocket proxy for tunneling SSH and other protocols.
-  Based on Google's HUProxy project, this endpoint provides WebSocket tunneling primarily for SSH
-  connections. Uses token-based authentication via `Authorization` header. Tokens are managed through
-  the `huproxy` field in the user's `config.yaml` file in their `.patchwork` repository.
-
-If a request is made to a user namespace without an `Authorization` header or `toke` query parameter, it is treated as a request with the token `public`. This allows for creating public endpoints within a user's namespace that can be accessed without authentication.
-
-### ACL File Format
-
-For user namespaces, access control is managed through YAML files stored in
-Forgejo/Gitea repositories. Each user or organization can create a 
-`.patchwork` repository containing an `config.yaml` file:
-
-- **`config.yaml`**: Defines ACL permissions and HuProxy tokens for different authentication tokens
-
-#### User Namespace ACL (`config.yaml`)
-
-```yaml
-some_token_name:
-  POST: "projects/*/data"  # Can POST to any project's data endpoint
-  GET: "projects/myproject/**"  # Can GET from all paths under myproject
-
-restricted_token:
-  POST: ""  # Empty string means no POST access allowed
-  GET: "**"  # Can GET from all subpaths in this namespace
-
-webhook_token:
-  POST: "webhooks/*"  # Can POST to any webhook endpoint
-  GET: "status"  # Can only GET the status endpoint
-```
-
-Each token can have `POST` and `GET` permissions defined with glob patterns:
-- An empty string (`""`) denies all access for that method
-- `**` allows access to all subpaths
-- Specific glob patterns like `projects/*/data` allow fine-grained control
-- Tokens are passed via the `token` query parameter: `?token=some_token_name`
-
-#### Repository Setup
-
-1. **Create `.patchwork` repository**: Each user/organization creates a repository named `.patchwork`
-2. **Add `config.yaml`**: Place the ACL and HuProxy configuration in a file named `config.yaml` in the repository root
-3. **Grant access**: Give the special `patchwork` user read access to the `.patchwork` repository
-4. **Caching**: The patchwork server pulls and caches these configuration files as needed
-
-Example repository structure:
-```
-user/.patchwork/
-├── config.yaml
-└── README.md (optional)
-```
-
-#### HuProxy Configuration
-
-For HuProxy access, configure tokens in the `huproxy` field of your `.patchwork/config.yaml` file:
-
-```yaml
-tokens:
-  "some-long-token-for-huproxy-access":
-    huproxy:
-      - "*"  # allows all host:port combinations
-  "restricted-huproxy-token":
-    huproxy:
-      - "*.example.com:*"
-      - "localhost:*"
-```
-
-Users can then access HuProxy endpoints using these tokens:
-```bash
-curl -H "Authorization: Bearer some-long-token-for-huproxy-access" \
-  https://patchwork.example.com/huproxy/alice/localhost/22
-```
-
-## Modes
-
-Each endpoint supports multiple modes:
-
-- **queue**: Each message is received by exactly one receiver (default)
-- **pubsub**: All receivers receive the published message
-- **req/res**: Request/response rendezvous, including dynamic switch mode
-
-## Examples
-
-### File Sharing
-
-Sending a file:
-```bash
-curl -X POST --data-binary "@test.txt" https://patchwork.example.com/p/test.txt
-```
-
-Receiving a file:
-```bash
-wget https://patchwork.example.com/p/test.txt
-```
-
-### Desktop Notifications (Linux)
-
-```bash
-#!/bin/bash
-MAGIC="notify"
-URL="https://patchwork.example.com/p/notifications"
-
-while [ 1 ]
-do
-  X="$(curl $URL)"
-  if [[ $X =~ ^$MAGIC ]]; then
-    Y="$(echo "$X" | sed "s/$MAGIC*//")"
-    notify-send "$Y"
-  else
-    sleep 10
-  fi
-done
-```
-
-### Job Queue
-
-Adding jobs to a queue:
-```bash
-#!/bin/bash
-for filename in *.mp3
-do
-  curl https://patchwork.example.com/p/jobs -d $filename
-done
-```
-
-Processing jobs from the queue:
-```bash
-#!/bin/bash
-while true
-do
-  filename=$(curl -s https://patchwork.example.com/p/jobs)
-  if [ "$filename" != "Too Many Requests" ]
-  then
-    echo "Processing: $filename"
-    # Process the file here
-    ffmpeg -i "$filename" "$filename.ogg"
-  else
-    sleep 1
-  fi
-done
-```
-
-### Forward Hook Example
-
-To use forward hooks, first obtain a channel and secret by making a GET request to `/h`:
-
-```bash
-# Get a new channel and secret
-curl https://patchwork.example.com/h
-# Returns: {"channel":"abc123-def456-...","secret":"sha256hash..."}
-```
-
-Then use the channel and secret for secure communication:
-
-```bash
-# Send notification (requires secret)
-curl https://patchwork.example.com/h/abc123-def456-...?secret=sha256hash... -d "Server is down!"
-
-# Anyone can listen for notifications
-curl https://patchwork.example.com/h/abc123-def456-...
-```
-
-### Reverse Hook Example
-
-Similarly, for reverse hooks, obtain a channel and secret by making a GET request to `/r`:
-
-```bash
-# Get a new channel and secret
-curl https://patchwork.example.com/r
-# Returns: {"channel":"xyz789-abc123-...","secret":"sha256hash..."}
-```
-
-Then collect data from multiple sources:
-
-```bash
-# Anyone can submit metrics
-curl https://patchwork.example.com/r/xyz789-abc123-... -d "cpu:85%"
-curl https://patchwork.example.com/r/xyz789-abc123-... -d "memory:67%"
-
-# Reading requires secret
-curl https://patchwork.example.com/r/xyz789-abc123-...?secret=sha256hash...
-```
-
-**Note**: The secrets are generated using HMAC-SHA256 with a server secret key and the channel name. If no `SECRET_KEY` environment variable is provided, a random key is generated at startup (secrets won't persist across server restarts).
-
-### User Namespace Example
-
-Using ACL-controlled user namespaces with tokens:
-
-```bash
-# Send data to a user namespace (requires appropriate token)
-curl https://patchwork.example.com/u/alice/projects/web/logs?token=webhook_token -d "Deploy completed"
-
-# Read from user namespace (requires token with GET permission)
-curl https://patchwork.example.com/u/alice/projects/web/status?token=some_token_name
-```
-
-### HTTP-to-TCP Proxy (huproxy) Example
-
-Using the huproxy endpoint to proxy HTTP requests to TCP services:
-
-```bash
-# Using token-based authentication
-curl -H "Authorization: Bearer your_huproxy_token" \
-  https://patchwork.example.com/huproxy/alice/localhost/22
-
-# Alternative without "Bearer" prefix  
-curl -H "Authorization: your_huproxy_token" \
-  https://patchwork.example.com/huproxy/alice/database/5432
-```
-
-**Note**: Tokens are configured in the `huproxy` field of the `config.yaml` file in the user's `.patchwork` repository.
-
-## Tools
-
-### Bash Client
-
-You can download a bash-based client [here](assets/patchwork.sh).
-
-#### Usage Examples
-
-```bash
-# Send data to a channel
-patchwork send mychannel "hello world"
-echo "hello" | patchwork send mychannel
-
-# Receive data from a channel
-patchwork receive mychannel
-
-# Send in pubsub mode
-patchwork send -m pubsub mychannel "broadcast message"
-
-# Use forward hooks
-patchwork get-hook h  # Get channel and secret for forward hook
-patchwork send -n h -s <secret> <channel> "notification"
-
-# Use reverse hooks
-patchwork get-hook r  # Get channel and secret for reverse hook
-patchwork send -n r <channel> "cpu:85%"  # No secret needed
-patchwork receive -n r -s <secret> <channel>
-
-# Use user namespaces with tokens
-patchwork send -n u -t webhook_token alice/projects/logs "deploy completed"
-patchwork receive -n u -t some_token alice/projects/status
-
-# Listen for notifications
-patchwork listen notifications
-
-# Share files
-patchwork share document.pdf
-patchwork download document.pdf
-```
-
-## Installation
-
-### Docker
-
-```bash
-docker run -p 8080:8080 ghcr.io/tionis/patchwork:latest
-```
-
-### From Source
-
-```bash
-git clone https://github.com/tionis/patchwork.git
-cd patchwork
-go build -o patchwork .
-./patchwork start --port 8080
-```
-
-### CLI Options
-
-The `start` command supports the following options:
-
-- `--port`: Port to listen on (default: 8080)
-
-Example:
-```bash
-./patchwork start --port 3000
-```
-
-### Configuration
-
-#### Forgejo/Gitea Backend Setup
-
-To enable user namespaces with ACL control, configure Patchwork to use a Forgejo or Gitea instance:
-
-1. **Set up Forgejo/Gitea instance**: Ensure you have a running Forgejo or Gitea server
-2. **Create patchwork user**: Create a dedicated `patchwork` user account on your Forgejo/Gitea instance
-3. **Configure Patchwork**: Set environment variables or configuration file to point to your Forgejo/Gitea instance:
-   ```bash
-   export FORGEJO_URL="https://git.example.com"
-   export ACL_TTL="5m"  # Cache ACL files for 5 minutes
-   export SECRET_KEY="your-secret-key-for-hook-authentication"  # For hook HMAC generation
-   ```
-
-   **Note**: The `SECRET_KEY` is used to generate HMAC-SHA256 secrets for hook channels. If not provided, a random key is generated at startup, but hook secrets won't persist across server restarts.
-
-#### User Setup for ACL
-
-For users who want to use the `/u/{username}/` namespace:
-
-1. **Create `.patchwork` repository** in your Forgejo/Gitea account
-2. **Add the `patchwork` user** as a collaborator with read access
-3. **Create `config.yaml`** file with your token permissions
-4. **Commit and push** the configuration
-
-The patchwork server will automatically fetch and cache your ACL configuration when needed.
-
-## License
-
-MIT
+The process handles SIGINT and SIGTERM with graceful HTTP shutdown. Active
+relays are canceled if they do not complete within the shutdown window.
 
 ## Development
 
-### Test Coverage
-
-Patchwork maintains comprehensive test coverage including:
-
-- **Unit Tests**: Authentication, metrics, utilities, and core functionality
-- **Integration Tests**: Full server workflows with mock Forgejo backend
-- **Security Tests**: Metrics endpoint authentication and access controls  
-- **Performance Tests**: Benchmarks for concurrent access and load testing
-
-To run the complete test suite:
+The default verification suite formats, vets, runs shuffled race-enabled tests,
+and enforces the coverage floor:
 
 ```bash
-# Run all tests
-go test ./...
-
-# Run with coverage report
-go test -cover ./...
-
-# Run integration tests specifically
-go test ./internal/integration/
-
-# Run security tests
-go test -run TestSecured ./
+make verify
 ```
 
-### Code Quality
+The relay stress target repeats its concurrency suite 100 times under the race
+detector:
 
-The codebase follows Go best practices with:
-- Comprehensive error handling and logging
-- Structured code organization with clear separation of concerns
-- Extensive inline documentation and comments
-- Type safety and interface-driven design
-- Mock implementations for external dependencies in tests
+```bash
+make test-stress
+```
+
+The tests cover live pre-EOF streaming, exact-once queue delivery, pub/sub
+backpressure and disconnects, mid-transfer cancellation, shutdown, ACL refresh
+coalescing and stale bounds, HTTP metadata validation, hooks, notifications,
+metrics authentication, rate-limit spoofing and bounds, and WebSocket/TCP tunnel
+lifecycle behavior.
+
+## License
+
+MIT
