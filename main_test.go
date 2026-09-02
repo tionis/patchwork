@@ -19,6 +19,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/tionis/patchwork/internal/metrics"
+	"github.com/tionis/patchwork/internal/relay"
 	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
 )
@@ -640,24 +641,13 @@ func TestHandlePatchAcceptsPATCHAsWrite(t *testing.T) {
 	}
 }
 
-func TestPatchChannelCreation(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	authCache := NewAuthCache("https://test.example.com", "test-token", 5*time.Minute, logger)
-
-	server := &server{
-		logger:    logger,
-		channels:  make(map[string]*patchChannel),
-		ctx:       context.Background(),
-		authCache: authCache,
+func TestRelayBrokerInitialization(t *testing.T) {
+	server := createTestMainServer()
+	if server.broker == nil {
+		t.Fatal("expected relay broker to be initialized")
 	}
-
-	// Test that channels map is properly initialized
-	if server.channels == nil {
-		t.Error("Expected channels map to be initialized")
-	}
-
-	if len(server.channels) != 0 {
-		t.Errorf("Expected empty channels map, got %d channels", len(server.channels))
+	if got := server.broker.ActiveChannels(); got != 0 {
+		t.Fatalf("expected empty relay broker, got %d active channels", got)
 	}
 }
 
@@ -779,8 +769,6 @@ func createTestMainServer() *server {
 
 	return &server{
 		logger:             logger,
-		channels:           make(map[string]*patchChannel),
-		channelsMutex:      sync.RWMutex{},
 		ctx:                context.Background(),
 		forgejoURL:         "https://test.forgejo.dev",
 		forgejoToken:       "test-token",
@@ -788,6 +776,8 @@ func createTestMainServer() *server {
 		secretKey:          secretKey,
 		authCache:          authCache,
 		metrics:            metricsInstance,
+		broker:             relay.NewBroker(),
+		switchTimeout:      250 * time.Millisecond,
 		publicRateLimiters: make(map[string]*rate.Limiter),
 		rateLimiterMutex:   sync.RWMutex{},
 	}
@@ -798,10 +788,7 @@ func waitForChannel(t *testing.T, server *server, channelPath string) {
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		server.channelsMutex.RLock()
-		_, exists := server.channels[channelPath]
-		server.channelsMutex.RUnlock()
-		if exists {
+		if server.broker.ActiveChannels() > 0 {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -1224,6 +1211,8 @@ func TestForwardHookHandler(t *testing.T) {
 			w = httptest.NewRecorder()
 
 			if tt.expectTimeout {
+				ctx, cancel := context.WithCancel(req.Context())
+				req = req.WithContext(ctx)
 				done := make(chan bool)
 				go func() {
 					server.forwardHookHandler(w, req)
@@ -1234,7 +1223,12 @@ func TestForwardHookHandler(t *testing.T) {
 				case <-done:
 					t.Error("Expected operation to timeout waiting for channel communication")
 				case <-time.After(50 * time.Millisecond):
-					t.Log("Operation correctly timed out as expected")
+					cancel()
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Fatal("canceled hook operation did not return")
+					}
 				}
 			} else {
 				server.forwardHookHandler(w, req)
@@ -1368,6 +1362,8 @@ func TestReverseHookHandler(t *testing.T) {
 			w = httptest.NewRecorder()
 
 			if tt.expectTimeout {
+				ctx, cancel := context.WithCancel(req.Context())
+				req = req.WithContext(ctx)
 				done := make(chan bool)
 				go func() {
 					server.reverseHookHandler(w, req)
@@ -1378,7 +1374,12 @@ func TestReverseHookHandler(t *testing.T) {
 				case <-done:
 					t.Error("Expected operation to timeout waiting for channel communication")
 				case <-time.After(50 * time.Millisecond):
-					t.Log("Operation correctly timed out as expected")
+					cancel()
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Fatal("canceled hook operation did not return")
+					}
 				}
 			} else {
 				server.reverseHookHandler(w, req)
@@ -1496,8 +1497,6 @@ func TestHandlePatchChannelOperations(t *testing.T) {
 
 	t.Run("Channel creation and path normalization", func(t *testing.T) {
 		// Test that channels are created properly without actually using them
-		originalChannelCount := len(server.channels)
-
 		// This will create a channel but timeout waiting for consumer
 		req := httptest.NewRequest("POST", "/p/test-channel", strings.NewReader("test"))
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -1511,29 +1510,17 @@ func TestHandlePatchChannelOperations(t *testing.T) {
 			done <- true
 		}()
 
-		// Wait a bit for channel creation
-		time.Sleep(5 * time.Millisecond)
-
-		// Check that channel was created
-		server.channelsMutex.RLock()
-		newChannelCount := len(server.channels)
-		_, exists := server.channels["p/test-channel"]
-		server.channelsMutex.RUnlock()
-
-		if newChannelCount <= originalChannelCount {
-			t.Error("Expected new channel to be created")
-		}
-
-		if !exists {
-			t.Error("Expected channel 'p/test-channel' to exist")
-		}
+		waitForChannel(t, server, "p/test-channel")
 
 		// Clean up
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(50 * time.Millisecond):
-			// Expected to timeout
+		case <-time.After(time.Second):
+			t.Fatal("canceled producer did not return")
+		}
+		if got := server.broker.ActiveChannels(); got != 0 {
+			t.Fatalf("broker retained %d idle channels", got)
 		}
 	})
 }
@@ -1836,6 +1823,32 @@ func TestHandlePatchCanceledProducerDoesNotLeaveStaleMessage(t *testing.T) {
 	server.handlePatch(consumerRecorder, consumerReq, "p", "", "/canceled-producer")
 	if consumerRecorder.Body.String() != "" {
 		t.Fatalf("consumer received stale data after producer cancellation: %q", consumerRecorder.Body.String())
+	}
+}
+
+func TestHandlePatchStopsBlockedOperationsOnServerShutdown(t *testing.T) {
+	server := createTestMainServer()
+	serverContext, stopServer := context.WithCancel(context.Background())
+	server.ctx = serverContext
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(http.MethodPost, "/p/shutdown", strings.NewReader("payload"))
+		w := httptest.NewRecorder()
+		server.handlePatch(w, req, "p", "", "/shutdown")
+	}()
+
+	waitForChannel(t, server, "p/shutdown")
+	stopServer()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("blocked producer did not stop with the server context")
+	}
+	if got := server.broker.ActiveChannels(); got != 0 {
+		t.Fatalf("broker retained %d channels after shutdown", got)
 	}
 }
 
@@ -2910,7 +2923,7 @@ func TestRequestResponderSwitchMode(t *testing.T) {
 		// Start the requester (will wait for response)
 		go func() {
 			req := httptest.NewRequest("POST", "/p/req/"+channelID, strings.NewReader("request data"))
-			ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second) // Longer than switch timeout
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			req = req.WithContext(ctx)
 			w := httptest.NewRecorder()
@@ -2949,7 +2962,7 @@ func TestRequestResponderSwitchMode(t *testing.T) {
 				t.Errorf("Expected HTTP status 504, got %d", requesterResult.Code)
 			}
 
-		case <-time.After(40 * time.Second):
+		case <-time.After(2 * time.Second):
 			t.Error("Test timeout - requester did not complete")
 		}
 	})

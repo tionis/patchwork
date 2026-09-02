@@ -4,7 +4,6 @@ package relay
 
 import (
 	"context"
-	"net/http"
 	"sync"
 )
 
@@ -12,8 +11,8 @@ import (
 // Broker methods clone messages at ownership boundaries so callers may safely
 // reuse or modify their input after publishing.
 type Message struct {
-	Body   []byte
-	Header http.Header
+	Body    []byte
+	Headers map[string]string
 }
 
 // Broker coordinates queue and pub/sub exchanges by channel name.
@@ -194,7 +193,19 @@ func (b *Broker) deleteIfIdleLocked(name string, ch *channel) {
 
 func cloneMessage(message Message) Message {
 	return Message{
-		Body:   append([]byte(nil), message.Body...),
-		Header: message.Header.Clone(),
+		Body:    append([]byte(nil), message.Body...),
+		Headers: cloneHeaders(message.Headers),
 	}
+}
+
+func cloneHeaders(headers map[string]string) map[string]string {
+	if headers == nil {
+		return nil
+	}
+
+	clone := make(map[string]string, len(headers))
+	for key, value := range headers {
+		clone[key] = value
+	}
+	return clone
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -103,8 +102,8 @@ func TestPubSubUsesAtomicOneShotSubscriptions(t *testing.T) {
 	}
 
 	original := Message{
-		Body:   []byte("payload"),
-		Header: http.Header{"X-Event": []string{"original"}},
+		Body:    []byte("payload"),
+		Headers: map[string]string{"X-Event": "original"},
 	}
 	if got := broker.Publish("events", original); got != subscriberCount {
 		t.Fatalf("delivered to %d subscribers, want %d", got, subscriberCount)
@@ -114,7 +113,7 @@ func TestPubSubUsesAtomicOneShotSubscriptions(t *testing.T) {
 	}
 
 	original.Body[0] = 'X'
-	original.Header.Set("X-Event", "mutated")
+	original.Headers["X-Event"] = "mutated"
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	for i, subscription := range subscriptions {
@@ -125,12 +124,12 @@ func TestPubSubUsesAtomicOneShotSubscriptions(t *testing.T) {
 		if got := string(message.Body); got != "payload" {
 			t.Fatalf("subscriber %d received %q", i, got)
 		}
-		if got := message.Header.Get("X-Event"); got != "original" {
+		if got := message.Headers["X-Event"]; got != "original" {
 			t.Fatalf("subscriber %d received header %q", i, got)
 		}
 
 		message.Body[0] = 'Y'
-		message.Header.Set("X-Event", "subscriber mutation")
+		message.Headers["X-Event"] = "subscriber mutation"
 	}
 	if got := broker.ActiveChannels(); got != 0 {
 		t.Fatalf("broker retained %d idle pub/sub channels", got)

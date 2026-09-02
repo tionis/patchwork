@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -32,6 +31,7 @@ import (
 	"github.com/tionis/patchwork/internal/huproxy"
 	"github.com/tionis/patchwork/internal/metrics"
 	"github.com/tionis/patchwork/internal/notification"
+	"github.com/tionis/patchwork/internal/relay"
 	"github.com/tionis/patchwork/internal/types"
 	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/urfave/cli/v2"
@@ -46,24 +46,9 @@ var assets embed.FS
 // TYPE DEFINITIONS
 // =============================================================================
 
-// patchChannel represents a communication channel between producers and consumers.
-type patchChannel struct {
-	data      chan stream
-	unpersist chan bool
-}
-
-// stream represents a data stream with metadata.
-type stream struct {
-	reader  io.ReadCloser
-	done    chan struct{}
-	headers map[string]string
-}
-
 // server contains the main server state and configuration.
 type server struct {
 	logger        *slog.Logger
-	channels      map[string]*patchChannel
-	channelsMutex sync.RWMutex
 	ctx           context.Context
 	forgejoURL    string
 	forgejoToken  string
@@ -71,6 +56,8 @@ type server struct {
 	secretKey     []byte
 	authCache     *AuthCache
 	metrics       *metrics.Metrics
+	broker        *relay.Broker
+	switchTimeout time.Duration
 	// Rate limiting for public namespaces
 	publicRateLimiters map[string]*rate.Limiter
 	rateLimiterMutex   sync.RWMutex
@@ -1369,10 +1356,7 @@ func (s *server) handleRequestResponder(
 	w http.ResponseWriter,
 	r *http.Request,
 	namespace string,
-	username string,
 	path string,
-	channel *patchChannel,
-	channelPath string,
 ) {
 	// Parse path to determine if this is a requester or responder
 	cleanPath := strings.TrimPrefix(path, "/")
@@ -1401,32 +1385,12 @@ func (s *server) handleRequestResponder(
 	reqChannelPath := namespace + "/req/" + channelID
 	resChannelPath := namespace + "/res/" + channelID
 
-	s.channelsMutex.Lock()
-
-	// Ensure both req and res channels exist
-	if _, ok := s.channels[reqChannelPath]; !ok {
-		s.channels[reqChannelPath] = &patchChannel{
-			data:      make(chan stream),
-			unpersist: make(chan bool),
-		}
-	}
-	if _, ok := s.channels[resChannelPath]; !ok {
-		s.channels[resChannelPath] = &patchChannel{
-			data:      make(chan stream),
-			unpersist: make(chan bool),
-		}
-	}
-
-	reqChannel := s.channels[reqChannelPath]
-	resChannel := s.channels[resChannelPath]
-	s.channelsMutex.Unlock()
-
 	if isRequester {
 		// Requester: send request and wait for response
-		s.handleRequester(w, r, reqChannel, resChannel, reqChannelPath, resChannelPath, channelID)
+		s.handleRequester(w, r, reqChannelPath, resChannelPath, channelID)
 	} else {
 		// Responder: receive request and send response
-		s.handleResponder(w, r, reqChannel, resChannel, reqChannelPath, resChannelPath, channelID)
+		s.handleResponder(w, r, reqChannelPath, resChannelPath, channelID)
 	}
 }
 
@@ -1434,8 +1398,6 @@ func (s *server) handleRequestResponder(
 func (s *server) handleRequester(
 	w http.ResponseWriter,
 	r *http.Request,
-	reqChannel *patchChannel,
-	resChannel *patchChannel,
 	reqChannelPath string,
 	resChannelPath string,
 	channelID string,
@@ -1462,55 +1424,33 @@ func (s *server) handleRequester(
 	// Prepare headers with full HTTP request information
 	headers := prepareRequestHeaders(r)
 
-	// Create stream for the request
-	doneSignal := make(chan struct{})
-	stream := stream{
-		reader:  io.NopCloser(bytes.NewBuffer(buf)),
-		done:    doneSignal,
-		headers: headers,
-	}
+	ctx, cancel := s.relayContext(r.Context())
+	defer cancel()
 
 	// Send the request to responders
-	select {
-	case reqChannel.data <- stream:
-		s.logger.Debug("Request sent to responder", "channel_id", channelID)
-	case <-r.Context().Done():
+	if err := s.broker.Send(ctx, reqChannelPath, relay.Message{Body: buf, Headers: headers}); err != nil {
 		s.logger.Debug("Requester canceled", "channel_id", channelID)
-		close(doneSignal)
 		return
 	}
-
-	// Wait for responder to consume the request
-	<-doneSignal
+	s.logger.Debug("Request sent to responder", "channel_id", channelID)
 
 	// Now wait for the response
 	s.logger.Debug("Waiting for response", "channel_id", channelID)
-	select {
-	case responseStream := <-resChannel.data:
-		s.logger.Info("Delivering response to requester",
-			"channel_id", channelID,
-			"client_ip", getClientIP(r),
-			"content_type", responseStream.headers["Content-Type"])
-
-		// Set headers from the response stream, handling passthrough headers
-		addPassthroughHeaders(w, responseStream.headers)
-
-		_, err := io.Copy(w, responseStream.reader)
-		if err != nil {
-			s.logger.Error("Error copying response stream", "error", err)
-		}
-
-		close(responseStream.done)
-
-		err = responseStream.reader.Close()
-		if err != nil {
-			s.logger.Error("Error closing response stream reader", "error", err)
-		}
-
-	case <-r.Context().Done():
+	response, err := s.broker.Receive(ctx, resChannelPath)
+	if err != nil {
 		s.logger.Info("Requester request canceled while waiting for response",
 			"channel_id", channelID,
 			"client_ip", getClientIP(r))
+		return
+	}
+
+	s.logger.Info("Delivering response to requester",
+		"channel_id", channelID,
+		"client_ip", getClientIP(r),
+		"content_type", response.Headers["Content-Type"])
+	addPassthroughHeaders(w, response.Headers)
+	if _, err := w.Write(response.Body); err != nil {
+		s.logger.Error("Error writing response message", "error", err)
 	}
 }
 
@@ -1518,8 +1458,6 @@ func (s *server) handleRequester(
 func (s *server) handleResponder(
 	w http.ResponseWriter,
 	r *http.Request,
-	reqChannel *patchChannel,
-	resChannel *patchChannel,
 	reqChannelPath string,
 	resChannelPath string,
 	channelID string,
@@ -1529,10 +1467,10 @@ func (s *server) handleResponder(
 
 	if switchMode {
 		// Double clutch mode: return request info and switch to new channel
-		s.handleResponderSwitch(w, r, reqChannel, resChannel, reqChannelPath, resChannelPath, channelID)
+		s.handleResponderSwitch(w, r, reqChannelPath, resChannelPath, channelID)
 	} else {
 		// Regular mode: wait for request and send response
-		s.handleResponderRegular(w, r, reqChannel, resChannel, channelID)
+		s.handleResponderRegular(w, r, reqChannelPath, resChannelPath, channelID)
 	}
 }
 
@@ -1540,42 +1478,34 @@ func (s *server) handleResponder(
 func (s *server) handleResponderRegular(
 	w http.ResponseWriter,
 	r *http.Request,
-	reqChannel *patchChannel,
-	resChannel *patchChannel,
+	reqChannelPath string,
+	resChannelPath string,
 	channelID string,
 ) {
+	ctx, cancel := s.relayContext(r.Context())
+	defer cancel()
+
 	if r.Method == "GET" {
 		// Responder waiting for a request only (legacy mode - not practical for manual use)
 		s.logger.Info("Responder waiting for request (legacy mode)",
 			"channel_id", channelID,
 			"client_ip", getClientIP(r))
 
-		select {
-		case requestStream := <-reqChannel.data:
-			s.logger.Info("Delivering request to responder",
-				"channel_id", channelID,
-				"client_ip", getClientIP(r),
-				"content_type", requestStream.headers["Content-Type"])
-
-			// Set headers from the request stream, handling passthrough headers
-			addPassthroughHeaders(w, requestStream.headers)
-
-			_, err := io.Copy(w, requestStream.reader)
-			if err != nil {
-				s.logger.Error("Error copying request stream to responder", "error", err)
-			}
-
-			close(requestStream.done)
-
-			err = requestStream.reader.Close()
-			if err != nil {
-				s.logger.Error("Error closing request stream reader", "error", err)
-			}
-
-		case <-r.Context().Done():
+		request, err := s.broker.Receive(ctx, reqChannelPath)
+		if err != nil {
 			s.logger.Info("Responder request canceled",
 				"channel_id", channelID,
 				"client_ip", getClientIP(r))
+			return
+		}
+
+		s.logger.Info("Delivering request to responder",
+			"channel_id", channelID,
+			"client_ip", getClientIP(r),
+			"content_type", request.Headers["Content-Type"])
+		addPassthroughHeaders(w, request.Headers)
+		if _, err := w.Write(request.Body); err != nil {
+			s.logger.Error("Error writing request message", "error", err)
 		}
 
 	} else if r.Method == "POST" || r.Method == "PUT" {
@@ -1594,18 +1524,12 @@ func (s *server) handleResponderRegular(
 		}
 
 		// Wait for a request to arrive first
-		select {
-		case requestStream := <-reqChannel.data:
+		request, err := s.broker.Receive(ctx, reqChannelPath)
+		if err == nil {
 			s.logger.Info("Request received, sending response",
 				"channel_id", channelID,
 				"client_ip", getClientIP(r))
-
-			// Close the incoming request stream
-			close(requestStream.done)
-			err = requestStream.reader.Close()
-			if err != nil {
-				s.logger.Error("Error closing request stream reader", "error", err)
-			}
+			_ = request
 
 			// Prepare response headers
 			headers := make(map[string]string)
@@ -1630,28 +1554,15 @@ func (s *server) handleResponderRegular(
 				headers["Patch-Status"] = status
 			}
 
-			// Create response stream
-			doneSignal := make(chan struct{})
-			responseStream := stream{
-				reader:  io.NopCloser(bytes.NewBuffer(responseBody)),
-				done:    doneSignal,
-				headers: headers,
-			}
-
 			// Send the response to requester
-			select {
-			case resChannel.data <- responseStream:
+			if err := s.broker.Send(ctx, resChannelPath, relay.Message{Body: responseBody, Headers: headers}); err == nil {
 				s.logger.Debug("Response sent to requester", "channel_id", channelID)
-				// Wait for requester to consume the response
-				<-doneSignal
 				w.WriteHeader(http.StatusOK)
-			case <-r.Context().Done():
+			} else {
 				s.logger.Debug("Responder canceled while sending response", "channel_id", channelID)
-				close(doneSignal)
 				return
 			}
-
-		case <-r.Context().Done():
+		} else {
 			s.logger.Info("Responder canceled while waiting for request",
 				"channel_id", channelID,
 				"client_ip", getClientIP(r))
@@ -1666,8 +1577,6 @@ func (s *server) handleResponderRegular(
 func (s *server) handleResponderSwitch(
 	w http.ResponseWriter,
 	r *http.Request,
-	reqChannel *patchChannel,
-	resChannel *patchChannel,
 	reqChannelPath string,
 	resChannelPath string,
 	channelID string,
@@ -1708,9 +1617,12 @@ func (s *server) handleResponderSwitch(
 		return
 	}
 
+	ctx, cancel := s.relayContext(r.Context())
+	defer cancel()
+
 	// Wait for a request to arrive
-	select {
-	case requestStream := <-reqChannel.data:
+	requestMessage, err := s.broker.Receive(ctx, reqChannelPath)
+	if err == nil {
 		s.logger.Info("Request received in switch mode",
 			"channel_id", channelID,
 			"new_channel", newChannelID,
@@ -1718,21 +1630,10 @@ func (s *server) handleResponderSwitch(
 
 		// Set up the new channel for receiving the response
 		// Extract namespace from the existing channel path
-		// reqChannelPath is like "p/req/channelID", we want "p/newChannelID"
-		namespace := strings.Split(reqChannelPath, "/")[0]
+		// reqChannelPath is like "u/alice/req/channelID"; retain the complete
+		// namespace when deriving the switched channel.
+		namespace := strings.TrimSuffix(reqChannelPath, "/req/"+channelID)
 		newChannelPath := namespace + "/" + newChannelID
-
-		// Get or create the new channel
-		s.channelsMutex.Lock()
-		newChannel, exists := s.channels[newChannelPath]
-		if !exists {
-			newChannel = &patchChannel{
-				data: make(chan stream),
-			}
-			s.channels[newChannelPath] = newChannel
-			s.logger.Info("Creating new switch channel", "channel_path", newChannelPath)
-		}
-		s.channelsMutex.Unlock()
 
 		// Set up a goroutine to forward the response from the new channel to the original response channel
 		go func() {
@@ -1740,54 +1641,57 @@ func (s *server) handleResponderSwitch(
 				"original_channel", channelID,
 				"new_channel", newChannelID)
 
-			// Wait for response on the new channel with timeout
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			// Wait for response on the new channel with timeout.
+			timeout := s.switchTimeout
+			if timeout <= 0 {
+				timeout = 30 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
+			if s.ctx != nil {
+				stop := context.AfterFunc(s.ctx, cancel)
+				defer stop()
+			}
 
-			select {
-			case responseStream := <-newChannel.data:
+			responseMessage, err := s.broker.Receive(ctx, newChannelPath)
+			if err == nil {
 				s.logger.Info("Response received on switched channel, forwarding to original requester",
 					"original_channel", channelID,
 					"new_channel", newChannelID)
 
 				// Forward the response to the original response channel
-				select {
-				case resChannel.data <- responseStream:
+				if err := s.broker.Send(ctx, resChannelPath, responseMessage); err == nil {
 					s.logger.Info("Response forwarded successfully",
 						"original_channel", channelID,
 						"new_channel", newChannelID)
-				case <-ctx.Done():
+				} else {
 					s.logger.Error("Timeout forwarding response to original requester",
 						"original_channel", channelID,
 						"new_channel", newChannelID)
-					close(responseStream.done)
-					responseStream.reader.Close()
 				}
-
-			case <-ctx.Done():
+			} else {
 				s.logger.Error("Timeout waiting for response on switched channel",
 					"original_channel", channelID,
 					"new_channel", newChannelID,
-					"timeout_seconds", 30)
+					"timeout", timeout)
 
 				// Send timeout error to the original requester if possible
-				timeoutError := fmt.Sprintf("Double clutch timeout: No response received on channel '%s' within 30 seconds", newChannelID)
-				errorStream := stream{
-					reader: io.NopCloser(strings.NewReader(timeoutError)),
-					done:   make(chan struct{}),
-					headers: map[string]string{
+				timeoutError := fmt.Sprintf("Double clutch timeout: no response received on channel %q within %s", newChannelID, timeout)
+				errorMessage := relay.Message{
+					Body: []byte(timeoutError),
+					Headers: map[string]string{
 						"Content-Type": "text/plain",
 						"Patch-Status": "504", // Gateway Timeout
 					},
 				}
 
-				select {
-				case resChannel.data <- errorStream:
+				errorContext, errorCancel := context.WithTimeout(context.Background(), time.Second)
+				defer errorCancel()
+				if err := s.broker.Send(errorContext, resChannelPath, errorMessage); err == nil {
 					s.logger.Info("Timeout error sent to original requester",
 						"original_channel", channelID,
 						"new_channel", newChannelID)
-					<-errorStream.done
-				default:
+				} else {
 					s.logger.Error("Failed to send timeout error to requester - channel might be closed",
 						"original_channel", channelID,
 						"new_channel", newChannelID)
@@ -1796,7 +1700,7 @@ func (s *server) handleResponderSwitch(
 		}()
 
 		// Return the request information as headers to the responder
-		for key, value := range requestStream.headers {
+		for key, value := range requestMessage.Headers {
 			if strings.HasPrefix(key, "Patch-H-") {
 				w.Header().Set(key, value)
 			} else if key == "Patch-Uri" {
@@ -1806,29 +1710,22 @@ func (s *server) handleResponderSwitch(
 
 		// Set CORS headers for browser compatibility
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Content-Type", requestStream.headers["Content-Type"])
+		w.Header().Set("Content-Type", requestMessage.Headers["Content-Type"])
 
 		// Write the request body to the responder so they can process it
 		w.WriteHeader(http.StatusOK)
 
 		// Copy the request body to the responder
-		_, err = io.Copy(w, requestStream.reader)
+		_, err = w.Write(requestMessage.Body)
 		if err != nil {
 			s.logger.Error("Error copying request to responder", "error", err)
-		}
-
-		// Close the request stream after it's been consumed
-		close(requestStream.done)
-		err = requestStream.reader.Close()
-		if err != nil {
-			s.logger.Error("Error closing request stream reader", "error", err)
 		}
 
 		s.logger.Info("Request delivered to responder, waiting for response on new channel",
 			"original_channel", channelID,
 			"new_channel", newChannelID)
 
-	case <-r.Context().Done():
+	} else {
 		s.logger.Info("Responder switch request canceled",
 			"channel_id", channelID,
 			"client_ip", getClientIP(r))
@@ -2042,21 +1939,6 @@ func (s *server) handlePatch(
 		)
 	}
 
-	// Get or create channel
-	s.channelsMutex.Lock()
-
-	if _, ok := s.channels[channelPath]; !ok {
-		s.logger.Info("Creating new channel", "channel_path", channelPath)
-		s.channels[channelPath] = &patchChannel{
-			data:      make(chan stream),
-			unpersist: make(chan bool),
-		}
-		s.metrics.SetChannelsTotal(float64(len(s.channels)))
-	}
-
-	channel := s.channels[channelPath]
-	s.channelsMutex.Unlock()
-
 	// Determine behavior based on path structure and query params
 	// (queries, hasPubsubParam, and behavior already defined above)
 
@@ -2078,9 +1960,15 @@ func (s *server) handlePatch(
 
 	// Handle request-responder behavior
 	if behavior == BehaviorRequestResponder {
-		s.handleRequestResponder(w, r, namespace, username, path, channel, channelPath)
+		s.handleRequestResponder(w, r, namespace, path)
 		return
 	}
+
+	requestContext, cancel := s.relayContext(r.Context())
+	defer cancel()
+	defer func() {
+		s.metrics.SetChannelsTotal(float64(s.broker.ActiveChannels()))
+	}()
 
 	switch method {
 	case "GET":
@@ -2093,32 +1981,30 @@ func (s *server) handlePatch(
 			getClientIP(r),
 		)
 
-		select {
-		case stream := <-channel.data:
-			s.logger.Info("Delivering data to consumer",
-				"channel_path", channelPath,
-				"client_ip", getClientIP(r),
-				"content_type", stream.headers["Content-Type"])
-
-			// Set headers from the stream, handling passthrough headers
-			addPassthroughHeaders(w, stream.headers)
-
-			_, err := io.Copy(w, stream.reader)
-			if err != nil {
-				s.logger.Error("Error copying stream to response", "error", err)
-			}
-
-			close(stream.done)
-
-			err = stream.reader.Close()
-			if err != nil {
-				s.logger.Error("Error closing stream reader", "error", err)
-			}
-
-		case <-r.Context().Done():
+		var (
+			message relay.Message
+			err     error
+		)
+		if pubsub {
+			subscription := s.broker.Subscribe(channelPath)
+			message, err = subscription.Receive(requestContext)
+		} else {
+			message, err = s.broker.Receive(requestContext, channelPath)
+		}
+		if err != nil {
 			s.logger.Info("Consumer request canceled",
 				"channel_path", channelPath,
 				"client_ip", getClientIP(r))
+			return
+		}
+
+		s.logger.Info("Delivering data to consumer",
+			"channel_path", channelPath,
+			"client_ip", getClientIP(r),
+			"content_type", message.Headers["Content-Type"])
+		addPassthroughHeaders(w, message.Headers)
+		if _, err := w.Write(message.Body); err != nil {
+			s.logger.Error("Error writing message to response", "error", err)
 		}
 
 	case "POST", "PUT", "PATCH":
@@ -2156,65 +2042,35 @@ func (s *server) handlePatch(
 		if !pubsub {
 			// Regular mode: one-to-one communication
 			s.logger.Debug("Sending data (regular mode)", "channelPath", channelPath)
-
-			doneSignal := make(chan struct{})
-			stream := stream{
-				reader:  io.NopCloser(bytes.NewBuffer(buf)),
-				done:    doneSignal,
-				headers: headers,
-			}
-
-			select {
-			case channel.data <- stream:
-				s.logger.Debug("Connected to consumer", "channelPath", channelPath)
-			case <-r.Context().Done():
+			if err := s.broker.Send(requestContext, channelPath, relay.Message{Body: buf, Headers: headers}); err != nil {
 				s.logger.Debug("Producer canceled", "channelPath", channelPath)
-				close(doneSignal)
-
 				return
 			}
-
-			// Wait for consumer to finish reading
-			<-doneSignal
+			s.logger.Debug("Connected to consumer", "channelPath", channelPath)
 		} else {
 			// Pubsub mode: broadcast to all connected consumers
 			s.logger.Debug("Sending data (pubsub mode)", "channelPath", channelPath)
-
-			finished := false
-
-			for !finished {
-				doneSignal := make(chan struct{})
-				stream := stream{
-					reader:  io.NopCloser(bytes.NewBuffer(buf)),
-					done:    doneSignal,
-					headers: headers,
-				}
-
-				select {
-				case channel.data <- stream:
-					s.logger.Debug("Connected to pubsub consumer", "channelPath", channelPath)
-				case <-r.Context().Done():
-					s.logger.Debug("Producer canceled", "channelPath", channelPath)
-					close(doneSignal)
-
-					return
-				default:
-					s.logger.Debug("No consumers connected", "channelPath", channelPath)
-					close(doneSignal)
-
-					finished = true
-				}
-
-				if !finished {
-					<-doneSignal
-				}
-			}
+			delivered := s.broker.Publish(channelPath, relay.Message{Body: buf, Headers: headers})
+			s.logger.Debug("Published message", "channelPath", channelPath, "subscribers", delivered)
 		}
 
 		w.WriteHeader(http.StatusOK)
 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) relayContext(requestContext context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(requestContext)
+	if s.ctx == nil {
+		return ctx, cancel
+	}
+
+	stop := context.AfterFunc(s.ctx, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
 	}
 }
 
@@ -2472,8 +2328,6 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 
 	server := &server{
 		logger:             logger,
-		channels:           make(map[string]*patchChannel),
-		channelsMutex:      sync.RWMutex{},
 		ctx:                ctx,
 		forgejoURL:         forgejoURL,
 		forgejoToken:       forgejoToken,
@@ -2481,6 +2335,8 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		secretKey:          secretKey,
 		authCache:          authCache,
 		metrics:            metricsInstance,
+		broker:             relay.NewBroker(),
+		switchTimeout:      30 * time.Second,
 		publicRateLimiters: make(map[string]*rate.Limiter),
 		rateLimiterMutex:   sync.RWMutex{},
 	}
