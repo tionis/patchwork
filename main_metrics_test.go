@@ -1,13 +1,15 @@
 package main
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-func TestMetricsHandlerPublic(t *testing.T) {
+func TestMetricsHandlerWithDedicatedToken(t *testing.T) {
 	server := createTestMainServer()
+	server.metricsToken = []byte("metrics-secret")
 
 	// Record a sample metric so the exposition contains the HTTP requests metric
 	server.metrics.RecordHTTPRequest("GET", "public", "200")
@@ -15,11 +17,12 @@ func TestMetricsHandlerPublic(t *testing.T) {
 	handler := server.metricsHandler()
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
+	req.Header.Set("Authorization", "Bearer metrics-secret")
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
 
-	if w.Code != 200 {
+	if w.Code != http.StatusOK {
 		t.Fatalf("Expected status 200, got %d", w.Code)
 	}
 

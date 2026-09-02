@@ -58,6 +58,7 @@ type server struct {
 	secretKey     []byte
 	authCache     *AuthCache
 	metrics       *metrics.Metrics
+	metricsToken  []byte
 	broker        *relay.Broker
 	switchTimeout time.Duration
 	// Rate limiting for public namespaces
@@ -482,12 +483,28 @@ func (s *server) authenticateToken(
 	return true, "authenticated", nil
 }
 
-// metricsHandler creates a public metrics endpoint (no authentication required).
-// Serving metrics is often useful to allow external monitoring systems to scrape
-// this endpoint without requiring credentials. If you want to restrict access
-// again later, add appropriate auth checks here.
+// metricsHandler serves metrics only when a dedicated token is configured. The
+// Forgejo API token is deliberately not accepted because it has unrelated,
+// broader privileges.
 func (s *server) metricsHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(s.metricsToken) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		fields := strings.Fields(r.Header.Get("Authorization"))
+		if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") ||
+			!hmac.Equal([]byte(fields[1]), s.metricsToken) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
+			http.Error(w, "Authentication required", http.StatusUnauthorized)
+			return
+		}
 		promhttp.HandlerFor(s.metrics.GetRegistry(), promhttp.HandlerOpts{}).ServeHTTP(w, r)
 	})
 }
@@ -2708,6 +2725,10 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 
 	// Initialize metrics
 	metricsInstance := metrics.NewMetrics()
+	metricsToken := []byte(os.Getenv("METRICS_TOKEN"))
+	if len(metricsToken) == 0 {
+		logger.Warn("Metrics endpoint disabled because METRICS_TOKEN is not set")
+	}
 
 	server := &server{
 		logger:              logger,
@@ -2718,6 +2739,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		secretKey:           secretKey,
 		authCache:           authCache,
 		metrics:             metricsInstance,
+		metricsToken:        metricsToken,
 		broker:              relay.NewBroker(),
 		switchTimeout:       30 * time.Second,
 		publicRateLimiters:  make(map[string]*rateLimiterEntry),

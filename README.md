@@ -19,7 +19,7 @@ that serve as a multi-process, multi-consumer (MPMC) queue.
 - **WebSocket Tunneling**: SSH/TCP tunneling via HuProxy integration
 - **Token-based Authentication**: Forgejo-integrated ACL system with caching
 - **Administrative API**: Cache invalidation and user management endpoints
-- **Prometheus Metrics**: Secured metrics endpoint for monitoring with authentication
+- **Prometheus Metrics**: Optional endpoint secured by a dedicated bearer token
 - **Rate Limiting**: Built-in rate limiting for public namespaces to prevent abuse
 
 ## What does it do?
@@ -579,6 +579,8 @@ go build -o patchwork .
 - `ACL_TTL`: Cache duration for ACL files (default: 5m)
 - `ACL_STALE_GRACE`: Maximum additional time an expired ACL may be used during
   a Forgejo outage (default: 1m; set to `0` to fail closed immediately)
+- `METRICS_TOKEN`: Dedicated bearer token that enables `/metrics`; the endpoint
+  returns 404 when this is unset
 - `TRUSTED_PROXY_CIDRS`: Comma-separated proxy networks whose forwarded client
   headers may be trusted (for example `127.0.0.1/32,10.0.0.0/8`). Forwarded
   headers are ignored by default.
@@ -609,24 +611,16 @@ The `/metrics` endpoint provides Prometheus-compatible metrics for monitoring se
 
 #### Authentication
 
-The metrics endpoint uses multi-layered authentication:
-
-- **Local Access**: Requests from localhost (`127.0.0.1`, `::1`) are allowed without authentication for local monitoring tools
-- **Remote Access**: Requires authentication using the server's Forgejo token
-- **Token Formats**: Supports `Bearer <token>`, `token <token>`, or direct token in `Authorization` header
-- **Query Parameter**: Token can also be passed as `?token=<token>` query parameter
+Set `METRICS_TOKEN` to enable the endpoint. Every request must use the standard
+`Authorization: Bearer <token>` header. A separate token avoids exposing the
+more privileged Forgejo API credential, and query-string tokens are not accepted
+because URLs are commonly retained in access logs and monitoring systems. If
+`METRICS_TOKEN` is unset, `/metrics` returns 404.
 
 #### Usage Examples
 
 ```bash
-# Local access (no authentication needed)
-curl http://localhost:8080/metrics
-
-# Remote access with Bearer token
-curl -H "Authorization: Bearer your-forgejo-token" https://patchwork.example.com/metrics
-
-# Remote access with query parameter
-curl https://patchwork.example.com/metrics?token=your-forgejo-token
+curl -H "Authorization: Bearer your-metrics-token" https://patchwork.example.com/metrics
 ```
 
 #### Available Metrics
@@ -652,7 +646,7 @@ scrape_configs:
       - targets: ['patchwork.example.com:80']
     scheme: https
     authorization:
-      credentials: "your-forgejo-token"
+      credentials: "your-metrics-token"
     metrics_path: /metrics
 ```
 

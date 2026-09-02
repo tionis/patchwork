@@ -344,6 +344,7 @@ func TestGetHTTPServer(t *testing.T) {
 	originalSecretKey := os.Getenv("SECRET_KEY")
 	originalACLTTL := os.Getenv("ACL_TTL")
 	originalACLStaleGrace := os.Getenv("ACL_STALE_GRACE")
+	originalMetricsToken := os.Getenv("METRICS_TOKEN")
 	originalTrustedProxies := os.Getenv("TRUSTED_PROXY_CIDRS")
 	if err := os.Setenv("TRUSTED_PROXY_CIDRS", ""); err != nil {
 		t.Fatalf("Failed to clear TRUSTED_PROXY_CIDRS: %v", err)
@@ -367,6 +368,9 @@ func TestGetHTTPServer(t *testing.T) {
 		}
 		if err := os.Setenv("ACL_STALE_GRACE", originalACLStaleGrace); err != nil {
 			t.Logf("Failed to restore ACL_STALE_GRACE: %v", err)
+		}
+		if err := os.Setenv("METRICS_TOKEN", originalMetricsToken); err != nil {
+			t.Logf("Failed to restore METRICS_TOKEN: %v", err)
 		}
 		if err := os.Setenv("TRUSTED_PROXY_CIDRS", originalTrustedProxies); err != nil {
 			t.Logf("Failed to restore TRUSTED_PROXY_CIDRS: %v", err)
@@ -2283,6 +2287,7 @@ func TestHTTPRouterPublicRouteMessagePassing(t *testing.T) {
 	t.Setenv("FORGEJO_TOKEN", "test-token")
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	t.Setenv("ACL_STALE_GRACE", "")
+	t.Setenv("METRICS_TOKEN", "test-metrics-token")
 	t.Setenv("FORGEJO_URL", "https://forgejo.example.test")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2343,6 +2348,9 @@ func newHTTPServerForTest(t *testing.T, forgejoURL string) *http.Server {
 
 	t.Setenv("SECRET_KEY", "test-secret-key")
 	t.Setenv("FORGEJO_TOKEN", "test-token")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("ACL_STALE_GRACE", "")
+	t.Setenv("METRICS_TOKEN", "test-metrics-token")
 	if forgejoURL == "" {
 		forgejoURL = "https://forgejo.example.test"
 	}
