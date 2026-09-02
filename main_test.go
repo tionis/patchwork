@@ -613,11 +613,13 @@ func TestTokenInfoUnmarshalYAMLClearsExistingPatterns(t *testing.T) {
 func TestAddPassthroughHeadersSetsHeadersBeforeStatus(t *testing.T) {
 	w := httptest.NewRecorder()
 
-	addPassthroughHeaders(w, map[string]string{
+	if err := addPassthroughHeaders(w, map[string]string{
 		"Patch-Status":    "201",
 		"Patch-H-X-Trace": "trace-id",
 		"Content-Type":    "text/plain",
-	})
+	}); err != nil {
+		t.Fatalf("add passthrough headers: %v", err)
+	}
 
 	if _, err := w.Write([]byte("created")); err != nil {
 		t.Fatalf("Failed to write response: %v", err)
@@ -2577,6 +2579,7 @@ func TestAddPassthroughHeaders(t *testing.T) {
 		streamHeaders   map[string]string
 		expectedHeaders map[string]string
 		expectedStatus  int
+		expectError     bool
 	}{
 		{
 			name: "Basic passthrough headers",
@@ -2606,15 +2609,12 @@ func TestAddPassthroughHeaders(t *testing.T) {
 			expectedStatus: 404,
 		},
 		{
-			name: "Invalid Patch-Status ignored",
+			name: "Invalid Patch-Status rejected",
 			streamHeaders: map[string]string{
 				"Content-Type": "text/plain",
 				"Patch-Status": "invalid",
 			},
-			expectedHeaders: map[string]string{
-				"Content-Type": "text/plain",
-			},
-			expectedStatus: 200, // Default status when invalid
+			expectError: true,
 		},
 	}
 
@@ -2622,7 +2622,19 @@ func TestAddPassthroughHeaders(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 
-			addPassthroughHeaders(w, tt.streamHeaders)
+			err := addPassthroughHeaders(w, tt.streamHeaders)
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("Expected invalid metadata error")
+				}
+				if len(w.Header()) != 0 || w.Code != http.StatusOK {
+					t.Fatalf("Invalid metadata partially committed response: headers=%v status=%d", w.Header(), w.Code)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("add passthrough headers: %v", err)
+			}
 
 			// Check headers
 			for expectedKey, expectedValue := range tt.expectedHeaders {
@@ -2644,6 +2656,113 @@ func TestAddPassthroughHeaders(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAddPassthroughHeadersRejectsUnsafeMetadata(t *testing.T) {
+	invalidStatuses := []string{"", "0", "99", "100", "199", "600", "999", "not-a-number"}
+	for _, status := range invalidStatuses {
+		t.Run("status_"+status, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			err := addPassthroughHeaders(w, map[string]string{
+				"Content-Type": "text/plain",
+				"Patch-Status": status,
+			})
+			if err == nil {
+				t.Fatalf("Patch-Status %q was accepted", status)
+			}
+			if len(w.Header()) != 0 {
+				t.Fatalf("Headers were committed before validation: %v", w.Header())
+			}
+		})
+	}
+
+	for _, header := range []string{"Patch-H-Bad Header", "Patch-H-X-Test\r\nInjected"} {
+		t.Run("header_"+header, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			if err := addPassthroughHeaders(w, map[string]string{header: "value"}); err == nil {
+				t.Fatalf("Invalid header %q was accepted", header)
+			}
+		})
+	}
+	if err := addPassthroughHeaders(httptest.NewRecorder(), map[string]string{
+		"Patch-H-X-Test": "bad\r\nInjected: value",
+	}); err == nil {
+		t.Fatal("Header value containing a newline was accepted")
+	}
+
+	w := httptest.NewRecorder()
+	if err := addPassthroughHeaders(w, map[string]string{
+		"Patch-H-Connection":        "X-Remove",
+		"Patch-H-X-Remove":          "nominated hop-by-hop value",
+		"Patch-H-Content-Length":    "999999",
+		"Patch-H-Transfer-Encoding": "chunked",
+		"Patch-H-X-Keep":            "kept",
+		"Content-Type":              "text/plain",
+		"Patch-H-Content-Type":      "application/json",
+	}); err != nil {
+		t.Fatalf("add passthrough headers: %v", err)
+	}
+	if got := w.Header().Get("X-Keep"); got != "kept" {
+		t.Fatalf("Safe end-to-end header = %q, want kept", got)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Explicit passthrough Content-Type = %q, want application/json", got)
+	}
+	for _, header := range []string{"Connection", "X-Remove", "Content-Length", "Transfer-Encoding"} {
+		if got := w.Header().Get(header); got != "" {
+			t.Fatalf("Unsafe header %s was relayed as %q", header, got)
+		}
+	}
+}
+
+func TestAddRelayStreamHeadersUsesTrustedContentLength(t *testing.T) {
+	stream := relay.NewStream(io.NopCloser(strings.NewReader("hello")), map[string]string{
+		"Patch-Status":           "201",
+		"Patch-H-Content-Length": "999999",
+	}, 5)
+	defer stream.Complete(nil)
+
+	w := httptest.NewRecorder()
+	if err := addRelayStreamHeaders(w, stream); err != nil {
+		t.Fatalf("add relay stream headers: %v", err)
+	}
+	if got := w.Header().Get("Content-Length"); got != "5" {
+		t.Fatalf("Content-Length = %q, want 5", got)
+	}
+	if w.Code != http.StatusCreated {
+		t.Fatalf("Status = %d, want %d", w.Code, http.StatusCreated)
+	}
+}
+
+func TestCopyRelayStreamFlushesThroughMetricsWrapper(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	wrapper := &responseWrapper{ResponseWriter: recorder, statusCode: http.StatusOK}
+	stream := relay.NewStream(io.NopCloser(strings.NewReader("first chunk")), nil, -1)
+
+	if err := copyRelayStream(context.Background(), wrapper, stream); err != nil {
+		t.Fatalf("copy relay stream: %v", err)
+	}
+	if !recorder.Flushed {
+		t.Fatal("Stream write was not flushed to the underlying response")
+	}
+	if got := recorder.Body.String(); got != "first chunk" {
+		t.Fatalf("Body = %q, want first chunk", got)
+	}
+}
+
+func TestResponseWrapperRecordsFirstStatus(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	wrapper := &responseWrapper{ResponseWriter: recorder, statusCode: http.StatusOK}
+
+	wrapper.WriteHeader(http.StatusCreated)
+	wrapper.WriteHeader(http.StatusInternalServerError)
+
+	if wrapper.statusCode != http.StatusCreated {
+		t.Fatalf("Recorded status = %d, want %d", wrapper.statusCode, http.StatusCreated)
+	}
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("Response status = %d, want %d", recorder.Code, http.StatusCreated)
 	}
 }
 

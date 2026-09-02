@@ -1301,48 +1301,194 @@ func processPassthroughHeaders(headers http.Header, isRequest bool) map[string]s
 	return processed
 }
 
-// addPassthroughHeaders adds headers to the response, handling Patch-H-* passthrough
-func addPassthroughHeaders(w http.ResponseWriter, streamHeaders map[string]string) {
-	var statusCode int
-
-	for key, value := range streamHeaders {
-		if key == "Patch-Status" {
-			if parsedStatus, err := strconv.Atoi(value); err == nil {
-				statusCode = parsedStatus
-			}
-			continue
-		}
-
-		if strings.HasPrefix(key, "Patch-H-") {
-			// Strip Patch-H- prefix and add as regular header
-			originalKey := strings.TrimPrefix(key, "Patch-H-")
-			w.Header().Set(originalKey, value)
-		} else {
-			// Regular headers pass through as-is
-			w.Header().Set(key, value)
-		}
+// addPassthroughHeaders validates and adds end-to-end response metadata. HTTP
+// framing is owned by the receiving server and cannot be supplied by a relay
+// producer.
+func addPassthroughHeaders(w http.ResponseWriter, streamHeaders map[string]string) error {
+	headers, statusCode, err := validatedPassthroughHeaders(streamHeaders)
+	if err != nil {
+		return err
 	}
+	applyPassthroughHeaders(w, headers, statusCode)
+	return nil
+}
 
+func applyPassthroughHeaders(w http.ResponseWriter, headers http.Header, statusCode int) {
+	for key, values := range headers {
+		w.Header()[key] = values
+	}
 	if statusCode != 0 {
 		w.WriteHeader(statusCode)
 	}
 }
 
-func addRelayStreamHeaders(w http.ResponseWriter, stream *relay.Stream) {
+func validatedPassthroughHeaders(streamHeaders map[string]string) (http.Header, int, error) {
+	statusCode := 0
+	statusSeen := false
+	connectionHeaders := make(map[string]struct{})
+	keys := make([]string, 0, len(streamHeaders))
+
+	// RFC 9110 allows Connection to nominate additional hop-by-hop fields. Find
+	// those names before iterating the map so map iteration order is irrelevant.
+	for key, value := range streamHeaders {
+		keys = append(keys, key)
+		if strings.EqualFold(key, "Patch-Status") {
+			if statusSeen {
+				return nil, 0, errors.New("duplicate Patch-Status metadata")
+			}
+			parsedStatus, err := strconv.Atoi(value)
+			if err != nil || parsedStatus < 200 || parsedStatus > 599 {
+				return nil, 0, fmt.Errorf("invalid Patch-Status %q", value)
+			}
+			statusCode = parsedStatus
+			statusSeen = true
+			continue
+		}
+
+		name := passthroughHeaderName(key)
+		if strings.EqualFold(name, "Connection") {
+			for token := range strings.SplitSeq(value, ",") {
+				connectionHeaders[http.CanonicalHeaderKey(strings.TrimSpace(token))] = struct{}{}
+			}
+		}
+	}
+	slices.Sort(keys)
+
+	headers := make(http.Header)
+	addHeaders := func(prefixed bool) error {
+		for _, key := range keys {
+			if strings.EqualFold(key, "Patch-Status") || isPatchPassthroughHeader(key) != prefixed {
+				continue
+			}
+
+			value := streamHeaders[key]
+			name := passthroughHeaderName(key)
+			if !validHTTPHeaderName(name) {
+				return fmt.Errorf("invalid relayed header name %q", name)
+			}
+			if !validHTTPHeaderValue(value) {
+				return fmt.Errorf("invalid value for relayed header %q", name)
+			}
+
+			canonicalName := http.CanonicalHeaderKey(name)
+			if forbiddenRelayHeader(canonicalName) {
+				continue
+			}
+			if _, forbidden := connectionHeaders[canonicalName]; forbidden {
+				continue
+			}
+			headers.Set(canonicalName, value)
+		}
+		return nil
+	}
+
+	// Explicit Patch-H-* metadata wins over Patchwork's inferred defaults.
+	if err := addHeaders(false); err != nil {
+		return nil, 0, err
+	}
+	if err := addHeaders(true); err != nil {
+		return nil, 0, err
+	}
+
+	return headers, statusCode, nil
+}
+
+func passthroughHeaderName(key string) string {
+	const prefix = "Patch-H-"
+	if isPatchPassthroughHeader(key) {
+		return key[len(prefix):]
+	}
+	return key
+}
+
+func isPatchPassthroughHeader(key string) bool {
+	const prefix = "Patch-H-"
+	return len(key) >= len(prefix) && strings.EqualFold(key[:len(prefix)], prefix)
+}
+
+func forbiddenRelayHeader(name string) bool {
+	switch name {
+	case "Connection", "Content-Length", "Keep-Alive", "Proxy-Authenticate",
+		"Proxy-Authorization", "Proxy-Connection", "Te", "Trailer",
+		"Transfer-Encoding", "Upgrade":
+		return true
+	default:
+		return false
+	}
+}
+
+func validHTTPHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') ||
+			('0' <= c && c <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c)) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validHTTPHeaderValue(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if value[i] == '\t' || value[i] >= ' ' && value[i] != 0x7f {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func addRelayStreamHeaders(w http.ResponseWriter, stream *relay.Stream) error {
+	headers, statusCode, err := validatedPassthroughHeaders(stream.Headers)
+	if err != nil {
+		return err
+	}
+	for key, values := range headers {
+		w.Header()[key] = values
+	}
 	if stream.ContentLength >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(stream.ContentLength, 10))
 	}
-	addPassthroughHeaders(w, stream.Headers)
+	if statusCode != 0 {
+		w.WriteHeader(statusCode)
+	}
+	return nil
 }
 
 func copyRelayStream(ctx context.Context, destination io.Writer, stream *relay.Stream) error {
 	stopCancellation := context.AfterFunc(ctx, func() {
 		stream.Complete(ctx.Err())
 	})
+	if responseWriter, ok := destination.(http.ResponseWriter); ok {
+		destination = &flushingResponseWriter{
+			ResponseWriter: responseWriter,
+			controller:     http.NewResponseController(responseWriter),
+		}
+	}
 	_, err := io.Copy(destination, stream.Body)
 	stopCancellation()
 	stream.Complete(err)
 	return err
+}
+
+type flushingResponseWriter struct {
+	http.ResponseWriter
+	controller *http.ResponseController
+}
+
+func (w *flushingResponseWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	if err != nil || n == 0 {
+		return n, err
+	}
+	if flushErr := w.controller.Flush(); flushErr != nil && !errors.Is(flushErr, http.ErrNotSupported) {
+		return n, flushErr
+	}
+	return n, nil
 }
 
 // prepareRequestHeaders prepares headers for the stream, adding Patch-H-* prefixes for passthrough
@@ -1475,7 +1621,12 @@ func (s *server) handleRequester(
 		"channel_id", channelID,
 		"client_ip", getClientIP(r),
 		"content_type", response.Headers["Content-Type"])
-	addRelayStreamHeaders(w, response)
+	if err := addRelayStreamHeaders(w, response); err != nil {
+		response.Complete(err)
+		s.logger.Warn("Rejected invalid relay response metadata", "channel_id", channelID, "error", err)
+		http.Error(w, "Invalid relay response metadata", http.StatusBadGateway)
+		return
+	}
 	if err := copyRelayStream(ctx, w, response); err != nil {
 		s.logger.Error("Error writing response message", "error", err)
 	}
@@ -1530,7 +1681,12 @@ func (s *server) handleResponderRegular(
 			"channel_id", channelID,
 			"client_ip", getClientIP(r),
 			"content_type", request.Headers["Content-Type"])
-		addRelayStreamHeaders(w, request)
+		if err := addRelayStreamHeaders(w, request); err != nil {
+			request.Complete(err)
+			s.logger.Warn("Rejected invalid relay request metadata", "channel_id", channelID, "error", err)
+			http.Error(w, "Invalid relay request metadata", http.StatusBadGateway)
+			return
+		}
 		if err := copyRelayStream(ctx, w, request); err != nil {
 			s.logger.Error("Error writing request message", "error", err)
 		}
@@ -1851,12 +2007,30 @@ func (s *server) metricsMiddleware(namespace string, handler http.HandlerFunc) h
 // responseWrapper wraps http.ResponseWriter to capture status codes
 type responseWrapper struct {
 	http.ResponseWriter
-	statusCode int
+	statusCode  int
+	wroteHeader bool
 }
 
 func (rw *responseWrapper) WriteHeader(code int) {
+	if rw.wroteHeader {
+		return
+	}
+	rw.wroteHeader = true
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWrapper) Write(p []byte) (int, error) {
+	if !rw.wroteHeader {
+		rw.WriteHeader(http.StatusOK)
+	}
+	return rw.ResponseWriter.Write(p)
+}
+
+// Unwrap lets http.ResponseController reach optional interfaces such as
+// Flusher on the underlying server response.
+func (rw *responseWrapper) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
 }
 
 // =============================================================================
@@ -2032,7 +2206,12 @@ func (s *server) handlePatch(
 			"channel_path", channelPath,
 			"client_ip", getClientIP(r),
 			"content_type", stream.Headers["Content-Type"])
-		addRelayStreamHeaders(w, stream)
+		if err := addRelayStreamHeaders(w, stream); err != nil {
+			stream.Complete(err)
+			s.logger.Warn("Rejected invalid relay metadata", "channel_path", channelPath, "error", err)
+			http.Error(w, "Invalid relay metadata", http.StatusBadGateway)
+			return
+		}
 		if err := copyRelayStream(requestContext, w, stream); err != nil {
 			s.logger.Error("Error writing message to response", "error", err)
 		}
