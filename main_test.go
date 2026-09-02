@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,6 +45,14 @@ func (w *observingResponseWriter) WriteHeader(status int) { w.status = status }
 func (w *observingResponseWriter) Write(p []byte) (int, error) {
 	w.writes <- append([]byte(nil), p...)
 	return len(p), nil
+}
+
+func singleValueHeader(values map[string]string) http.Header {
+	headers := make(http.Header, len(values))
+	for key, value := range values {
+		headers.Set(key, value)
+	}
+	return headers
 }
 
 func TestGetClientIP(t *testing.T) {
@@ -721,11 +730,11 @@ func TestTokenInfoUnmarshalYAMLClearsExistingPatterns(t *testing.T) {
 func TestAddPassthroughHeadersSetsHeadersBeforeStatus(t *testing.T) {
 	w := httptest.NewRecorder()
 
-	if err := addPassthroughHeaders(w, map[string]string{
+	if err := addPassthroughHeaders(w, singleValueHeader(map[string]string{
 		"Patch-Status":    "201",
 		"Patch-H-X-Trace": "trace-id",
 		"Content-Type":    "text/plain",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("add passthrough headers: %v", err)
 	}
 
@@ -2606,7 +2615,10 @@ func TestHTTPRouterForwardHookMessagePassing(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	producerReq := httptest.NewRequest(http.MethodPost, "/h/"+hook.Channel+"?secret="+url.QueryEscape(hook.Secret), strings.NewReader("hook payload"))
+	producerTarget := "/h/" + hook.Channel + "?secret=" + url.QueryEscape(hook.Secret) + "&event=push"
+	producerReq := httptest.NewRequest(http.MethodPost, producerTarget, strings.NewReader("hook payload"))
+	producerReq.Header.Add("X-Hub-Signature-256", "sha256=first")
+	producerReq.Header.Add("X-Hub-Signature-256", "sha256=second")
 	producer := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(producer, producerReq)
 	if producer.Code != http.StatusOK {
@@ -2617,6 +2629,15 @@ func TestHTTPRouterForwardHookMessagePassing(t *testing.T) {
 	case consumer := <-consumerDone:
 		if got := consumer.Body.String(); got != "hook payload" {
 			t.Fatalf("forward hook consumer got %q", got)
+		}
+		if got := consumer.Header().Get("Patch-Method"); got != http.MethodPost {
+			t.Fatalf("relayed webhook method = %q, want POST", got)
+		}
+		if got := consumer.Header().Get("Patch-Uri"); got != producerTarget {
+			t.Fatalf("relayed webhook URI = %q, want %q", got, producerTarget)
+		}
+		if got := consumer.Header().Values("X-Hub-Signature-256"); !slices.Equal(got, []string{"sha256=first", "sha256=second"}) {
+			t.Fatalf("relayed signature headers changed: %v", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("forward hook consumer did not receive payload")
@@ -2915,6 +2936,7 @@ func TestPrepareRequestHeaders(t *testing.T) {
 			requestQuery: "param=value",
 			expectedHeaders: map[string]string{
 				"Content-Type":       "application/json",
+				"Patch-Method":       http.MethodPost,
 				"Patch-Uri":          "/req/test?param=value",
 				"Patch-H-User-Agent": "test-agent",
 			},
@@ -2927,22 +2949,24 @@ func TestPrepareRequestHeaders(t *testing.T) {
 			requestPath: "/req/test",
 			expectedHeaders: map[string]string{
 				"Content-Type":   "text/plain",
+				"Patch-Method":   http.MethodPost,
 				"Patch-Uri":      "/req/test",
 				"Patch-H-Accept": "application/json",
 			},
 		},
 		{
-			name: "Existing Patch-H headers should be preserved",
+			name: "Original Patch-H header is escaped like every request header",
 			requestHeaders: map[string]string{
 				"Patch-H-Custom": "custom-value",
 				"User-Agent":     "test-agent",
 			},
 			requestPath: "/req/test",
 			expectedHeaders: map[string]string{
-				"Content-Type":       "text/plain",
-				"Patch-Uri":          "/req/test",
-				"Patch-H-Custom":     "custom-value",
-				"Patch-H-User-Agent": "test-agent",
+				"Content-Type":           "text/plain",
+				"Patch-Method":           http.MethodPost,
+				"Patch-Uri":              "/req/test",
+				"Patch-H-Patch-H-Custom": "custom-value",
+				"Patch-H-User-Agent":     "test-agent",
 			},
 		},
 	}
@@ -2961,9 +2985,9 @@ func TestPrepareRequestHeaders(t *testing.T) {
 			headers := prepareRequestHeaders(req)
 
 			for expectedKey, expectedValue := range tt.expectedHeaders {
-				if actual, exists := headers[expectedKey]; !exists {
+				if _, exists := headers[expectedKey]; !exists {
 					t.Errorf("Expected header %q to exist", expectedKey)
-				} else if actual != expectedValue {
+				} else if actual := headers.Get(expectedKey); actual != expectedValue {
 					t.Errorf("Expected header %q to be %q, got %q", expectedKey, expectedValue, actual)
 				}
 			}
@@ -2971,20 +2995,43 @@ func TestPrepareRequestHeaders(t *testing.T) {
 	}
 }
 
-func TestPrepareRequestHeadersRedactsCredentialsFromPatchURI(t *testing.T) {
+func TestPrepareRequestHeadersPreservesWebhookMetadata(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/req/hook?keep=value&secret=hook-secret&token=user-token&body=payload", nil)
+	req.Host = "hooks.example.test"
+	req.Header.Add("X-Hub-Signature-256", "sha256=first")
+	req.Header.Add("X-Hub-Signature-256", "sha256=second")
+	req.Header.Set("Authorization", "Webhook credential")
+	req.Header.Set("Connection", "X-Hop")
+	req.Header.Set("X-Hop", "must not relay")
 	headers := prepareRequestHeaders(req)
 
-	patchURI, err := url.Parse(headers["Patch-Uri"])
+	patchURI, err := url.Parse(headers.Get("Patch-Uri"))
 	if err != nil {
 		t.Fatalf("parse Patch-Uri: %v", err)
 	}
 	if got := patchURI.Query().Get("keep"); got != "value" {
 		t.Fatalf("non-sensitive query value changed to %q", got)
 	}
-	for _, key := range []string{"body", "secret", "token"} {
-		if got := patchURI.Query().Get(key); got != "[REDACTED]" {
-			t.Fatalf("query value %q was not redacted: %q", key, got)
+	for key, want := range map[string]string{"body": "payload", "secret": "hook-secret", "token": "user-token"} {
+		if got := patchURI.Query().Get(key); got != want {
+			t.Fatalf("query value %q changed from %q to %q", key, want, got)
+		}
+	}
+	if got := headers.Get("Patch-Method"); got != http.MethodPost {
+		t.Fatalf("Patch-Method = %q, want POST", got)
+	}
+	if got := headers.Get("Patch-H-Host"); got != "hooks.example.test" {
+		t.Fatalf("Relayed Host = %q", got)
+	}
+	if got := headers.Values("Patch-H-X-Hub-Signature-256"); !slices.Equal(got, []string{"sha256=first", "sha256=second"}) {
+		t.Fatalf("Repeated signature headers changed: %v", got)
+	}
+	if got := headers.Get("Patch-H-Authorization"); got != "Webhook credential" {
+		t.Fatalf("Authorization header was not preserved: %q", got)
+	}
+	for _, header := range []string{"Patch-H-Connection", "Patch-H-X-Hop"} {
+		if got := headers.Get(header); got != "" {
+			t.Fatalf("Hop-by-hop header %s was relayed as %q", header, got)
 		}
 	}
 }
@@ -3038,7 +3085,7 @@ func TestAddPassthroughHeaders(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 
-			err := addPassthroughHeaders(w, tt.streamHeaders)
+			err := addPassthroughHeaders(w, singleValueHeader(tt.streamHeaders))
 			if tt.expectError {
 				if err == nil {
 					t.Fatal("Expected invalid metadata error")
@@ -3080,10 +3127,10 @@ func TestAddPassthroughHeadersRejectsUnsafeMetadata(t *testing.T) {
 	for _, status := range invalidStatuses {
 		t.Run("status_"+status, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			err := addPassthroughHeaders(w, map[string]string{
+			err := addPassthroughHeaders(w, singleValueHeader(map[string]string{
 				"Content-Type": "text/plain",
 				"Patch-Status": status,
-			})
+			}))
 			if err == nil {
 				t.Fatalf("Patch-Status %q was accepted", status)
 			}
@@ -3096,19 +3143,19 @@ func TestAddPassthroughHeadersRejectsUnsafeMetadata(t *testing.T) {
 	for _, header := range []string{"Patch-H-Bad Header", "Patch-H-X-Test\r\nInjected"} {
 		t.Run("header_"+header, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			if err := addPassthroughHeaders(w, map[string]string{header: "value"}); err == nil {
+			if err := addPassthroughHeaders(w, singleValueHeader(map[string]string{header: "value"})); err == nil {
 				t.Fatalf("Invalid header %q was accepted", header)
 			}
 		})
 	}
-	if err := addPassthroughHeaders(httptest.NewRecorder(), map[string]string{
+	if err := addPassthroughHeaders(httptest.NewRecorder(), singleValueHeader(map[string]string{
 		"Patch-H-X-Test": "bad\r\nInjected: value",
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("Header value containing a newline was accepted")
 	}
 
 	w := httptest.NewRecorder()
-	if err := addPassthroughHeaders(w, map[string]string{
+	if err := addPassthroughHeaders(w, singleValueHeader(map[string]string{
 		"Patch-H-Connection":        "X-Remove",
 		"Patch-H-X-Remove":          "nominated hop-by-hop value",
 		"Patch-H-Content-Length":    "999999",
@@ -3116,7 +3163,7 @@ func TestAddPassthroughHeadersRejectsUnsafeMetadata(t *testing.T) {
 		"Patch-H-X-Keep":            "kept",
 		"Content-Type":              "text/plain",
 		"Patch-H-Content-Type":      "application/json",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("add passthrough headers: %v", err)
 	}
 	if got := w.Header().Get("X-Keep"); got != "kept" {
@@ -3130,13 +3177,23 @@ func TestAddPassthroughHeadersRejectsUnsafeMetadata(t *testing.T) {
 			t.Fatalf("Unsafe header %s was relayed as %q", header, got)
 		}
 	}
+
+	multiple := httptest.NewRecorder()
+	if err := addPassthroughHeaders(multiple, http.Header{
+		"Patch-H-Set-Cookie": {"first=1", "second=2"},
+	}); err != nil {
+		t.Fatalf("add repeated passthrough headers: %v", err)
+	}
+	if got := multiple.Header().Values("Set-Cookie"); !slices.Equal(got, []string{"first=1", "second=2"}) {
+		t.Fatalf("Repeated response headers changed: %v", got)
+	}
 }
 
 func TestAddRelayStreamHeadersUsesTrustedContentLength(t *testing.T) {
-	stream := relay.NewStream(io.NopCloser(strings.NewReader("hello")), map[string]string{
+	stream := relay.NewStream(io.NopCloser(strings.NewReader("hello")), singleValueHeader(map[string]string{
 		"Patch-Status":           "201",
 		"Patch-H-Content-Length": "999999",
-	}, 5)
+	}), 5)
 	defer stream.Complete(nil)
 
 	w := httptest.NewRecorder()

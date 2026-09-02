@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,7 +21,7 @@ func TestQueueStreamsBeforeProducerEOF(t *testing.T) {
 	defer cancel()
 
 	source, upload := io.Pipe()
-	stream := NewStream(source, map[string]string{"Content-Type": "text/plain"}, -1)
+	stream := NewStream(source, http.Header{"Content-Type": {"text/plain"}}, -1)
 	sendDone := make(chan error, 1)
 	go func() { sendDone <- broker.Send(ctx, "stream", stream) }()
 
@@ -73,6 +75,19 @@ func TestQueueStreamsBeforeProducerEOF(t *testing.T) {
 	}
 	if got := stream.BytesRead(); got != int64(len("first-second")) {
 		t.Fatalf("counted %d streamed bytes", got)
+	}
+}
+
+func TestNewStreamClonesRepeatedHeaderValues(t *testing.T) {
+	headers := http.Header{"X-Signature": {"first", "second"}}
+	stream := NewStream(io.NopCloser(strings.NewReader("")), headers, 0)
+	defer stream.Complete(nil)
+
+	headers["X-Signature"][0] = "mutated"
+	headers.Add("X-Signature", "third")
+
+	if got := stream.Headers.Values("X-Signature"); !slices.Equal(got, []string{"first", "second"}) {
+		t.Fatalf("Stream header snapshot changed with source map: %v", got)
 	}
 }
 
@@ -185,7 +200,7 @@ func TestBroadcastStreamsToSnapshotWithBackpressure(t *testing.T) {
 			ctx,
 			"events",
 			source,
-			map[string]string{"X-Event": "original"},
+			http.Header{"X-Event": {"original"}},
 			-1,
 		)
 		broadcastDone <- result{subscribers: subscribers, bytes: bytes, err: err}
@@ -227,7 +242,7 @@ func TestBroadcastStreamsToSnapshotWithBackpressure(t *testing.T) {
 		if result.body != "broadcast" {
 			t.Fatalf("subscriber %d got %q", result.index, result.body)
 		}
-		if got := streams[result.index].Headers["X-Event"]; got != "original" {
+		if got := streams[result.index].Headers.Get("X-Event"); got != "original" {
 			t.Fatalf("subscriber %d got header %q", result.index, got)
 		}
 	}

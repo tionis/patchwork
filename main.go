@@ -396,19 +396,6 @@ func queryKeys(values url.Values) []string {
 	return keys
 }
 
-func redactedQuery(values url.Values) string {
-	redacted := make(url.Values, len(values))
-	for key, value := range values {
-		switch strings.ToLower(key) {
-		case "body", "secret", "token":
-			redacted[key] = []string{"[REDACTED]"}
-		default:
-			redacted[key] = append([]string(nil), value...)
-		}
-	}
-	return redacted.Encode()
-}
-
 // statusHandler handles health check requests.
 func (s *server) statusHandler(w http.ResponseWriter, r *http.Request) {
 	s.logRequest(r, "Status check request")
@@ -1409,36 +1396,10 @@ func determinePathBehavior(path string, hasQueueParam bool) PathBehavior {
 	return BehaviorBlocking
 }
 
-// processPassthroughHeaders handles Patch-H-* headers for request/response
-func processPassthroughHeaders(headers http.Header, isRequest bool) map[string]string {
-	processed := make(map[string]string)
-
-	for key, values := range headers {
-		if strings.HasPrefix(key, "Patch-H-") {
-			if isRequest {
-				// For requests: Patch-H-* headers represent original headers from requester
-				// Strip Patch-H- prefix for the responder
-				originalKey := strings.TrimPrefix(key, "Patch-H-")
-				if len(values) > 0 {
-					processed[originalKey] = values[0]
-				}
-			} else {
-				// For responses: Patch-H-* headers should be stripped and passed through
-				originalKey := strings.TrimPrefix(key, "Patch-H-")
-				if len(values) > 0 {
-					processed[originalKey] = values[0]
-				}
-			}
-		}
-	}
-
-	return processed
-}
-
 // addPassthroughHeaders validates and adds end-to-end response metadata. HTTP
 // framing is owned by the receiving server and cannot be supplied by a relay
 // producer.
-func addPassthroughHeaders(w http.ResponseWriter, streamHeaders map[string]string) error {
+func addPassthroughHeaders(w http.ResponseWriter, streamHeaders http.Header) error {
 	headers, statusCode, err := validatedPassthroughHeaders(streamHeaders)
 	if err != nil {
 		return err
@@ -1456,7 +1417,7 @@ func applyPassthroughHeaders(w http.ResponseWriter, headers http.Header, statusC
 	}
 }
 
-func validatedPassthroughHeaders(streamHeaders map[string]string) (http.Header, int, error) {
+func validatedPassthroughHeaders(streamHeaders http.Header) (http.Header, int, error) {
 	statusCode := 0
 	statusSeen := false
 	connectionHeaders := make(map[string]struct{})
@@ -1464,15 +1425,18 @@ func validatedPassthroughHeaders(streamHeaders map[string]string) (http.Header, 
 
 	// RFC 9110 allows Connection to nominate additional hop-by-hop fields. Find
 	// those names before iterating the map so map iteration order is irrelevant.
-	for key, value := range streamHeaders {
+	for key, values := range streamHeaders {
 		keys = append(keys, key)
 		if strings.EqualFold(key, "Patch-Status") {
 			if statusSeen {
 				return nil, 0, errors.New("duplicate Patch-Status metadata")
 			}
-			parsedStatus, err := strconv.Atoi(value)
+			if len(values) != 1 {
+				return nil, 0, errors.New("Patch-Status must have exactly one value")
+			}
+			parsedStatus, err := strconv.Atoi(values[0])
 			if err != nil || parsedStatus < 200 || parsedStatus > 599 {
-				return nil, 0, fmt.Errorf("invalid Patch-Status %q", value)
+				return nil, 0, fmt.Errorf("invalid Patch-Status %q", values[0])
 			}
 			statusCode = parsedStatus
 			statusSeen = true
@@ -1481,8 +1445,10 @@ func validatedPassthroughHeaders(streamHeaders map[string]string) (http.Header, 
 
 		name := passthroughHeaderName(key)
 		if strings.EqualFold(name, "Connection") {
-			for token := range strings.SplitSeq(value, ",") {
-				connectionHeaders[http.CanonicalHeaderKey(strings.TrimSpace(token))] = struct{}{}
+			for _, value := range values {
+				for token := range strings.SplitSeq(value, ",") {
+					connectionHeaders[http.CanonicalHeaderKey(strings.TrimSpace(token))] = struct{}{}
+				}
 			}
 		}
 	}
@@ -1495,13 +1461,15 @@ func validatedPassthroughHeaders(streamHeaders map[string]string) (http.Header, 
 				continue
 			}
 
-			value := streamHeaders[key]
+			values := streamHeaders[key]
 			name := passthroughHeaderName(key)
 			if !validHTTPHeaderName(name) {
 				return fmt.Errorf("invalid relayed header name %q", name)
 			}
-			if !validHTTPHeaderValue(value) {
-				return fmt.Errorf("invalid value for relayed header %q", name)
+			for _, value := range values {
+				if !validHTTPHeaderValue(value) {
+					return fmt.Errorf("invalid value for relayed header %q", name)
+				}
 			}
 
 			canonicalName := http.CanonicalHeaderKey(name)
@@ -1511,7 +1479,7 @@ func validatedPassthroughHeaders(streamHeaders map[string]string) (http.Header, 
 			if _, forbidden := connectionHeaders[canonicalName]; forbidden {
 				continue
 			}
-			headers.Set(canonicalName, value)
+			headers[canonicalName] = append([]string(nil), values...)
 		}
 		return nil
 	}
@@ -1625,48 +1593,39 @@ func (w *flushingResponseWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// prepareRequestHeaders prepares headers for the stream, adding Patch-H-* prefixes for passthrough
-func prepareRequestHeaders(r *http.Request) map[string]string {
-	headers := make(map[string]string)
-
-	// Add content type if present
-	contentType := r.Header.Get("Content-Type")
-	if contentType != "" {
-		headers["Content-Type"] = contentType
-	} else {
-		headers["Content-Type"] = "text/plain"
+// prepareRequestHeaders captures the request metadata needed to reconstruct a
+// webhook. Every end-to-end header is prefixed so Patchwork's own response
+// metadata cannot collide with it; repeated header values are preserved.
+func prepareRequestHeaders(r *http.Request) http.Header {
+	headers := make(http.Header, len(r.Header)+4)
+	headers.Set("Patch-Method", r.Method)
+	headers.Set("Patch-Uri", r.URL.RequestURI())
+	if r.Host != "" {
+		headers.Set("Patch-H-Host", r.Host)
 	}
 
-	// Add the request URI with query parameters for req/res mode
-	if r.URL.Path != "" {
-		uri := r.URL.Path
-		if r.URL.RawQuery != "" {
-			uri += "?" + redactedQuery(r.URL.Query())
-		}
-		headers["Patch-Uri"] = uri
-	}
-
-	// Process passthrough headers (add Patch-H-* prefix to headers that should be passed through)
-	// For now, we'll pass through common headers like User-Agent, Accept, etc.
-	passthroughCandidates := []string{
-		"User-Agent", "Accept", "Accept-Language", "Accept-Encoding",
-		"Referer", "Origin", "X-Forwarded-For", "X-Real-IP",
-		"Content-Length",
-	}
-
-	for _, headerName := range passthroughCandidates {
-		if value := r.Header.Get(headerName); value != "" {
-			headers["Patch-H-"+headerName] = value
+	connectionHeaders := make(map[string]struct{})
+	for _, value := range r.Header.Values("Connection") {
+		for token := range strings.SplitSeq(value, ",") {
+			connectionHeaders[http.CanonicalHeaderKey(strings.TrimSpace(token))] = struct{}{}
 		}
 	}
-
-	// Also add any explicit Patch-H-* headers from the request
 	for key, values := range r.Header {
-		if strings.HasPrefix(key, "Patch-H-") && len(values) > 0 {
-			headers[key] = values[0]
+		canonicalKey := http.CanonicalHeaderKey(key)
+		if forbiddenRelayHeader(canonicalKey) {
+			continue
 		}
+		if _, forbidden := connectionHeaders[canonicalKey]; forbidden {
+			continue
+		}
+		headers["Patch-H-"+canonicalKey] = append([]string(nil), values...)
 	}
 
+	if contentType := r.Header.Get("Content-Type"); contentType != "" {
+		headers.Set("Content-Type", contentType)
+	} else {
+		headers.Set("Content-Type", "text/plain")
+	}
 	return headers
 }
 
@@ -1754,7 +1713,7 @@ func (s *server) handleRequester(
 	s.logger.Info("Delivering response to requester",
 		"channel_id", channelID,
 		"client_ip", s.clientIP(r),
-		"content_type", response.Headers["Content-Type"])
+		"content_type", response.Headers.Get("Content-Type"))
 	if err := addRelayStreamHeaders(w, response); err != nil {
 		response.Complete(err)
 		s.logger.Warn("Rejected invalid relay response metadata", "channel_id", channelID, "error", err)
@@ -1814,7 +1773,7 @@ func (s *server) handleResponderRegular(
 		s.logger.Info("Delivering request to responder",
 			"channel_id", channelID,
 			"client_ip", s.clientIP(r),
-			"content_type", request.Headers["Content-Type"])
+			"content_type", request.Headers.Get("Content-Type"))
 		if err := addRelayStreamHeaders(w, request); err != nil {
 			request.Complete(err)
 			s.logger.Warn("Rejected invalid relay request metadata", "channel_id", channelID, "error", err)
@@ -1844,26 +1803,26 @@ func (s *server) handleResponderRegular(
 			}
 
 			// Prepare response headers
-			headers := make(map[string]string)
+			headers := make(http.Header)
 
 			// Set content type
 			contentType := r.Header.Get("Content-Type")
 			if contentType != "" {
-				headers["Content-Type"] = contentType
+				headers.Set("Content-Type", contentType)
 			} else {
-				headers["Content-Type"] = "text/plain"
+				headers.Set("Content-Type", "text/plain")
 			}
 
 			// Process Patch-H-* headers for passthrough
 			for key, values := range r.Header {
 				if strings.HasPrefix(key, "Patch-H-") && len(values) > 0 {
-					headers[key] = values[0]
+					headers[key] = append([]string(nil), values...)
 				}
 			}
 
 			// Process Patch-Status header
-			if status := r.Header.Get("Patch-Status"); status != "" {
-				headers["Patch-Status"] = status
+			if status := r.Header.Values("Patch-Status"); len(status) > 0 {
+				headers["Patch-Status"] = append([]string(nil), status...)
 			}
 
 			// Send the response to requester
@@ -1996,9 +1955,9 @@ func (s *server) handleResponderSwitch(
 				timeoutError := fmt.Sprintf("Double clutch timeout: no response received on channel %q within %s", newChannelID, timeout)
 				errorMessage := relay.NewStream(
 					io.NopCloser(strings.NewReader(timeoutError)),
-					map[string]string{
-						"Content-Type": "text/plain",
-						"Patch-Status": "504", // Gateway Timeout
+					http.Header{
+						"Content-Type": {"text/plain"},
+						"Patch-Status": {"504"}, // Gateway Timeout
 					},
 					int64(len(timeoutError)),
 				)
@@ -2018,17 +1977,17 @@ func (s *server) handleResponderSwitch(
 		}()
 
 		// Return the request information as headers to the responder
-		for key, value := range requestMessage.Headers {
+		for key, values := range requestMessage.Headers {
 			if strings.HasPrefix(key, "Patch-H-") {
-				w.Header().Set(key, value)
-			} else if key == "Patch-Uri" {
-				w.Header().Set(key, value)
+				w.Header()[key] = append([]string(nil), values...)
+			} else if key == "Patch-Uri" || key == "Patch-Method" {
+				w.Header()[key] = append([]string(nil), values...)
 			}
 		}
 
 		// Set CORS headers for browser compatibility
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Content-Type", requestMessage.Headers["Content-Type"])
+		w.Header().Set("Content-Type", requestMessage.Headers.Get("Content-Type"))
 		if requestMessage.ContentLength >= 0 {
 			w.Header().Set("Content-Length", strconv.FormatInt(requestMessage.ContentLength, 10))
 		}
@@ -2366,7 +2325,7 @@ func (s *server) handlePatch(
 		s.logger.Info("Delivering data to consumer",
 			"channel_path", channelPath,
 			"client_ip", s.clientIP(r),
-			"content_type", stream.Headers["Content-Type"])
+			"content_type", stream.Headers.Get("Content-Type"))
 		if err := addRelayStreamHeaders(w, stream); err != nil {
 			stream.Complete(err)
 			s.logger.Warn("Rejected invalid relay metadata", "channel_path", channelPath, "error", err)

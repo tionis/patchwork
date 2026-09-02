@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"sync"
 	"sync/atomic"
 )
@@ -17,7 +18,7 @@ var ErrNilStream = errors.New("relay stream is nil")
 // waits for that completion, which preserves end-to-end backpressure.
 type Stream struct {
 	Body          io.ReadCloser
-	Headers       map[string]string
+	Headers       http.Header
 	ContentLength int64
 
 	once          sync.Once
@@ -28,13 +29,13 @@ type Stream struct {
 
 // NewStream wraps body for transfer. Headers are copied at construction so the
 // sender may safely reuse its metadata after handing the stream off.
-func NewStream(body io.ReadCloser, headers map[string]string, contentLength int64) *Stream {
+func NewStream(body io.ReadCloser, headers http.Header, contentLength int64) *Stream {
 	if body == nil {
 		body = io.NopCloser(&emptyReader{})
 	}
 
 	stream := &Stream{
-		Headers:       cloneHeaders(headers),
+		Headers:       headers.Clone(),
 		ContentLength: contentLength,
 		done:          make(chan struct{}),
 	}
@@ -169,7 +170,7 @@ func (b *Broker) Broadcast(
 	ctx context.Context,
 	name string,
 	source io.ReadCloser,
-	headers map[string]string,
+	headers http.Header,
 	contentLength int64,
 ) (subscribers int, bytesRead int64, err error) {
 	if source == nil {
@@ -274,7 +275,7 @@ func (s *Subscription) Close() {
 	})
 }
 
-func (b *Broker) claimSubscriptions(name string, headers map[string]string, contentLength int64) []*io.PipeWriter {
+func (b *Broker) claimSubscriptions(name string, headers http.Header, contentLength int64) []*io.PipeWriter {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -336,15 +337,4 @@ func (b *Broker) deleteIfIdleLocked(name string, ch *channel) {
 	if ch.queueUsers == 0 && len(ch.subscriptions) == 0 && b.channels[name] == ch {
 		delete(b.channels, name)
 	}
-}
-
-func cloneHeaders(headers map[string]string) map[string]string {
-	if headers == nil {
-		return nil
-	}
-	clone := make(map[string]string, len(headers))
-	for key, value := range headers {
-		clone[key] = value
-	}
-	return clone
 }

@@ -136,20 +136,20 @@ curl -X POST -d '{"result":"processed"}' {{.BaseURL}}/public/new-channel-123
 # The original requester receives this response</pre>
 
   <h2>Passthrough Headers</h2>
-  <p>Patchwork supports passthrough headers using the <code>Patch-H-*</code> prefix system, allowing you to forward original request context between clients through the relay system.</p>
+  <p>Patchwork preserves webhook request metadata alongside the streamed body.</p>
 
   <h3>How It Works</h3>
   <ul>
-    <li><strong>Request Headers:</strong> Headers starting with <code>Patch-H-</code> represent original headers from the requester</li>
-    <li><strong>Response Headers:</strong> <code>Patch-H-*</code> headers are stripped of their prefix and passed through to the final receiver</li>
-    <li><strong>Automatic Headers:</strong> Common headers like <code>User-Agent</code>, <code>Accept</code>, etc. are automatically converted to <code>Patch-H-*</code> format</li>
+    <li><strong>Incoming requests:</strong> All end-to-end headers and repeated values are delivered under their original names; hop-by-hop framing headers are excluded.</li>
+    <li><strong>Request identity:</strong> <code>Patch-Method</code> contains the original method and <code>Patch-Uri</code> contains the exact path and query string.</li>
+    <li><strong>Responder controls:</strong> Use <code>Patch-Status</code> and <code>Patch-H-*</code> to set the final response status and headers.</li>
   </ul>
 
   <h3>Example Usage</h3>
   <p><strong>Producer side</strong> (sending headers):</p>
   <pre>curl -X POST \
-  -H "Patch-H-Original-IP: 192.168.1.100" \
-  -H "Patch-H-User-ID: alice123" \
+  -H "X-Original-IP: 192.168.1.100" \
+  -H "X-User-ID: alice123" \
   -H "User-Agent: MyApp/1.0" \
   -d "request data" \
   {{.BaseURL}}/public/queue/api</pre>
@@ -157,16 +157,19 @@ curl -X POST -d '{"result":"processed"}' {{.BaseURL}}/public/new-channel-123
   <p><strong>Consumer side</strong> (receiving headers):</p>
   <pre>curl -v {{.BaseURL}}/public/queue/api
 # Response includes:
-# Original-IP: 192.168.1.100
-# User-ID: alice123
-# User-Agent: MyApp/1.0</pre>
+# X-Original-IP: 192.168.1.100
+# X-User-ID: alice123
+# User-Agent: MyApp/1.0
+# Patch-Method: POST
+# Patch-Uri: /public/queue/api</pre>
 
   <p>This enables building proxy-like applications where the original request context is preserved through the relay.</p>
 
   <h3>Request-Responder Headers</h3>
   <p>In request-responder mode, additional headers provide request context and response control:</p>
   <ul>
-    <li><strong>Patch-Uri:</strong> Contains the original request path (e.g., <code>/api/users/123</code>)</li>
+    <li><strong>Patch-Method:</strong> Contains the original HTTP method</li>
+    <li><strong>Patch-Uri:</strong> Contains the exact original path and query string</li>
     <li><strong>Patch-Status:</strong> Set by responder to control HTTP response status code (e.g., <code>404</code>, <code>201</code>)</li>
     <li><strong>Standard Headers:</strong> All <code>Patch-H-*</code> headers work as normal for forwarding request context</li>
   </ul>

@@ -173,21 +173,25 @@ curl https://patchwork.example.com/public/./notifications?pubsub=true -d "broadc
 
 ## Passthrough Headers
 
-Patchwork supports passthrough headers using the `Patch-H-*` prefix system, allowing you to forward original request context between clients through the relay system.
+Patchwork preserves webhook request metadata alongside the streamed body.
 
 ### How It Works
 
-- **Request Headers**: Headers starting with `Patch-H-` represent original headers from the requester
-- **Response Headers**: `Patch-H-*` headers are stripped of their prefix and passed through to the final receiver
-- **Automatic Headers**: Common headers like `User-Agent`, `Accept`, etc. are automatically converted to `Patch-H-*` format
+- **Incoming requests**: All end-to-end headers, including repeated values and
+  webhook signature headers, are delivered to the consumer under their original
+  names. Hop-by-hop framing headers are excluded.
+- **Request identity**: `Patch-Method` contains the original method and
+  `Patch-Uri` contains the exact path and query string.
+- **Responder controls**: A request-responder client uses `Patch-Status` for the
+  final status and `Patch-H-*` to set final response headers.
 
 ### Example Usage
 
 **Producer side** (sending headers):
 ```bash
 curl -X POST \
-  -H "Patch-H-Original-IP: 192.168.1.100" \
-  -H "Patch-H-User-ID: alice123" \
+  -H "X-Original-IP: 192.168.1.100" \
+  -H "X-User-ID: alice123" \
   -H "User-Agent: MyApp/1.0" \
   -d "request data" \
   https://patchwork.example.com/public/queue/api
@@ -197,9 +201,11 @@ curl -X POST \
 ```bash
 curl -v https://patchwork.example.com/public/queue/api
 # Response includes:
-# Original-IP: 192.168.1.100
-# User-ID: alice123
+# X-Original-IP: 192.168.1.100
+# X-User-ID: alice123
 # User-Agent: MyApp/1.0
+# Patch-Method: POST
+# Patch-Uri: /public/queue/api
 ```
 
 This enables building proxy-like applications where the original request context is preserved through the relay.
