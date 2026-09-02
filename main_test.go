@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -54,25 +55,25 @@ func TestGetClientIP(t *testing.T) {
 			name:       "X-Forwarded-For single IP",
 			headers:    map[string]string{"X-Forwarded-For": "192.168.1.100"},
 			remoteAddr: "10.0.0.1:12345",
-			expectedIP: "192.168.1.100",
+			expectedIP: "10.0.0.1",
 		},
 		{
 			name:       "X-Forwarded-For multiple IPs",
 			headers:    map[string]string{"X-Forwarded-For": "192.168.1.100, 10.0.0.1, 172.16.0.1"},
 			remoteAddr: "10.0.0.1:12345",
-			expectedIP: "192.168.1.100",
+			expectedIP: "10.0.0.1",
 		},
 		{
 			name:       "X-Real-IP header",
 			headers:    map[string]string{"X-Real-IP": "203.0.113.1"},
 			remoteAddr: "10.0.0.1:12345",
-			expectedIP: "203.0.113.1",
+			expectedIP: "10.0.0.1",
 		},
 		{
 			name:       "CF-Connecting-IP header",
 			headers:    map[string]string{"CF-Connecting-IP": "198.51.100.1"},
 			remoteAddr: "10.0.0.1:12345",
-			expectedIP: "198.51.100.1",
+			expectedIP: "10.0.0.1",
 		},
 		{
 			name:       "RemoteAddr fallback with port",
@@ -94,7 +95,7 @@ func TestGetClientIP(t *testing.T) {
 				"CF-Connecting-IP": "198.51.100.1",
 			},
 			remoteAddr: "10.0.0.1:12345",
-			expectedIP: "192.168.1.100",
+			expectedIP: "10.0.0.1",
 		},
 	}
 
@@ -112,6 +113,78 @@ func TestGetClientIP(t *testing.T) {
 				t.Errorf("Expected IP %q, got %q", tt.expectedIP, result)
 			}
 		})
+	}
+}
+
+func TestServerClientIPUsesOnlyTrustedProxies(t *testing.T) {
+	server := createTestMainServer()
+	server.trustedProxyCIDRs = []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("192.0.2.0/24"),
+	}
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		headers    map[string]string
+		want       string
+	}{
+		{
+			name:       "untrusted peer cannot spoof forwarding header",
+			remoteAddr: "203.0.113.5:1234",
+			headers:    map[string]string{"X-Forwarded-For": "198.51.100.9"},
+			want:       "203.0.113.5",
+		},
+		{
+			name:       "trusted proxy supplies client",
+			remoteAddr: "10.0.0.2:1234",
+			headers:    map[string]string{"X-Forwarded-For": "198.51.100.9"},
+			want:       "198.51.100.9",
+		},
+		{
+			name:       "trusted proxy chain is traversed from right",
+			remoteAddr: "10.0.0.2:1234",
+			headers:    map[string]string{"X-Forwarded-For": "198.51.100.9, 192.0.2.4"},
+			want:       "198.51.100.9",
+		},
+		{
+			name:       "nearest untrusted proxy is client boundary",
+			remoteAddr: "10.0.0.2:1234",
+			headers:    map[string]string{"X-Forwarded-For": "198.51.100.9, 203.0.113.7"},
+			want:       "203.0.113.7",
+		},
+		{
+			name:       "trusted proxy fallback header",
+			remoteAddr: "10.0.0.2:1234",
+			headers:    map[string]string{"CF-Connecting-IP": "2001:db8::42"},
+			want:       "2001:db8::42",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.RemoteAddr = tt.remoteAddr
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+			if got := server.clientIP(req); got != tt.want {
+				t.Fatalf("client IP = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseTrustedProxyCIDRs(t *testing.T) {
+	prefixes, err := parseTrustedProxyCIDRs("10.0.0.7/8, 2001:db8::1/32")
+	if err != nil {
+		t.Fatalf("parse trusted proxies: %v", err)
+	}
+	if len(prefixes) != 2 || prefixes[0].String() != "10.0.0.0/8" || prefixes[1].String() != "2001:db8::/32" {
+		t.Fatalf("unexpected normalized prefixes: %v", prefixes)
+	}
+	if _, err := parseTrustedProxyCIDRs("not-a-prefix"); err == nil {
+		t.Fatal("invalid trusted proxy CIDR was accepted")
 	}
 }
 
@@ -267,6 +340,11 @@ func TestGetHTTPServer(t *testing.T) {
 	originalForgejoURL := os.Getenv("FORGEJO_URL")
 	originalForgejoToken := os.Getenv("FORGEJO_TOKEN")
 	originalSecretKey := os.Getenv("SECRET_KEY")
+	originalACLTTL := os.Getenv("ACL_TTL")
+	originalTrustedProxies := os.Getenv("TRUSTED_PROXY_CIDRS")
+	if err := os.Setenv("TRUSTED_PROXY_CIDRS", ""); err != nil {
+		t.Fatalf("Failed to clear TRUSTED_PROXY_CIDRS: %v", err)
+	}
 
 	defer func() {
 		if err := os.Setenv("FORGEJO_URL", originalForgejoURL); err != nil {
@@ -277,6 +355,12 @@ func TestGetHTTPServer(t *testing.T) {
 		}
 		if err := os.Setenv("SECRET_KEY", originalSecretKey); err != nil {
 			t.Logf("Failed to restore SECRET_KEY: %v", err)
+		}
+		if err := os.Setenv("ACL_TTL", originalACLTTL); err != nil {
+			t.Logf("Failed to restore ACL_TTL: %v", err)
+		}
+		if err := os.Setenv("TRUSTED_PROXY_CIDRS", originalTrustedProxies); err != nil {
+			t.Logf("Failed to restore TRUSTED_PROXY_CIDRS: %v", err)
 		}
 	}()
 
@@ -344,6 +428,17 @@ func TestGetHTTPServer(t *testing.T) {
 		}
 		if server.IdleTimeout != 60*time.Second {
 			t.Fatalf("unexpected idle timeout: %s", server.IdleTimeout)
+		}
+	})
+
+	t.Run("Invalid trusted proxy configuration", func(t *testing.T) {
+		os.Setenv("FORGEJO_TOKEN", "test-token")
+		os.Setenv("SECRET_KEY", "test-secret-key")
+		os.Setenv("TRUSTED_PROXY_CIDRS", "not-a-cidr")
+
+		server := getHTTPServer(slog.New(slog.NewTextHandler(io.Discard, nil)), context.Background(), 8081)
+		if server != nil {
+			t.Fatal("Expected invalid trusted proxy configuration to prevent startup")
 		}
 	})
 }
@@ -808,18 +903,20 @@ func createTestMainServer() *server {
 	metricsInstance := metrics.NewMetrics()
 
 	return &server{
-		logger:             logger,
-		ctx:                context.Background(),
-		forgejoURL:         "https://test.forgejo.dev",
-		forgejoToken:       "test-token",
-		aclTTL:             5 * time.Minute,
-		secretKey:          secretKey,
-		authCache:          authCache,
-		metrics:            metricsInstance,
-		broker:             relay.NewBroker(),
-		switchTimeout:      250 * time.Millisecond,
-		publicRateLimiters: make(map[string]*rate.Limiter),
-		rateLimiterMutex:   sync.RWMutex{},
+		logger:              logger,
+		ctx:                 context.Background(),
+		forgejoURL:          "https://test.forgejo.dev",
+		forgejoToken:        "test-token",
+		aclTTL:              5 * time.Minute,
+		secretKey:           secretKey,
+		authCache:           authCache,
+		metrics:             metricsInstance,
+		broker:              relay.NewBroker(),
+		switchTimeout:       250 * time.Millisecond,
+		publicRateLimiters:  make(map[string]*rateLimiterEntry),
+		rateLimiterTTL:      10 * time.Minute,
+		maxRateLimiters:     10_000,
+		overflowRateLimiter: rate.NewLimiter(rate.Limit(10), 20),
 	}
 }
 
@@ -962,6 +1059,71 @@ func TestPublicRateLimiting(t *testing.T) {
 	}
 
 	t.Log("Rate limiting test completed successfully")
+}
+
+func TestPublicRateLimiterIgnoresSpoofedForwardingAddresses(t *testing.T) {
+	server := createTestMainServer()
+	handler := server.rateLimitMiddleware(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	var limited int
+	for i := 0; i < 25; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/public/spoof", nil)
+		req.RemoteAddr = "198.51.100.50:1234"
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("203.0.113.%d", i))
+		w := httptest.NewRecorder()
+		handler(w, req)
+		if w.Code == http.StatusTooManyRequests {
+			limited++
+		}
+	}
+
+	if limited == 0 {
+		t.Fatal("Rotating an untrusted forwarding header bypassed the rate limiter")
+	}
+	if got := len(server.publicRateLimiters); got != 1 {
+		t.Fatalf("Spoofed headers created %d limiter entries, want 1", got)
+	}
+}
+
+func TestRateLimiterCleanupUsesLastSeen(t *testing.T) {
+	server := createTestMainServer()
+	server.rateLimiterTTL = time.Minute
+	now := time.Unix(1_700_000_000, 0)
+	server.now = func() time.Time { return now }
+
+	server.getOrCreateRateLimiter("old")
+	now = now.Add(30 * time.Second)
+	server.getOrCreateRateLimiter("recent")
+	now = now.Add(31 * time.Second)
+	server.cleanupOldRateLimiters()
+
+	if _, exists := server.publicRateLimiters["old"]; exists {
+		t.Fatal("Expired limiter was retained")
+	}
+	if _, exists := server.publicRateLimiters["recent"]; !exists {
+		t.Fatal("Recently used limiter was removed")
+	}
+}
+
+func TestRateLimiterMapIsBounded(t *testing.T) {
+	server := createTestMainServer()
+	server.maxRateLimiters = 2
+
+	server.getOrCreateRateLimiter("first")
+	server.getOrCreateRateLimiter("second")
+	overflow := server.getOrCreateRateLimiter("third")
+
+	if got := len(server.publicRateLimiters); got != 2 {
+		t.Fatalf("Limiter map size = %d, want hard limit 2", got)
+	}
+	if overflow != server.overflowRateLimiter {
+		t.Fatal("New clients did not share the overflow limiter at capacity")
+	}
+	if got := server.getOrCreateRateLimiter("fourth"); got != overflow {
+		t.Fatal("Overflow clients did not share one bounded limiter")
+	}
 }
 
 func TestUserHandler(t *testing.T) {
@@ -1977,6 +2139,7 @@ func TestHandlePatchStopsBlockedOperationsOnServerShutdown(t *testing.T) {
 func TestHTTPRouterPublicRouteMessagePassing(t *testing.T) {
 	t.Setenv("SECRET_KEY", "test-secret-key")
 	t.Setenv("FORGEJO_TOKEN", "test-token")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	t.Setenv("FORGEJO_URL", "https://forgejo.example.test")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2320,7 +2483,7 @@ func TestHTTPRouterPublicRateLimitConcurrentRequests(t *testing.T) {
 			defer wg.Done()
 
 			req := httptest.NewRequest(http.MethodPost, "/public/pubsub/rate-limit", strings.NewReader("payload"))
-			req.Header.Set("X-Forwarded-For", "203.0.113.10")
+			req.RemoteAddr = "203.0.113.10:1234"
 			w := httptest.NewRecorder()
 
 			srv.Handler.ServeHTTP(w, req)
@@ -2361,7 +2524,7 @@ func TestHTTPRouterPublicRateLimitConcurrentRequests(t *testing.T) {
 	}
 
 	otherIPReq := httptest.NewRequest(http.MethodPost, "/public/pubsub/rate-limit", strings.NewReader("payload"))
-	otherIPReq.Header.Set("X-Forwarded-For", "203.0.113.11")
+	otherIPReq.RemoteAddr = "203.0.113.11:1234"
 	otherIP := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(otherIP, otherIPReq)
 	if otherIP.Code != http.StatusOK {

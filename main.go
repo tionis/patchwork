@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -60,8 +61,18 @@ type server struct {
 	broker        *relay.Broker
 	switchTimeout time.Duration
 	// Rate limiting for public namespaces
-	publicRateLimiters map[string]*rate.Limiter
-	rateLimiterMutex   sync.RWMutex
+	publicRateLimiters  map[string]*rateLimiterEntry
+	rateLimiterMutex    sync.Mutex
+	rateLimiterTTL      time.Duration
+	maxRateLimiters     int
+	overflowRateLimiter *rate.Limiter
+	trustedProxyCIDRs   []netip.Prefix
+	now                 func() time.Time
+}
+
+type rateLimiterEntry struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
 }
 
 // =============================================================================
@@ -262,43 +273,85 @@ type AuthCache struct {
 // UTILITY FUNCTIONS
 // =============================================================================
 
-// getClientIP extracts the real client IP from reverse proxy headers.
+// getClientIP returns the network peer. Forwarding headers are untrusted unless
+// a server is explicitly configured with trusted proxy networks.
 func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header first (most common)
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		// X-Forwarded-For can contain multiple IPs, take the first one
-		if idx := strings.Index(xff, ","); idx != -1 {
-			return strings.TrimSpace(xff[:idx])
+	if peer, ok := requestPeerIP(r); ok {
+		return peer.String()
+	}
+	return r.RemoteAddr
+}
+
+func (s *server) clientIP(r *http.Request) string {
+	peer, ok := requestPeerIP(r)
+	if !ok || !addressInPrefixes(peer, s.trustedProxyCIDRs) {
+		return getClientIP(r)
+	}
+
+	forwarded := make([]netip.Addr, 0, 4)
+	for value := range strings.SplitSeq(r.Header.Get("X-Forwarded-For"), ",") {
+		if addr, err := netip.ParseAddr(strings.TrimSpace(value)); err == nil {
+			forwarded = append(forwarded, addr.Unmap())
 		}
-
-		return strings.TrimSpace(xff)
+	}
+	if len(forwarded) > 0 {
+		// Walk toward the client, discarding only proxies we explicitly trust.
+		for i := len(forwarded) - 1; i >= 0; i-- {
+			if !addressInPrefixes(forwarded[i], s.trustedProxyCIDRs) {
+				return forwarded[i].String()
+			}
+		}
+		return forwarded[0].String()
 	}
 
-	// Check X-Real-IP header (nginx)
-	xri := r.Header.Get("X-Real-IP")
-	if xri != "" {
-		return strings.TrimSpace(xri)
+	for _, header := range []string{"CF-Connecting-IP", "X-Real-IP"} {
+		if addr, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get(header))); err == nil {
+			return addr.Unmap().String()
+		}
 	}
+	return peer.String()
+}
 
-	// Check CF-Connecting-IP header (Cloudflare)
-	cfip := r.Header.Get("CF-Connecting-IP")
-	if cfip != "" {
-		return strings.TrimSpace(cfip)
+func requestPeerIP(r *http.Request) (netip.Addr, bool) {
+	host := r.RemoteAddr
+	if splitHost, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		host = splitHost
 	}
-
-	// Fall back to RemoteAddr
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	addr, err := netip.ParseAddr(host)
 	if err != nil {
-		return r.RemoteAddr
+		return netip.Addr{}, false
 	}
+	return addr.Unmap(), true
+}
 
-	return ip
+func addressInPrefixes(addr netip.Addr, prefixes []netip.Prefix) bool {
+	for _, prefix := range prefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseTrustedProxyCIDRs(value string) ([]netip.Prefix, error) {
+	var prefixes []netip.Prefix
+	for item := range strings.SplitSeq(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(item)
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted proxy CIDR %q: %w", item, err)
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	return prefixes, nil
 }
 
 // logRequest logs HTTP request details at info level.
 func (s *server) logRequest(r *http.Request, message string) {
-	clientIP := getClientIP(r)
+	clientIP := s.clientIP(r)
 	s.logger.Info(message,
 		"method", r.Method,
 		"path", r.URL.Path,
@@ -759,7 +812,7 @@ func (s *server) userAdminHandler(w http.ResponseWriter, r *http.Request) {
 			"username",
 			username,
 			"client_ip",
-			getClientIP(r),
+			s.clientIP(r),
 		)
 		w.WriteHeader(http.StatusOK)
 
@@ -799,7 +852,7 @@ func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
 		token = strings.TrimPrefix(token, "token ")
 	}
 
-	clientIPParsed := net.ParseIP(getClientIP(r))
+	clientIPParsed := net.ParseIP(s.clientIP(r))
 	if clientIPParsed == nil {
 		clientIPParsed = net.IPv4(127, 0, 0, 1)
 	}
@@ -1042,7 +1095,7 @@ func (s *server) forwardHookRootHandler(w http.ResponseWriter, r *http.Request) 
 
 		s.logger.Info("Forward hook channel created",
 			"channel", channel,
-			"client_ip", getClientIP(r))
+			"client_ip", s.clientIP(r))
 
 		response := HookResponse{
 			Channel: channel,
@@ -1088,7 +1141,7 @@ func (s *server) forwardHookHandler(w http.ResponseWriter, r *http.Request) {
 				"channel",
 				path,
 				"client_ip",
-				getClientIP(r),
+				s.clientIP(r),
 			)
 			http.Error(w, "Secret required for POST", http.StatusUnauthorized)
 
@@ -1102,14 +1155,14 @@ func (s *server) forwardHookHandler(w http.ResponseWriter, r *http.Request) {
 				"channel",
 				path,
 				"client_ip",
-				getClientIP(r),
+				s.clientIP(r),
 			)
 			http.Error(w, "Invalid secret", http.StatusUnauthorized)
 
 			return
 		}
 
-		s.logger.Info("Forward hook POST authorized", "channel", path, "client_ip", getClientIP(r))
+		s.logger.Info("Forward hook POST authorized", "channel", path, "client_ip", s.clientIP(r))
 	}
 
 	s.handlePatch(w, r, "h", "", path)
@@ -1133,7 +1186,7 @@ func (s *server) reverseHookRootHandler(w http.ResponseWriter, r *http.Request) 
 
 		s.logger.Info("Reverse hook channel created",
 			"channel", channel,
-			"client_ip", getClientIP(r))
+			"client_ip", s.clientIP(r))
 
 		response := HookResponse{
 			Channel: channel,
@@ -1179,7 +1232,7 @@ func (s *server) reverseHookHandler(w http.ResponseWriter, r *http.Request) {
 				"channel",
 				path,
 				"client_ip",
-				getClientIP(r),
+				s.clientIP(r),
 			)
 			http.Error(w, "Secret required for GET", http.StatusUnauthorized)
 
@@ -1193,16 +1246,16 @@ func (s *server) reverseHookHandler(w http.ResponseWriter, r *http.Request) {
 				"channel",
 				path,
 				"client_ip",
-				getClientIP(r),
+				s.clientIP(r),
 			)
 			http.Error(w, "Invalid secret", http.StatusUnauthorized)
 
 			return
 		}
 
-		s.logger.Info("Reverse hook GET authorized", "channel", path, "client_ip", getClientIP(r))
+		s.logger.Info("Reverse hook GET authorized", "channel", path, "client_ip", s.clientIP(r))
 	} else {
-		s.logger.Info("Reverse hook POST access", "channel", path, "client_ip", getClientIP(r))
+		s.logger.Info("Reverse hook POST access", "channel", path, "client_ip", s.clientIP(r))
 	}
 
 	s.handlePatch(w, r, "r", "", path)
@@ -1590,7 +1643,7 @@ func (s *server) handleRequester(
 	s.logger.Info("Requester request",
 		"channel_id", channelID,
 		"method", r.Method,
-		"client_ip", getClientIP(r),
+		"client_ip", s.clientIP(r),
 		"content_type", r.Header.Get("Content-Type"))
 
 	// Prepare headers with full HTTP request information
@@ -1613,13 +1666,13 @@ func (s *server) handleRequester(
 	if err != nil {
 		s.logger.Info("Requester request canceled while waiting for response",
 			"channel_id", channelID,
-			"client_ip", getClientIP(r))
+			"client_ip", s.clientIP(r))
 		return
 	}
 
 	s.logger.Info("Delivering response to requester",
 		"channel_id", channelID,
-		"client_ip", getClientIP(r),
+		"client_ip", s.clientIP(r),
 		"content_type", response.Headers["Content-Type"])
 	if err := addRelayStreamHeaders(w, response); err != nil {
 		response.Complete(err)
@@ -1667,19 +1720,19 @@ func (s *server) handleResponderRegular(
 		// Responder waiting for a request only (legacy mode - not practical for manual use)
 		s.logger.Info("Responder waiting for request (legacy mode)",
 			"channel_id", channelID,
-			"client_ip", getClientIP(r))
+			"client_ip", s.clientIP(r))
 
 		request, err := s.broker.Receive(ctx, reqChannelPath)
 		if err != nil {
 			s.logger.Info("Responder request canceled",
 				"channel_id", channelID,
-				"client_ip", getClientIP(r))
+				"client_ip", s.clientIP(r))
 			return
 		}
 
 		s.logger.Info("Delivering request to responder",
 			"channel_id", channelID,
-			"client_ip", getClientIP(r),
+			"client_ip", s.clientIP(r),
 			"content_type", request.Headers["Content-Type"])
 		if err := addRelayStreamHeaders(w, request); err != nil {
 			request.Complete(err)
@@ -1695,7 +1748,7 @@ func (s *server) handleResponderRegular(
 		// New improved mode: POST both waits for request AND sends response
 		s.logger.Info("Responder waiting for request and ready to respond",
 			"channel_id", channelID,
-			"client_ip", getClientIP(r),
+			"client_ip", s.clientIP(r),
 			"content_type", r.Header.Get("Content-Type"))
 
 		// Wait for a request to arrive first
@@ -1703,7 +1756,7 @@ func (s *server) handleResponderRegular(
 		if err == nil {
 			s.logger.Info("Request received, sending response",
 				"channel_id", channelID,
-				"client_ip", getClientIP(r))
+				"client_ip", s.clientIP(r))
 			if err := copyRelayStream(ctx, io.Discard, request); err != nil {
 				s.logger.Error("Error consuming request stream", "error", err)
 				return
@@ -1744,7 +1797,7 @@ func (s *server) handleResponderRegular(
 		} else {
 			s.logger.Info("Responder canceled while waiting for request",
 				"channel_id", channelID,
-				"client_ip", getClientIP(r))
+				"client_ip", s.clientIP(r))
 		}
 
 	} else {
@@ -1767,7 +1820,7 @@ func (s *server) handleResponderSwitch(
 
 	s.logger.Info("Responder in switch mode",
 		"channel_id", channelID,
-		"client_ip", getClientIP(r))
+		"client_ip", s.clientIP(r))
 
 	// Read the new channel ID from the request body
 	buf, err := io.ReadAll(io.LimitReader(r.Body, 257))
@@ -1785,7 +1838,7 @@ func (s *server) handleResponderSwitch(
 	if newChannelID == "" {
 		s.logger.Error("Empty channel ID provided in switch mode",
 			"channel_id", channelID,
-			"client_ip", getClientIP(r))
+			"client_ip", s.clientIP(r))
 		http.Error(w, "New channel ID required in request body", http.StatusBadRequest)
 		return
 	}
@@ -1795,7 +1848,7 @@ func (s *server) handleResponderSwitch(
 		s.logger.Error("Invalid channel ID format in switch mode",
 			"channel_id", channelID,
 			"new_channel", newChannelID,
-			"client_ip", getClientIP(r))
+			"client_ip", s.clientIP(r))
 		http.Error(w, "Invalid channel ID format - must not contain '/' or '?'", http.StatusBadRequest)
 		return
 	}
@@ -1809,7 +1862,7 @@ func (s *server) handleResponderSwitch(
 		s.logger.Info("Request received in switch mode",
 			"channel_id", channelID,
 			"new_channel", newChannelID,
-			"client_ip", getClientIP(r))
+			"client_ip", s.clientIP(r))
 
 		// Set up the new channel for receiving the response
 		// Extract namespace from the existing channel path
@@ -1914,7 +1967,7 @@ func (s *server) handleResponderSwitch(
 	} else {
 		s.logger.Info("Responder switch request canceled",
 			"channel_id", channelID,
-			"client_ip", getClientIP(r))
+			"client_ip", s.clientIP(r))
 	}
 }
 
@@ -1928,13 +1981,31 @@ func (s *server) getOrCreateRateLimiter(clientIP string) *rate.Limiter {
 	s.rateLimiterMutex.Lock()
 	defer s.rateLimiterMutex.Unlock()
 
-	limiter, exists := s.publicRateLimiters[clientIP]
-	if !exists {
-		// 10 requests per second with burst of 20
-		limiter = rate.NewLimiter(rate.Limit(10), 20)
-		s.publicRateLimiters[clientIP] = limiter
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
+	if entry, exists := s.publicRateLimiters[clientIP]; exists {
+		entry.lastSeen = now
+		return entry.limiter
 	}
 
+	maxEntries := s.maxRateLimiters
+	if maxEntries <= 0 {
+		maxEntries = 10_000
+	}
+	if len(s.publicRateLimiters) >= maxEntries {
+		s.cleanupExpiredRateLimitersLocked(now)
+		if len(s.publicRateLimiters) >= maxEntries {
+			if s.overflowRateLimiter == nil {
+				s.overflowRateLimiter = rate.NewLimiter(rate.Limit(10), 20)
+			}
+			return s.overflowRateLimiter
+		}
+	}
+
+	limiter := rate.NewLimiter(rate.Limit(10), 20)
+	s.publicRateLimiters[clientIP] = &rateLimiterEntry{limiter: limiter, lastSeen: now}
 	return limiter
 }
 
@@ -1945,11 +2016,20 @@ func (s *server) cleanupOldRateLimiters() {
 	s.rateLimiterMutex.Lock()
 	defer s.rateLimiterMutex.Unlock()
 
-	// Clean up rate limiters that haven't been used recently
-	// This is a simple approach; in production you might want more sophisticated cleanup
-	for ip, limiter := range s.publicRateLimiters {
-		// If the limiter has available tokens (unused), remove it after some time
-		if limiter.Tokens() >= float64(limiter.Burst()) {
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
+	s.cleanupExpiredRateLimitersLocked(now)
+}
+
+func (s *server) cleanupExpiredRateLimitersLocked(now time.Time) {
+	ttl := s.rateLimiterTTL
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+	for ip, entry := range s.publicRateLimiters {
+		if now.Sub(entry.lastSeen) >= ttl {
 			delete(s.publicRateLimiters, ip)
 		}
 	}
@@ -1960,7 +2040,7 @@ func (s *server) cleanupOldRateLimiters() {
 // to 10 per second with a burst allowance of 20 requests per IP address.
 func (s *server) rateLimitMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		clientIP := getClientIP(r)
+		clientIP := s.clientIP(r)
 		limiter := s.getOrCreateRateLimiter(clientIP)
 
 		if !limiter.Allow() {
@@ -2072,7 +2152,7 @@ func (s *server) handlePatch(
 		"path", path,
 		"channel_path", channelPath,
 		"method", r.Method,
-		"client_ip", getClientIP(r),
+		"client_ip", s.clientIP(r),
 		"content_length", r.ContentLength,
 		"behavior", behavior,
 		"pubsub_param", hasPubsubParam)
@@ -2092,7 +2172,7 @@ func (s *server) handlePatch(
 			token = strings.TrimPrefix(token, "token ")
 		}
 
-		clientIPParsed := net.ParseIP(getClientIP(r))
+		clientIPParsed := net.ParseIP(s.clientIP(r))
 		if clientIPParsed == nil {
 			// Fallback if IP parsing fails
 			clientIPParsed = net.IPv4(127, 0, 0, 1)
@@ -2123,7 +2203,7 @@ func (s *server) handlePatch(
 				"reason",
 				reason,
 				"client_ip",
-				getClientIP(r),
+				s.clientIP(r),
 			)
 			http.Error(w, "Access denied: "+reason, http.StatusUnauthorized)
 
@@ -2139,7 +2219,7 @@ func (s *server) handlePatch(
 			"reason",
 			reason,
 			"client_ip",
-			getClientIP(r),
+			s.clientIP(r),
 		)
 	}
 
@@ -2182,7 +2262,7 @@ func (s *server) handlePatch(
 			"channel_path",
 			channelPath,
 			"client_ip",
-			getClientIP(r),
+			s.clientIP(r),
 		)
 
 		var (
@@ -2198,13 +2278,13 @@ func (s *server) handlePatch(
 		if err != nil {
 			s.logger.Info("Consumer request canceled",
 				"channel_path", channelPath,
-				"client_ip", getClientIP(r))
+				"client_ip", s.clientIP(r))
 			return
 		}
 
 		s.logger.Info("Delivering data to consumer",
 			"channel_path", channelPath,
-			"client_ip", getClientIP(r),
+			"client_ip", s.clientIP(r),
 			"content_type", stream.Headers["Content-Type"])
 		if err := addRelayStreamHeaders(w, stream); err != nil {
 			stream.Complete(err)
@@ -2220,7 +2300,7 @@ func (s *server) handlePatch(
 		// Producer: send data
 		s.logger.Info("Producing data to channel",
 			"channel_path", channelPath,
-			"client_ip", getClientIP(r),
+			"client_ip", s.clientIP(r),
 			"content_type", r.Header.Get("Content-Type"),
 			"pubsub", pubsub)
 
@@ -2518,6 +2598,12 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		return nil
 	}
 
+	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		logger.Error("Invalid TRUSTED_PROXY_CIDRS, aborting server start", "error", err)
+		return nil
+	}
+
 	// Initialize auth cache
 	authCache := NewAuthCache(forgejoURL, forgejoToken, aclTTL, logger.WithGroup("auth"))
 
@@ -2525,18 +2611,21 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	metricsInstance := metrics.NewMetrics()
 
 	server := &server{
-		logger:             logger,
-		ctx:                ctx,
-		forgejoURL:         forgejoURL,
-		forgejoToken:       forgejoToken,
-		aclTTL:             aclTTL,
-		secretKey:          secretKey,
-		authCache:          authCache,
-		metrics:            metricsInstance,
-		broker:             relay.NewBroker(),
-		switchTimeout:      30 * time.Second,
-		publicRateLimiters: make(map[string]*rate.Limiter),
-		rateLimiterMutex:   sync.RWMutex{},
+		logger:              logger,
+		ctx:                 ctx,
+		forgejoURL:          forgejoURL,
+		forgejoToken:        forgejoToken,
+		aclTTL:              aclTTL,
+		secretKey:           secretKey,
+		authCache:           authCache,
+		metrics:             metricsInstance,
+		broker:              relay.NewBroker(),
+		switchTimeout:       30 * time.Second,
+		publicRateLimiters:  make(map[string]*rateLimiterEntry),
+		rateLimiterTTL:      10 * time.Minute,
+		maxRateLimiters:     10_000,
+		overflowRateLimiter: rate.NewLimiter(rate.Limit(10), 20),
+		trustedProxyCIDRs:   trustedProxyCIDRs,
 	}
 
 	router := mux.NewRouter()
@@ -2577,7 +2666,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 
 	router.HandleFunc("/static/{path:.*}", func(w http.ResponseWriter, r *http.Request) {
 		path := mux.Vars(r)["path"]
-		clientIP := getClientIP(r)
+		clientIP := server.clientIP(r)
 
 		logger.Info("Static asset request",
 			"method", r.Method,
@@ -2705,7 +2794,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 
 	// Start rate limiter cleanup goroutine
 	go func() {
-		ticker := time.NewTicker(5 * time.Minute) // Clean up every 5 minutes
+		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 
 		for {

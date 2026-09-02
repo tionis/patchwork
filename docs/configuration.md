@@ -201,6 +201,11 @@ Server configuration is provided via environment variables:
 - `FORGEJO_TOKEN` - Forgejo/Gitea API token for accessing repositories
 - `ACL_TTL` - Cache TTL for configuration files (default: 5m)
 - `SECRET_KEY` - Server secret key for HMAC generation (required for hooks)
+- `TRUSTED_PROXY_CIDRS` - Comma-separated CIDR ranges for reverse proxies that
+  are allowed to supply `X-Forwarded-For`, `CF-Connecting-IP`, or
+  `X-Real-IP`. The default trusts none; configure this when Patchwork is behind
+  a known proxy so client logging and public rate limiting use the original
+  address without accepting spoofed headers from direct clients.
 - `LOG_LEVEL` - Logging level (DEBUG, INFO, WARN, ERROR)
 - `LOG_SOURCE` - Add source information to logs (true/false)
 
