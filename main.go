@@ -563,6 +563,10 @@ func NewAuthCache(
 // This function directly contacts the Forgejo API to retrieve the latest
 // authentication configuration without using cache.
 func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
+	if cache.forgejoToken == "" {
+		return nil, errors.New("Forgejo authentication is not configured")
+	}
+
 	// Construct the API URL for the config.yaml file
 	apiURL := fmt.Sprintf(
 		"%s/api/v1/repos/%s/.patchwork/media/config.yaml",
@@ -2706,9 +2710,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	// Read Forgejo token for API access
 	forgejoToken := os.Getenv("FORGEJO_TOKEN")
 	if forgejoToken == "" {
-		logger.Error("No FORGEJO_TOKEN provided, aborting server start")
-
-		return nil
+		logger.Warn("FORGEJO_TOKEN is not set; user namespaces, notifications, and HuProxy are disabled")
 	}
 
 	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS"))

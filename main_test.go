@@ -406,7 +406,7 @@ func TestGetHTTPServer(t *testing.T) {
 		}
 	})
 
-	t.Run("Missing FORGEJO_TOKEN", func(t *testing.T) {
+	t.Run("Missing FORGEJO_TOKEN allows standalone relay", func(t *testing.T) {
 		os.Setenv("FORGEJO_URL", "https://test.example.com")
 		os.Setenv("FORGEJO_TOKEN", "")
 		os.Setenv("SECRET_KEY", "test-secret-key")
@@ -415,8 +415,16 @@ func TestGetHTTPServer(t *testing.T) {
 		ctx := context.Background()
 
 		server := getHTTPServer(logger, ctx, 8080)
-		if server != nil {
-			t.Error("Expected nil server when FORGEJO_TOKEN is missing")
+		if server == nil {
+			t.Fatal("Expected standalone relay server when FORGEJO_TOKEN is missing")
+		}
+
+		request := httptest.NewRequest(http.MethodGet, "/u/alice/channel", nil)
+		request.Header.Set("Authorization", "Bearer unavailable")
+		response := httptest.NewRecorder()
+		server.Handler.ServeHTTP(response, request)
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("user namespace status = %d, want 500 while Forgejo is disabled", response.Code)
 		}
 	})
 

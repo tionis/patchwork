@@ -581,7 +581,8 @@ go build -o patchwork .
 ### Environment Variables
 
 - `SECRET_KEY`: Secret key for HMAC generation (required)
-- `FORGEJO_TOKEN`: API token for accessing Forgejo/Gitea (required)
+- `FORGEJO_TOKEN`: API token for Forgejo-backed user namespaces, notifications,
+  and HuProxy. Optional for public and hook-only relay deployments.
 - `FORGEJO_URL`: URL of your Forgejo/Gitea instance (default: https://forge.tionis.dev)
 - `ACL_TTL`: Cache duration for ACL files (default: 5m)
 - `ACL_STALE_GRACE`: Maximum additional time an expired ACL may be used during

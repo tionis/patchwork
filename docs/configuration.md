@@ -198,7 +198,9 @@ curl -H "Authorization: Bearer production_ssh_token" \
 
 Server configuration is provided via environment variables:
 - `FORGEJO_URL` - Forgejo/Gitea instance URL (default: https://forge.tionis.dev)
-- `FORGEJO_TOKEN` - Forgejo/Gitea API token for accessing repositories
+- `FORGEJO_TOKEN` - Forgejo/Gitea API token for user namespaces,
+  notifications, and HuProxy. Public and hook-only relays can omit it; the
+  Forgejo-dependent routes then fail closed.
 - `ACL_TTL` - Cache TTL for configuration files (default: 5m)
 - `ACL_STALE_GRACE` - Additional time an expired ACL can be used when Forgejo
   cannot be reached (default: 1m, `0` disables stale authorization)
