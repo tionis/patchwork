@@ -1141,3 +1141,21 @@ func TestGetClientIPIgnoresUntrustedHeaders(t *testing.T) {
 		t.Fatalf("client IP = %q", got)
 	}
 }
+
+func TestAdminPageServes(t *testing.T) {
+	srv := newHTTPServerForTest(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	w := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /admin got %d", w.Code)
+	}
+	if contentType := w.Header().Get("Content-Type"); contentType != "text/html; charset=utf-8" {
+		t.Fatalf("content type = %q", contentType)
+	}
+	if !strings.Contains(w.Body.String(), "/api/v1/auth/login") {
+		t.Fatal("admin page does not reference the login endpoint")
+	}
+}

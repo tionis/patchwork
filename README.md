@@ -201,7 +201,7 @@ See [configuration](docs/configuration.md) and
 
 Token, user, notification, session, and group management lives behind a
 versioned admin API under `/api/v1`, authenticated by WebUI sessions. The
-WebUI (same binary) is a thin consumer of exactly this API.
+WebUI at `/admin` (same binary) is a thin consumer of exactly this API.
 
 Browser login uses Authentik OIDC when `PATCHWORK_OIDC_ISSUER` is set;
 otherwise the API is driven with the bootstrap admin plus direct store

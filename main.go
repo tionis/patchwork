@@ -2453,6 +2453,7 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 	router.HandleFunc("/healthz", server.statusHandler)
 	router.HandleFunc("/status", server.statusHandler)
 	router.Handle("/metrics", server.metricsHandler())
+	router.HandleFunc("/admin", serveFile(logger, "assets/admin.html", "text/html; charset=utf-8"))
 
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Read the template content

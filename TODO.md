@@ -29,6 +29,9 @@ and revocable from one place.
   working as long as `SECRET_KEY` is stable.
 - Exit: revocation takes effect immediately (no stale-grace dependence); git
   repos hold references, not credentials.
+- Status: backend, admin API, OIDC login, optional SCIM, CLI bootstrap, and
+  a thin `/admin` WebUI are implemented and verified (`make verify` green,
+  coverage above floor).
 
 ## Phase 2 — Identity-aware abuse management
 

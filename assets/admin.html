@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Patchwork Admin</title>
+<link rel="stylesheet" href="/static/water.css" />
+<style>
+  .secret { background: #fff8dc; border: 1px solid #c9a227; padding: 0.75em; overflow-wrap: anywhere; }
+  .error { color: #a00; }
+  table { width: 100%; }
+  td.actions { white-space: nowrap; }
+  details { margin-bottom: 1em; }
+  textarea.patterns { width: 100%; height: 5em; font-family: monospace; }
+</style>
+</head>
+<body>
+<h1>Patchwork Admin</h1>
+<div id="auth-bar"><em>Loading…</em></div>
+<p id="error" class="error" hidden></p>
+
+<main id="app" hidden>
+  <details open>
+    <summary><strong>Users</strong></summary>
+    <table id="users"><thead><tr><th>ID</th><th>Display</th><th>Admin</th><th>Active</th><th></th></tr></thead><tbody></tbody></table>
+    <h3>Create user</h3>
+    <form id="create-user">
+      <input name="id" placeholder="username" required />
+      <input name="display_name" placeholder="display name" />
+      <label><input type="checkbox" name="is_admin" /> admin</label>
+      <button type="submit">Create</button>
+    </form>
+  </details>
+
+  <details open>
+    <summary><strong>Tokens for <span id="token-user">–</span></strong></summary>
+    <div id="plaintext" class="secret" hidden></div>
+    <table id="tokens"><thead><tr><th>Name</th><th>Prefix</th><th>Admin</th><th>Expires</th><th></th></tr></thead><tbody></tbody></table>
+    <h3>Issue token</h3>
+    <form id="issue-token">
+      <input name="name" placeholder="token name" required />
+      <label><input type="checkbox" name="is_admin" /> admin</label><br />
+      <textarea class="patterns" name="patterns" placeholder='{"GET": ["/path/*"], "POST": ["/other/*"]}'></textarea><br />
+      <button type="submit">Issue (plaintext shown once)</button>
+    </form>
+  </details>
+
+  <details>
+    <summary><strong>Notification backend for <span id="ntfy-user">–</span></strong></summary>
+    <form id="ntfy">
+      <input name="type" placeholder="type, e.g. matrix" />
+      <textarea class="patterns" name="config" placeholder='{"room_id": "!x:y"}'></textarea><br />
+      <button type="submit">Save</button>
+    </form>
+  </details>
+
+  <details>
+    <summary><strong>Sessions</strong></summary>
+    <table id="sessions"><thead><tr><th>ID</th><th>User</th><th>Expires</th><th></th></tr></thead><tbody></tbody></table>
+  </details>
+
+  <details>
+    <summary><strong>Groups</strong></summary>
+    <table id="groups"><thead><tr><th>ID</th><th>Display</th><th>Members</th></tr></thead><tbody></tbody></table>
+  </details>
+
+  <details>
+    <summary><strong>Audit</strong></summary>
+    <table id="audit"><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>Result</th></tr></thead><tbody></tbody></table>
+  </details>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let selectedUser = null;
+
+async function api(path, options) {
+  const response = await fetch(path, Object.assign({headers: {"Content-Type": "application/json"}}, options));
+  if (response.status === 401) {
+    showLoggedOut();
+    throw new Error("session expired");
+  }
+  if (response.status === 204) return null;
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || body.title || ("HTTP " + response.status));
+  return body;
+}
+
+function fail(err) {
+  const box = $("error");
+  box.hidden = false;
+  box.textContent = String(err && err.message ? err.message : err);
+}
+
+function showLoggedOut() {
+  $("app").hidden = true;
+  $("auth-bar").innerHTML = '<a href="/api/v1/auth/login"><button>Log in with OIDC</button></a>';
+}
+
+function esc(value) {
+  return String(value == null ? "" : value).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+}
+
+async function refresh() {
+  $("error").hidden = true;
+  const me = await api("/api/v1/auth/me");
+  $("auth-bar").innerHTML = "Logged in as <strong>" + esc(me.id) + "</strong> " +
+    '<button id="logout">Log out</button>';
+  $("logout").onclick = async () => {
+    await fetch("/api/v1/auth/logout", {method: "POST"});
+    location.reload();
+  };
+  $("app").hidden = false;
+  await Promise.all([loadUsers(), loadSessions(), loadGroups(), loadAudit()]);
+  if (selectedUser) await selectUser(selectedUser);
+}
+
+async function loadUsers() {
+  const users = await api("/api/v1/users");
+  const body = $("users").querySelector("tbody");
+  body.innerHTML = "";
+  for (const user of users) {
+    const row = document.createElement("tr");
+    row.innerHTML = "<td></td><td></td><td></td><td></td><td class='actions'></td>";
+    const cells = row.children;
+    cells[0].textContent = user.id;
+    cells[1].textContent = user.display_name;
+    cells[2].textContent = user.is_admin ? "yes" : "";
+    cells[3].textContent = user.active ? "yes" : "no";
+    const view = document.createElement("button");
+    view.textContent = "Select";
+    view.onclick = () => selectUser(user.id);
+    const del = document.createElement("button");
+    del.textContent = "Delete";
+    del.onclick = async () => {
+      if (!confirm("Delete user " + user.id + "?")) return;
+      try { await api("/api/v1/users/" + encodeURIComponent(user.id), {method: "DELETE"}); await refresh(); }
+      catch (err) { fail(err); }
+    };
+    cells[4].append(view, del);
+    body.append(row);
+  }
+  if (users.length > 0 && !selectedUser) await selectUser(users[0].id);
+}
+
+async function selectUser(id) {
+  selectedUser = id;
+  $("token-user").textContent = id;
+  $("ntfy-user").textContent = id;
+  const tokens = await api("/api/v1/users/" + encodeURIComponent(id) + "/tokens");
+  const body = $("tokens").querySelector("tbody");
+  body.innerHTML = "";
+  for (const token of tokens) {
+    const row = document.createElement("tr");
+    row.innerHTML = "<td></td><td></td><td></td><td></td><td class='actions'></td>";
+    const cells = row.children;
+    cells[0].textContent = token.name;
+    cells[1].textContent = token.prefix + "…";
+    cells[2].textContent = token.is_admin ? "yes" : "";
+    cells[3].textContent = token.expires_at || "–";
+    const rotate = document.createElement("button");
+    rotate.textContent = "Rotate";
+    rotate.onclick = async () => {
+      try {
+        const fresh = await api("/api/v1/users/" + encodeURIComponent(id) + "/tokens/" + token.id + "/rotate", {method: "POST"});
+        showPlaintext(fresh.plaintext);
+        await selectUser(id);
+      } catch (err) { fail(err); }
+    };
+    const revoke = document.createElement("button");
+    revoke.textContent = "Revoke";
+    revoke.onclick = async () => {
+      if (!confirm("Revoke token " + token.name + "?")) return;
+      try { await api("/api/v1/users/" + encodeURIComponent(id) + "/tokens/" + token.id + "/revoke", {method: "POST"}); await selectUser(id); }
+      catch (err) { fail(err); }
+    };
+    cells[4].append(rotate, revoke);
+    body.append(row);
+  }
+  try {
+    const backend = await api("/api/v1/users/" + encodeURIComponent(id) + "/ntfy");
+    document.querySelector("#ntfy [name=type]").value = backend.type || "";
+    document.querySelector("#ntfy [name=config]").value = JSON.stringify(backend.config || {}, null, 2);
+  } catch (err) {
+    document.querySelector("#ntfy [name=type]").value = "";
+    document.querySelector("#ntfy [name=config]").value = "";
+  }
+}
+
+function showPlaintext(secret) {
+  const box = $("plaintext");
+  box.hidden = false;
+  box.textContent = "Token plaintext (shown once): " + secret;
+}
+
+async function loadSessions() {
+  const sessions = await api("/api/v1/sessions");
+  const body = $("sessions").querySelector("tbody");
+  body.innerHTML = "";
+  for (const session of sessions) {
+    const row = document.createElement("tr");
+    row.innerHTML = "<td></td><td></td><td></td><td class='actions'></td>";
+    const cells = row.children;
+    cells[0].textContent = session.id.slice(0, 8) + "…";
+    cells[1].textContent = session.user_id;
+    cells[2].textContent = session.expires_at;
+    const revoke = document.createElement("button");
+    revoke.textContent = "Revoke";
+    revoke.onclick = async () => {
+      try { await api("/api/v1/sessions/" + session.id, {method: "DELETE"}); await loadSessions(); }
+      catch (err) { fail(err); }
+    };
+    cells[3].append(revoke);
+    body.append(row);
+  }
+}
+
+async function loadGroups() {
+  const groups = await api("/api/v1/groups");
+  const body = $("groups").querySelector("tbody");
+  body.innerHTML = "";
+  for (const group of groups) {
+    const row = document.createElement("tr");
+    row.innerHTML = "<td></td><td></td><td></td>";
+    const cells = row.children;
+    cells[0].textContent = group.id;
+    cells[1].textContent = group.display_name;
+    cells[2].textContent = (group.members || []).join(", ");
+    body.append(row);
+  }
+}
+
+async function loadAudit() {
+  const events = await api("/api/v1/audit?limit=50");
+  const body = $("audit").querySelector("tbody");
+  body.innerHTML = "";
+  for (const event of events) {
+    const row = document.createElement("tr");
+    row.innerHTML = "<td></td><td></td><td></td><td></td><td></td>";
+    const cells = row.children;
+    cells[0].textContent = event.at;
+    cells[1].textContent = event.actor;
+    cells[2].textContent = event.action;
+    cells[3].textContent = event.target;
+    cells[4].textContent = event.result;
+    body.append(row);
+  }
+}
+
+$("create-user").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const data = new FormData(event.target);
+  try {
+    await api("/api/v1/users", {method: "POST", body: JSON.stringify({
+      id: data.get("id"), display_name: data.get("display_name"),
+      is_admin: data.get("is_admin") === "on",
+    })});
+    event.target.reset();
+    await loadUsers();
+  } catch (err) { fail(err); }
+});
+
+$("issue-token").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!selectedUser) { fail("select a user first"); return; }
+  const data = new FormData(event.target);
+  let patterns = {};
+  try { patterns = data.get("patterns") ? JSON.parse(data.get("patterns")) : {}; }
+  catch (err) { fail("patterns must be JSON"); return; }
+  try {
+    const issued = await api("/api/v1/users/" + encodeURIComponent(selectedUser) + "/tokens",
+      {method: "POST", body: JSON.stringify({
+        name: data.get("name"), is_admin: data.get("is_admin") === "on", patterns: patterns,
+      })});
+    showPlaintext(issued.plaintext);
+    event.target.reset();
+    await selectUser(selectedUser);
+  } catch (err) { fail(err); }
+});
+
+$("ntfy").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!selectedUser) { fail("select a user first"); return; }
+  const data = new FormData(event.target);
+  let config = {};
+  try { config = data.get("config") ? JSON.parse(data.get("config")) : {}; }
+  catch (err) { fail("config must be JSON"); return; }
+  try {
+    await api("/api/v1/users/" + encodeURIComponent(selectedUser) + "/ntfy",
+      {method: "PUT", body: JSON.stringify({type: data.get("type"), config: config})});
+  } catch (err) { fail(err); }
+});
+
+refresh().catch(fail);
+</script>
+</body>
+</html>
