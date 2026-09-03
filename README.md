@@ -223,15 +223,37 @@ unless `METRICS_TOKEN` is configured, then requires
 `Authorization: Bearer METRICS_TOKEN`. Do not reuse the more privileged Forgejo
 token.
 
-## Containers
+## Containers and Quadlet
 
-The Dockerfile builds and tests with the vendored dependencies:
+Podman builds the image entirely from vendored dependencies. The default image
+is native to the host; `container-push` builds and publishes an amd64/arm64 OCI
+manifest:
 
 ```bash
-docker build -t patchwork .
-docker run --rm -p 8080:8080 \
-  -e SECRET_KEY="a-long-random-secret" patchwork
+make container-smoke REGISTRY=localhost
+podman run --rm -p 8080:8080 \
+  -e SECRET_KEY="a-long-random-secret" localhost/patchwork:latest
 ```
+
+[`deployments/patchwork.container`](deployments/patchwork.container) is a
+production-oriented system Quadlet example. Install it under
+`/etc/containers/systemd/`, create the root-readable environment file it
+references, then reload and start it:
+
+```bash
+sudo install -m 0644 deployments/patchwork.container /etc/containers/systemd/
+sudo install -d -m 0750 /etc/patchwork
+sudo install -m 0600 /dev/null /etc/patchwork/patchwork.env
+sudoedit /etc/patchwork/patchwork.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now patchwork.service
+```
+
+The environment file must contain `SECRET_KEY=...`. The Quadlet binds only to
+loopback for a local reverse proxy, runs the image read-only with no added Linux
+capabilities, performs application-level health checks, and uses Podman's
+registry auto-update integration. Adjust `PublishPort` and `EnvironmentFile`
+for a rootless user unit.
 
 The process handles SIGINT and SIGTERM with graceful HTTP shutdown. Active
 relays are canceled if they do not complete within the shutdown window.

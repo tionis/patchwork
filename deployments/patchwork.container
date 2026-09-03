@@ -1,0 +1,26 @@
+[Unit]
+Description=Patchwork HTTP relay and webhook proxy
+
+[Container]
+Image=ghcr.io/tionis/patchwork:latest
+ContainerName=patchwork
+AutoUpdate=registry
+EnvironmentFile=/etc/patchwork/patchwork.env
+PublishPort=127.0.0.1:8080:8080
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+HealthCmd=/patchwork healthcheck --url http://localhost:8080/healthz
+HealthInterval=30s
+HealthTimeout=3s
+HealthStartPeriod=5s
+HealthRetries=3
+HealthOnFailure=kill
+Notify=healthy
+
+[Service]
+Restart=on-failure
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

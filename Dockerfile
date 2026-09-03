@@ -1,17 +1,38 @@
-FROM golang:1.26.2 AS build
+FROM --platform=linux/amd64 golang:1.26.2 AS build
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
+ARG TARGETARCH
+
 WORKDIR /app
 COPY go.mod go.sum ./
 COPY ./vendor ./vendor
 COPY ./*.go ./
 COPY ./internal ./internal
 COPY ./assets ./assets
-RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -o /patchwork
+RUN test -n "${TARGETARCH}" && \
+  CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" go build -mod=vendor -trimpath \
+  -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+  -o /patchwork
 
 # Run the tests in the container
 FROM build AS run-test
 RUN go test -mod=vendor -race -timeout=90s -shuffle=on ./...
 
-FROM gcr.io/distroless/base-debian11 AS build-release-stage
+FROM gcr.io/distroless/static-debian13:nonroot AS build-release-stage
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
+
+LABEL org.opencontainers.image.title="Patchwork" \
+  org.opencontainers.image.description="A bounded-memory HTTP relay and webhook proxy" \
+  org.opencontainers.image.source="https://github.com/tionis/patchwork" \
+  org.opencontainers.image.version="${VERSION}" \
+  org.opencontainers.image.revision="${COMMIT}" \
+  org.opencontainers.image.created="${DATE}" \
+  org.opencontainers.image.licenses="MIT"
 
 WORKDIR /
 
@@ -19,10 +40,8 @@ COPY --from=build /patchwork /patchwork
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD ["/patchwork", "healthcheck", "--url", "http://localhost:8080/healthz"]
-
 USER nonroot:nonroot
 
 ENV LOG_LEVEL=info
-ENTRYPOINT ["/patchwork", "start"]
+ENTRYPOINT ["/patchwork"]
+CMD ["start"]
