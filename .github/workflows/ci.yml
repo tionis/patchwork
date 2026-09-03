@@ -174,17 +174,12 @@ jobs:
         run: printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
       - name: Push branch and commit tags
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           branch_tag="$(printf '%s' "$GITHUB_REF_NAME" |
             tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g')"
           short_sha="${GITHUB_SHA:0:7}"
           tags=("$branch_tag" "sha-$short_sha")
-          if [[ "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then
-            tags+=(latest)
-          fi
           for tag in "${tags[@]}"; do
             podman manifest push --all localhost/patchwork-publish-manifest \
               "docker://$image:$tag"
