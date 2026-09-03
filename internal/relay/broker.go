@@ -176,7 +176,11 @@ func (b *Broker) Broadcast(
 	if source == nil {
 		source = io.NopCloser(&emptyReader{})
 	}
-	defer source.Close()
+	defer func() {
+		if closeErr := source.Close(); err == nil {
+			err = closeErr
+		}
+	}()
 
 	writers := b.claimSubscriptions(name, headers, contentLength)
 	if len(writers) == 0 {

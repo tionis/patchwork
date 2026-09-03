@@ -185,7 +185,11 @@ func (m *MatrixBackend) sendMatrixMessage(roomID string, message map[string]inte
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			m.logger.Debug("Failed to close Matrix response body", "error", err)
+		}
+	}()
 
 	response, err := io.ReadAll(io.LimitReader(resp.Body, maxMatrixResponseBytes+1))
 	if err != nil {

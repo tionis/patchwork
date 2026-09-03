@@ -571,7 +571,7 @@ func NewAuthCache(
 // authentication configuration without using cache.
 func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
 	if cache.forgejoToken == "" {
-		return nil, errors.New("Forgejo authentication is not configured")
+		return nil, errors.New("forgejo authentication is not configured")
 	}
 
 	// Construct the API URL for the config.yaml file
@@ -996,7 +996,11 @@ func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxNotificationBytes)
-		defer r.Body.Close()
+		defer func() {
+			if err := r.Body.Close(); err != nil {
+				s.logger.Debug("Failed to close notification request body", "error", err)
+			}
+		}()
 
 		contentType := ""
 		if rawContentType := r.Header.Get("Content-Type"); rawContentType != "" {
@@ -1098,7 +1102,11 @@ func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to create notification backend", http.StatusInternalServerError)
 		return
 	}
-	defer backend.Close()
+	defer func() {
+		if err := backend.Close(); err != nil {
+			s.logger.Debug("Failed to close notification backend", "error", err)
+		}
+	}()
 
 	// Send the notification
 	if err := backend.SendNotification(msg); err != nil {
