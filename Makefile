@@ -5,6 +5,7 @@ IMAGE_TAG ?= latest
 REGISTRY ?= ghcr.io/tionis
 PLATFORMS ?= linux/amd64,linux/arm64
 CONTAINER_TOOL ?= podman
+HOST_ARCH ?= $(shell uname -m | sed -e 's/^x86_64$$/amd64/' -e 's/^aarch64$$/arm64/')
 DOCKERFILE ?= Dockerfile
 MANIFEST_NAME ?= localhost/patchwork-manifest
 GO ?= go
@@ -73,6 +74,7 @@ run-local: build-local ## Build and run locally
 container-build: ## Build a native OCI image with Podman
 	$(CONTAINER_TOOL) build \
 		$(CONTAINER_BUILD_ARGS) \
+		--build-arg TARGETARCH=$(HOST_ARCH) \
 		--tag $(FULL_IMAGE_NAME):$(IMAGE_TAG) \
 		.
 
@@ -95,6 +97,7 @@ container-smoke: container-build ## Verify image metadata and the live health en
 container-test: ## Run the race-enabled Go suite inside the build image
 	$(CONTAINER_TOOL) build \
 		$(CONTAINER_BUILD_ARGS) \
+		--build-arg TARGETARCH=amd64 \
 		--platform linux/amd64 \
 		--target run-test \
 		.
@@ -103,12 +106,12 @@ container-test: ## Run the race-enabled Go suite inside the build image
 container-build-multiarch: ## Build an amd64/arm64 OCI manifest with Podman
 	@$(CONTAINER_TOOL) manifest exists $(MANIFEST_NAME) && \
 		$(CONTAINER_TOOL) manifest rm $(MANIFEST_NAME) >/dev/null || true
-	$(CONTAINER_TOOL) build \
-		$(CONTAINER_BUILD_ARGS) \
-		--jobs=2 \
-		--platform $(PLATFORMS) \
-		--manifest $(MANIFEST_NAME) \
-		.
+	$(CONTAINER_TOOL) build $(CONTAINER_BUILD_ARGS) \
+		--build-arg TARGETARCH=amd64 --platform linux/amd64 \
+		--manifest $(MANIFEST_NAME) .
+	$(CONTAINER_TOOL) build $(CONTAINER_BUILD_ARGS) \
+		--build-arg TARGETARCH=arm64 --platform linux/arm64 \
+		--manifest $(MANIFEST_NAME) .
 
 .PHONY: container-push
 container-push: container-build-multiarch ## Push the OCI manifest to the configured registry and tag
@@ -125,12 +128,14 @@ release: container-push ## Build and push a multi-architecture OCI image
 
 .PHONY: build-amd64
 build-amd64: ## Build an amd64 OCI image
-	$(CONTAINER_TOOL) build $(CONTAINER_BUILD_ARGS) --platform linux/amd64 \
+	$(CONTAINER_TOOL) build $(CONTAINER_BUILD_ARGS) --build-arg TARGETARCH=amd64 \
+		--platform linux/amd64 \
 		--tag $(FULL_IMAGE_NAME):$(IMAGE_TAG)-amd64 .
 
 .PHONY: build-arm64
 build-arm64: ## Build an arm64 OCI image
-	$(CONTAINER_TOOL) build $(CONTAINER_BUILD_ARGS) --platform linux/arm64 \
+	$(CONTAINER_TOOL) build $(CONTAINER_BUILD_ARGS) --build-arg TARGETARCH=arm64 \
+		--platform linux/arm64 \
 		--tag $(FULL_IMAGE_NAME):$(IMAGE_TAG)-arm64 .
 
 .PHONY: build-ghcr
