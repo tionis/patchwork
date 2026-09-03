@@ -174,44 +174,44 @@ after 30 seconds by default and produce a 504 response.
 
 ## User namespaces
 
-`/u/{username}/...` is optional and backed by a `config.yaml` file in that
-user's Forgejo repository named `.patchwork`. Supply a token using
-`Authorization: Bearer TOKEN`; an omitted token selects a literal token named
-`public` from the ACL.
+`/u/{username}/...` is optional and backed by the local sqlite identity
+store. Supply a token using `Authorization: Bearer TOKEN`; an omitted token
+selects a literal token named `public`. Users, tokens, and notification
+backends are managed through the admin API (see below) instead of files in
+git repositories.
 
-```yaml
-tokens:
-  public:
-    GET: ["/published/*"]
-  webhook-client:
-    POST: ["/incoming/*", "/_/ntfy"]
-  administrator:
-    is_admin: true
-  tunnel-client:
-    huproxy: ["git.internal.example:22"]
+```bash
+# Bootstrap the first admin (uses PATCHWORK_DB_PATH, default ./patchwork.db)
+patchwork admin create --username alice --admin
 
-ntfy:
-  type: matrix
-  config:
-    access_token: "..."
-    user: "@patchwork:example.com"
-    endpoint: "https://matrix.example.com"
-    room_id: "!room:example.com"
+# Then issue tokens via the admin API, e.g.
+curl -b session-cookie -X POST http://localhost:8080/api/v1/users/alice/tokens \
+  -d '{"name":"webhook-client","patterns":{"POST":["/incoming/*","/_/ntfy"]}}'
 ```
 
-Permissions use OpenSSH-style pattern lists and are selected by HTTP method.
-ACL fetches are coalesced per user, limited to 1 MiB, cached for `ACL_TTL`, and
-may use stale data only within `ACL_STALE_GRACE`. Administrative cache
-invalidation is available at `/u/{username}/_/invalidate_cache` to an admin
-token.
+Permissions use OpenSSH-style pattern lists and are selected by HTTP method
+(`GET`, `POST`, `PUT`, `DELETE`, `PATCH`, plus `huproxy` targets). Token
+lookups hit the local database on every request, so revocation takes effect
+immediately — there is no cache to invalidate.
 
 See [configuration](docs/configuration.md) and
 [notifications](docs/notifications.md) for the full formats.
 
+## Admin API and WebUI
+
+Token, user, notification, session, and group management lives behind a
+versioned admin API under `/api/v1`, authenticated by WebUI sessions. The
+WebUI (same binary) is a thin consumer of exactly this API.
+
+Browser login uses Authentik OIDC when `PATCHWORK_OIDC_ISSUER` is set;
+otherwise the API is driven with the bootstrap admin plus direct store
+access. Inbound SCIM provisioning (`/scim/v2/...`) is an optional,
+off-by-default capability for Users and Groups.
+
 ## HuProxy
 
 `/huproxy/{user}/{host}/{port}` tunnels a TCP connection over a binary WebSocket
-after checking the user's `huproxy` ACL. It requires a Forgejo-backed user token:
+after checking the user's `huproxy` ACL:
 
 ```text
 wss://patchwork.example/huproxy/alice/git.internal.example/22
@@ -226,26 +226,23 @@ the WebSocket and TCP sides so blocked reads do not leak connections.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SECRET_KEY` | required | HMAC key for hook secrets |
+| `PATCHWORK_DB_PATH` | `./patchwork.db` | sqlite identity store location (`0600`, plain file backup) |
 | `H2C` | unset | Set to `true`/`1`/`yes` to serve HTTP/2 cleartext directly instead of HTTP/1.1 |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | unset | Serve HTTPS directly when both are set; Go negotiates HTTP/2 automatically. Mutually exclusive with `H2C` |
-| `FORGEJO_URL` | `https://forge.tionis.dev` | Forgejo/Gitea base URL |
-| `FORGEJO_TOKEN` | unset | Enables user namespaces, notifications, and HuProxy |
-| `ACL_TTL` | `5m` | Fresh ACL cache duration |
-| `ACL_STALE_GRACE` | `1m` | Maximum stale ACL use after refresh failure; `0` fails closed |
+| `PATCHWORK_OIDC_ISSUER` | unset | OIDC issuer for WebUI login when set (plus `PATCHWORK_OIDC_CLIENT_ID`, `PATCHWORK_OIDC_CLIENT_SECRET`) |
+| `PATCHWORK_SCIM_ENABLED` | unset | Set to `true` to enable inbound SCIM provisioning (requires `PATCHWORK_SCIM_TOKEN`) |
 | `METRICS_TOKEN` | unset | Enables authenticated `/metrics` when set |
 | `TRUSTED_PROXY_CIDRS` | unset | Comma-separated proxies trusted to supply client-IP headers |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN`, or `ERROR` |
 | `LOG_SOURCE` | `false` | Include source locations in logs |
 
-Only `SECRET_KEY` is required for a public or hook-only deployment. When
-`FORGEJO_TOKEN` is absent, Forgejo-dependent routes fail closed without making
-backend requests. Forwarding headers are ignored unless the direct network peer
+Only `SECRET_KEY` is required for a public or hook-only deployment.
+Forwarding headers are ignored unless the direct network peer
 belongs to `TRUSTED_PROXY_CIDRS`.
 
 `GET /healthz` and `GET /status` are liveness endpoints. `/metrics` returns 404
 unless `METRICS_TOKEN` is configured, then requires
-`Authorization: Bearer METRICS_TOKEN`. Do not reuse the more privileged Forgejo
-token.
+`Authorization: Bearer METRICS_TOKEN`.
 
 By default patchwork serves plain HTTP/1.1, which is correct behind a
 TLS-terminating reverse proxy (the Quadlet/Fly layout). Admins serving it
@@ -304,10 +301,11 @@ make test-stress
 ```
 
 The tests cover live pre-EOF streaming, exact-once queue delivery, pub/sub
-backpressure and disconnects, mid-transfer cancellation, shutdown, ACL refresh
-coalescing and stale bounds, HTTP metadata validation, hooks, notifications,
-metrics authentication, rate-limit spoofing and bounds, and WebSocket/TCP tunnel
-lifecycle behavior.
+backpressure and disconnects, mid-transfer cancellation, shutdown, local
+token validation/rotation/revocation, admin API guards, OIDC login against a
+stub provider, SCIM provisioning, HTTP metadata validation, hooks,
+notifications, metrics authentication, rate-limit spoofing and bounds, and
+WebSocket/TCP tunnel lifecycle behavior.
 
 ## License
 

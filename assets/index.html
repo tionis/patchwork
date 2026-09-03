@@ -223,7 +223,7 @@ curl -H "Patch-Status: 201" -d '{"created": true}' {{.BaseURL}}/public/res/api/u
     </li>
     <li>
       <strong>/u/{username}/**</strong>: User namespace - controlled by ACL lists.
-      Access is controlled by YAML ACL files stored in Forgejo/Gitea repositories 
+      Access is controlled by tokens in the local identity store
       that specify which tokens can access which paths. Includes notification endpoints
       (<code>/_/ntfy</code>) for sending alerts and messages.
     </li>
@@ -231,7 +231,7 @@ curl -H "Patch-Status: 201" -d '{"created": true}' {{.BaseURL}}/public/res/api/u
       <strong>/huproxy/{user}/{host}/{port}</strong>: HTTP-to-TCP WebSocket proxy for tunneling SSH and other protocols.
       Based on Google's HUProxy project, this endpoint provides WebSocket tunneling primarily for SSH
       connections. Uses token-based authentication via <code>Authorization</code> header. Tokens are managed through
-      a <code>config.yaml</code> file in the user's <code>.patchwork</code> repository.
+      the admin API.
     </li>
   </ul>
 
@@ -333,20 +333,13 @@ curl -X POST "{{.BaseURL}}/u/alice/_/ntfy" \
   
   <h4>Authentication</h4>
   <ul>
-    <li><strong>Local Access:</strong> Requests from localhost are allowed without authentication</li>
-    <li><strong>Remote Access:</strong> Requires authentication with the server's Forgejo token</li>
-    <li><strong>Token Formats:</strong> Bearer token, query parameter, or direct authorization header</li>
+    <li><strong>Disabled by default:</strong> Returns 404 unless <code>METRICS_TOKEN</code> is configured</li>
+    <li><strong>Remote Access:</strong> Requires <code>Authorization: Bearer METRICS_TOKEN</code></li>
   </ul>
   
   <h4>Usage Examples</h4>
-  <pre># Local monitoring (no auth needed)
-curl {{.BaseURL}}/metrics
-
-# Remote monitoring with authentication
-curl -H "Authorization: Bearer your-forgejo-token" {{.BaseURL}}/metrics
-
-# Using query parameter
-curl {{.BaseURL}}/metrics?token=your-forgejo-token</pre>
+  <pre># Monitoring with authentication
+curl -H "Authorization: Bearer your-metrics-token" {{.BaseURL}}/metrics</pre>
 
   <h4>Available Metrics</h4>
   <ul>

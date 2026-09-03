@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -32,17 +31,15 @@ import (
 	"github.com/dusted-go/logging/prettylog"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/tionis/patchwork/internal/auth"
+	"github.com/tionis/patchwork/internal/config"
 	"github.com/tionis/patchwork/internal/huproxy"
 	"github.com/tionis/patchwork/internal/metrics"
 	"github.com/tionis/patchwork/internal/notification"
 	"github.com/tionis/patchwork/internal/relay"
 	"github.com/tionis/patchwork/internal/types"
-	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/urfave/cli/v2"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	"golang.org/x/time/rate"
-	"gopkg.in/yaml.v3"
 )
 
 //go:embed assets/*
@@ -63,11 +60,11 @@ var (
 type server struct {
 	logger        *slog.Logger
 	ctx           context.Context
-	forgejoURL    string
-	forgejoToken  string
-	aclTTL        time.Duration
 	secretKey     []byte
-	authCache     *AuthCache
+	authStore     *auth.Store
+	oidc          config.OIDCConfig
+	scimEnabled   bool
+	scimToken     []byte
 	metrics       *metrics.Metrics
 	metricsToken  []byte
 	broker        *relay.Broker
@@ -117,198 +114,11 @@ func (s *server) GetClientIP(r *http.Request) string {
 
 // Configuration template data for rendering index.html.
 type ConfigData struct {
-	ForgejoURL   string
-	ACLTTL       time.Duration
 	BaseURL      string
 	WebSocketURL string
 }
 
-// TokenInfo represents information about a token from config.yaml.
-type TokenInfo struct {
-	IsAdmin   bool               `yaml:"is_admin"`
-	HuProxy   []*sshUtil.Pattern `yaml:"huproxy,omitempty"`
-	GET       []*sshUtil.Pattern `yaml:"GET,omitempty"`
-	POST      []*sshUtil.Pattern `yaml:"POST,omitempty"`
-	PUT       []*sshUtil.Pattern `yaml:"PUT,omitempty"`
-	DELETE    []*sshUtil.Pattern `yaml:"DELETE,omitempty"`
-	PATCH     []*sshUtil.Pattern `yaml:"PATCH,omitempty"`
-	ExpiresAt *time.Time         `yaml:"expires_at,omitempty"`
-}
-
-// MarshalYAML implements custom YAML marshaling for TokenInfo.
-func (t TokenInfo) MarshalYAML() (interface{}, error) {
-	// Create a temporary struct with string slices for patterns
-	type TokenInfoYAML struct {
-		IsAdmin   bool       `yaml:"is_admin"`
-		HuProxy   []string   `yaml:"huproxy,omitempty"`
-		GET       []string   `yaml:"GET,omitempty"`
-		POST      []string   `yaml:"POST,omitempty"`
-		PUT       []string   `yaml:"PUT,omitempty"`
-		DELETE    []string   `yaml:"DELETE,omitempty"`
-		PATCH     []string   `yaml:"PATCH,omitempty"`
-		ExpiresAt *time.Time `yaml:"expires_at,omitempty"`
-	}
-
-	// Convert sshUtil.Pattern slices to string slices
-	result := TokenInfoYAML{
-		IsAdmin:   t.IsAdmin,
-		ExpiresAt: t.ExpiresAt,
-	}
-
-	for _, pattern := range t.HuProxy {
-		result.HuProxy = append(result.HuProxy, pattern.String())
-	}
-
-	for _, pattern := range t.GET {
-		result.GET = append(result.GET, pattern.String())
-	}
-
-	for _, pattern := range t.POST {
-		result.POST = append(result.POST, pattern.String())
-	}
-
-	for _, pattern := range t.PUT {
-		result.PUT = append(result.PUT, pattern.String())
-	}
-
-	for _, pattern := range t.DELETE {
-		result.DELETE = append(result.DELETE, pattern.String())
-	}
-
-	for _, pattern := range t.PATCH {
-		result.PATCH = append(result.PATCH, pattern.String())
-	}
-
-	return result, nil
-}
-
-// UnmarshalYAML implements custom YAML unmarshaling for TokenInfo.
-func (t *TokenInfo) UnmarshalYAML(node *yaml.Node) error {
-	// Create a temporary struct with string slices for patterns
-	type TokenInfoYAML struct {
-		IsAdmin   bool       `yaml:"is_admin"`
-		HuProxy   []string   `yaml:"huproxy,omitempty"`
-		GET       []string   `yaml:"GET,omitempty"`
-		POST      []string   `yaml:"POST,omitempty"`
-		PUT       []string   `yaml:"PUT,omitempty"`
-		DELETE    []string   `yaml:"DELETE,omitempty"`
-		PATCH     []string   `yaml:"PATCH,omitempty"`
-		ExpiresAt *time.Time `yaml:"expires_at,omitempty"`
-	}
-
-	var temp TokenInfoYAML
-
-	err := node.Decode(&temp)
-	if err != nil {
-		return err
-	}
-
-	// Convert string slices to sshUtil.Pattern slices
-	t.IsAdmin = temp.IsAdmin
-	t.ExpiresAt = temp.ExpiresAt
-	t.HuProxy = nil
-	t.GET = nil
-	t.POST = nil
-	t.PUT = nil
-	t.DELETE = nil
-	t.PATCH = nil
-
-	// Convert strings to patterns using sshUtil.NewPattern
-	for _, str := range temp.HuProxy {
-		pattern, err := sshUtil.NewPattern(str)
-		if err != nil {
-			return fmt.Errorf("invalid huproxy pattern %q: %w", str, err)
-		}
-
-		t.HuProxy = append(t.HuProxy, pattern)
-	}
-
-	for _, str := range temp.GET {
-		pattern, err := sshUtil.NewPattern(str)
-		if err != nil {
-			return fmt.Errorf("invalid GET pattern %q: %w", str, err)
-		}
-
-		t.GET = append(t.GET, pattern)
-	}
-
-	for _, str := range temp.POST {
-		pattern, err := sshUtil.NewPattern(str)
-		if err != nil {
-			return fmt.Errorf("invalid POST pattern %q: %w", str, err)
-		}
-
-		t.POST = append(t.POST, pattern)
-	}
-
-	for _, str := range temp.PUT {
-		pattern, err := sshUtil.NewPattern(str)
-		if err != nil {
-			return fmt.Errorf("invalid PUT pattern %q: %w", str, err)
-		}
-
-		t.PUT = append(t.PUT, pattern)
-	}
-
-	for _, str := range temp.DELETE {
-		pattern, err := sshUtil.NewPattern(str)
-		if err != nil {
-			return fmt.Errorf("invalid DELETE pattern %q: %w", str, err)
-		}
-
-		t.DELETE = append(t.DELETE, pattern)
-	}
-
-	for _, str := range temp.PATCH {
-		pattern, err := sshUtil.NewPattern(str)
-		if err != nil {
-			return fmt.Errorf("invalid PATCH pattern %q: %w", str, err)
-		}
-
-		t.PATCH = append(t.PATCH, pattern)
-	}
-
-	return nil
-}
-
-// UserAuth represents the config.yaml configuration for a user.
-type UserAuth struct {
-	Tokens    map[string]TokenInfo `yaml:"tokens"`
-	Ntfy      types.NtfyConfig     `yaml:"ntfy,omitempty"`
-	UpdatedAt time.Time            `yaml:"-"`
-}
-
-// AuthCache represents cached auth data with expiration.
-type AuthCache struct {
-	data         map[string]*UserAuth
-	mutex        sync.Mutex
-	ttl          time.Duration
-	staleGrace   time.Duration
-	forgejoURL   string
-	forgejoToken string
-	logger       *slog.Logger
-	httpClient   *http.Client
-	now          func() time.Time
-	inflight     map[string]*authFetch
-	generations  map[string]uint64
-	failures     map[string]authFetchFailure
-	retryDelay   time.Duration
-}
-
-type authFetch struct {
-	done chan struct{}
-	auth *UserAuth
-	err  error
-}
-
-type authFetchFailure struct {
-	at  time.Time
-	err error
-}
-
-var errAuthCacheInvalidated = errors.New("auth cache invalidated during refresh")
-
-const maxAuthConfigBytes = 1 << 20
+// maxNotificationBytes bounds notification request bodies.
 const maxNotificationBytes = 1 << 20
 
 // =============================================================================
@@ -375,22 +185,6 @@ func addressInPrefixes(addr netip.Addr, prefixes []netip.Prefix) bool {
 	return false
 }
 
-func parseTrustedProxyCIDRs(value string) ([]netip.Prefix, error) {
-	var prefixes []netip.Prefix
-	for item := range strings.SplitSeq(value, ",") {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		prefix, err := netip.ParsePrefix(item)
-		if err != nil {
-			return nil, fmt.Errorf("invalid trusted proxy CIDR %q: %w", item, err)
-		}
-		prefixes = append(prefixes, prefix.Masked())
-	}
-	return prefixes, nil
-}
-
 // logRequest logs HTTP request details at info level.
 func (s *server) logRequest(r *http.Request, message string) {
 	clientIP := s.clientIP(r)
@@ -439,22 +233,12 @@ func (s *server) authenticateToken(
 		token = "public"
 	}
 
-	// For HuProxy, pass the path as the operation to check against patterns
-	// For regular HTTP requests, pass the path for pattern matching
-	operation := path
-	if !isHuProxy {
-		// For regular HTTP requests, we need both the method and path
-		// The method determines which patterns to check, the path is what gets matched
-		// So we pass the HTTP method as the operation type and path for pattern matching
-		operation = path
-	}
-
-	// Use auth cache to validate token
-	valid, reason, tokenInfo, err := s.authCache.validateToken(
+	// Use the local store to validate the token.
+	valid, reason, tokenInfo, err := s.authStore.Validate(
 		username,
 		token,
 		reqType,
-		operation,
+		path,
 		isHuProxy,
 	)
 	if err != nil {
@@ -477,11 +261,15 @@ func (s *server) authenticateToken(
 		return false, reason, nil
 	}
 
+	// last_used_at is informational; a failed update never fails the request.
+	if err := s.authStore.RecordTokenUse(tokenInfo.ID); err != nil {
+		s.logger.Debug("Failed to record token use", "token_id", tokenInfo.ID, "error", err)
+	}
+
 	s.metrics.RecordAuthRequest("success")
 	s.logger.Info("Token authenticated",
 		"username", username,
 		"path", path,
-		"operation", operation,
 		"is_admin", tokenInfo.IsAdmin,
 		"is_huproxy", isHuProxy,
 		"client_ip", clientIP.String())
@@ -489,9 +277,7 @@ func (s *server) authenticateToken(
 	return true, "authenticated", nil
 }
 
-// metricsHandler serves metrics only when a dedicated token is configured. The
-// Forgejo API token is deliberately not accepted because it has unrelated,
-// broader privileges.
+// metricsHandler serves metrics only when a dedicated token is configured.
 func (s *server) metricsHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(s.metricsToken) == 0 {
@@ -545,277 +331,6 @@ func (s *server) verifySecret(namespace, channel, providedSecret string) bool {
 	return hmac.Equal([]byte(expectedSecret), []byte(providedSecret))
 }
 
-// NewAuthCache creates a new auth cache instance.
-// The cache automatically fetches and caches user authentication configurations
-// from Forgejo repositories, reducing API calls and improving performance.
-func NewAuthCache(
-	forgejoURL, forgejoToken string,
-	ttl time.Duration,
-	logger *slog.Logger,
-) *AuthCache {
-	return &AuthCache{
-		data:         make(map[string]*UserAuth),
-		ttl:          ttl,
-		staleGrace:   time.Minute,
-		forgejoURL:   forgejoURL,
-		forgejoToken: forgejoToken,
-		logger:       logger,
-		httpClient:   &http.Client{Timeout: 10 * time.Second},
-		now:          time.Now,
-		inflight:     make(map[string]*authFetch),
-		generations:  make(map[string]uint64),
-		failures:     make(map[string]authFetchFailure),
-		retryDelay:   time.Second,
-	}
-}
-
-// fetchUserAuth fetches config.yaml data from Forgejo for a specific user.
-// This function directly contacts the Forgejo API to retrieve the latest
-// authentication configuration without using cache.
-func (cache *AuthCache) fetchUserAuth(username string) (*UserAuth, error) {
-	if cache.forgejoToken == "" {
-		return nil, errors.New("forgejo authentication is not configured")
-	}
-
-	// Construct the API URL for the config.yaml file
-	apiURL := fmt.Sprintf(
-		"%s/api/v1/repos/%s/.patchwork/media/config.yaml",
-		cache.forgejoURL,
-		url.QueryEscape(username),
-	)
-	cache.logger.Debug("Fetching auth from Forgejo", "username", username, "url", apiURL)
-
-	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Accept", "application/octet-stream")
-	req.Header.Set("Authorization", "token "+cache.forgejoToken)
-
-	resp, err := cache.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch auth: %w", err)
-	}
-
-	defer func() {
-		closeErr := resp.Body.Close()
-		if closeErr != nil {
-			cache.logger.Error("Failed to close response body", "error", closeErr)
-		}
-	}()
-
-	if resp.StatusCode == http.StatusNotFound {
-		// Return empty auth if file doesn't exist
-		cache.logger.Info("Auth file not found, returning empty auth", "username", username)
-
-		return &UserAuth{
-			Tokens:    make(map[string]TokenInfo),
-			UpdatedAt: cache.now(),
-		}, nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		cache.logger.Error("Unexpected status code from Forgejo",
-			"username", username,
-			"status_code", resp.StatusCode,
-			"url", apiURL)
-
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAuthConfigBytes+1))
-	if err != nil {
-		cache.logger.Error("Failed to read response body", "username", username, "error", err)
-
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-	if len(body) > maxAuthConfigBytes {
-		return nil, fmt.Errorf("auth config exceeds %d bytes", maxAuthConfigBytes)
-	}
-
-	var auth UserAuth
-	if err := yaml.Unmarshal(body, &auth); err != nil {
-		cache.logger.Error("Failed to parse YAML", "username", username, "error", err)
-
-		return nil, fmt.Errorf("failed to parse YAML: %w", err)
-	}
-
-	if auth.Tokens == nil {
-		auth.Tokens = make(map[string]TokenInfo)
-	}
-	auth.UpdatedAt = cache.now()
-	cache.logger.Info("Fetched auth from Forgejo", "username", username, "tokens", len(auth.Tokens))
-
-	return &auth, nil
-}
-
-// GetUserAuth retrieves auth data for a user, using cache if available and not expired.
-func (cache *AuthCache) GetUserAuth(username string) (*UserAuth, error) {
-	cache.logger.Debug("Getting user auth from cache", "username", username)
-	for {
-		cache.mutex.Lock()
-		auth, exists := cache.data[username]
-		if exists && cache.cacheAge(auth) < cache.ttl {
-			cache.mutex.Unlock()
-			cache.logger.Debug("Using cached auth data", "username", username)
-			return auth, nil
-		}
-		if failure, failedRecently := cache.failures[username]; failedRecently {
-			failureAge := cache.now().Sub(failure.at)
-			if failureAge >= 0 && failureAge < cache.retryDelay {
-				cache.mutex.Unlock()
-				return cache.staleAuthOrError(username, failure.err)
-			}
-		}
-
-		if fetch, fetching := cache.inflight[username]; fetching {
-			cache.mutex.Unlock()
-			<-fetch.done
-			if errors.Is(fetch.err, errAuthCacheInvalidated) {
-				continue
-			}
-			if fetch.err == nil {
-				return fetch.auth, nil
-			}
-			return cache.staleAuthOrError(username, fetch.err)
-		}
-
-		generation := cache.generations[username]
-		fetch := &authFetch{done: make(chan struct{})}
-		cache.inflight[username] = fetch
-		cache.mutex.Unlock()
-
-		cache.logger.Debug("Fetching fresh auth data", "username", username)
-		freshAuth, fetchErr := cache.fetchUserAuth(username)
-
-		cache.mutex.Lock()
-		if cache.generations[username] != generation {
-			fetchErr = errAuthCacheInvalidated
-			freshAuth = nil
-		} else if fetchErr == nil {
-			cache.data[username] = freshAuth
-			delete(cache.failures, username)
-		} else {
-			cache.failures[username] = authFetchFailure{at: cache.now(), err: fetchErr}
-		}
-		fetch.auth = freshAuth
-		fetch.err = fetchErr
-		delete(cache.inflight, username)
-		close(fetch.done)
-		cache.mutex.Unlock()
-
-		if errors.Is(fetchErr, errAuthCacheInvalidated) {
-			continue
-		}
-		if fetchErr == nil {
-			cache.logger.Debug("Updated auth cache", "username", username)
-			return freshAuth, nil
-		}
-		cache.logger.Error("Failed to fetch auth", "username", username, "error", fetchErr)
-		return cache.staleAuthOrError(username, fetchErr)
-	}
-}
-
-func (cache *AuthCache) cacheAge(auth *UserAuth) time.Duration {
-	age := cache.now().Sub(auth.UpdatedAt)
-	if age < 0 {
-		return 0
-	}
-	return age
-}
-
-func (cache *AuthCache) staleAuthOrError(username string, fetchErr error) (*UserAuth, error) {
-	cache.mutex.Lock()
-	auth, exists := cache.data[username]
-	cache.mutex.Unlock()
-
-	if exists && cache.staleGrace > 0 && cache.cacheAge(auth) < cache.ttl+cache.staleGrace {
-		cache.logger.Warn("Using stale auth data during backend outage",
-			"username", username,
-			"age", cache.cacheAge(auth),
-			"max_age", cache.ttl+cache.staleGrace)
-		return auth, nil
-	}
-	return nil, fmt.Errorf("refresh auth for %q: %w", username, fetchErr)
-}
-
-// InvalidateUser removes a user's auth data from the cache.
-func (cache *AuthCache) InvalidateUser(username string) {
-	cache.mutex.Lock()
-	delete(cache.data, username)
-	delete(cache.failures, username)
-	cache.generations[username]++
-	cache.mutex.Unlock()
-	cache.logger.Info("Invalidated auth cache", "username", username)
-}
-
-// validateToken checks if a token is valid for a user and operation.
-func (cache *AuthCache) validateToken(
-	username, token, method, path string,
-	isHuProxy bool,
-) (bool, string, *TokenInfo, error) {
-	auth, err := cache.GetUserAuth(username)
-	if err != nil {
-		cache.logger.Debug("Failed to get user auth", "username", username, "error", err)
-
-		return false, "authentication backend unavailable", nil, err
-	}
-
-	tokenInfo, exists := auth.Tokens[token]
-	if !exists {
-		return false, "token not found", nil, nil
-	}
-	// Check if token is expired
-	if tokenInfo.ExpiresAt != nil && time.Now().After(*tokenInfo.ExpiresAt) {
-		return false, "token expired", nil, nil
-	}
-
-	// For HuProxy requests, check if token has huproxy permissions
-	if isHuProxy {
-		if len(tokenInfo.HuProxy) == 0 {
-			return false, "huproxy token has no permissions", nil, nil
-		}
-
-		if sshUtil.MatchPatternList(tokenInfo.HuProxy, path) {
-			return true, "", &tokenInfo, nil
-		} else {
-			return false, "huproxy token does not match patterns", nil, nil
-		}
-	}
-
-	// For regular HTTP requests, check method-specific permissions
-	var patterns []*sshUtil.Pattern
-
-	switch strings.ToUpper(method) {
-	case "GET":
-		patterns = tokenInfo.GET
-	case "POST":
-		patterns = tokenInfo.POST
-	case "PUT":
-		patterns = tokenInfo.PUT
-	case "DELETE":
-		patterns = tokenInfo.DELETE
-	case "PATCH":
-		patterns = tokenInfo.PATCH
-	case "ADMIN":
-		// Admin operations require is_admin flag
-		return tokenInfo.IsAdmin, "", &tokenInfo, nil
-	default:
-		return false, "unsupported method", nil, nil
-	}
-
-	if len(patterns) == 0 {
-		return false, "no patterns found", nil, nil
-	}
-
-	if sshUtil.MatchPatternList(patterns, path) {
-		return true, "", &tokenInfo, nil
-	} else {
-		return false, "token does not match patterns", nil, nil
-	}
-}
-
 // HookResponse represents the response structure for hook endpoint requests.
 type HookResponse struct {
 	Channel string `json:"channel"`
@@ -850,92 +365,6 @@ func (s *server) userHandler(w http.ResponseWriter, r *http.Request) {
 	s.logRequest(r, "User namespace access")
 	s.logger.Info("User namespace details", "username", username, "path", path)
 	s.handlePatch(w, r, "u/"+username, username, path)
-}
-
-func (s *server) userAdminHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	username := vars["username"]
-	adminPath := vars["adminPath"]
-
-	s.logRequest(r, "User administrative namespace access")
-	s.logger.Info("User admin namespace details", "username", username, "admin_path", adminPath)
-
-	// Get Authorization header
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		s.logger.Info(
-			"Admin access denied - no authorization header",
-			"username",
-			username,
-			"admin_path",
-			adminPath,
-		)
-		http.Error(w, "Authorization required", http.StatusUnauthorized)
-
-		return
-	}
-
-	// Extract token from Authorization header (expecting "Bearer <token>" or "token <token>")
-	var token string
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		token = strings.TrimPrefix(authHeader, "Bearer ")
-	} else if strings.HasPrefix(authHeader, "token ") {
-		token = strings.TrimPrefix(authHeader, "token ")
-	} else {
-		token = authHeader // Direct token
-	}
-
-	// Validate token and check admin status
-	valid, reason, tokenInfo, err := s.authCache.validateToken(
-		username,
-		token,
-		"ADMIN",
-		adminPath,
-		false,
-	)
-	if err != nil {
-		s.logger.Error("Admin token validation error", "username", username, "error", err)
-		http.Error(w, "Token validation error", http.StatusInternalServerError)
-
-		return
-	}
-
-	if !valid || !tokenInfo.IsAdmin {
-		s.logger.Info(
-			"Admin access denied - invalid or non-admin token",
-			"username",
-			username,
-			"admin_path",
-			adminPath,
-			"reason",
-			reason,
-		)
-		http.Error(w, "Admin access denied: "+reason, http.StatusForbidden)
-
-		return
-	}
-
-	// Handle administrative endpoints
-	switch adminPath {
-	case "invalidate_cache":
-		s.authCache.InvalidateUser(username)
-		s.logger.Info(
-			"Cache invalidated via admin endpoint",
-			"username",
-			username,
-			"client_ip",
-			s.clientIP(r),
-		)
-		w.WriteHeader(http.StatusOK)
-
-		if _, err := w.Write([]byte(`{"status": "cache invalidated"}`)); err != nil {
-			s.logger.Error("Failed to write response", "error", err)
-		}
-
-	default:
-		s.logger.Info("Unknown admin endpoint", "username", username, "admin_path", adminPath)
-		http.Error(w, "Unknown administrative endpoint", http.StatusNotFound)
-	}
 }
 
 func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
@@ -1085,21 +514,19 @@ func (s *server) userNtfyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authentication and notification configuration come from the same cached
-	// document, avoiding a second Forgejo request and a mixed-version decision.
-	userAuth, err := s.authCache.GetUserAuth(username)
+	// Notification configuration lives in the local store.
+	ntfy, err := s.authStore.GetNtfy(username)
 	if err != nil {
-		s.logger.Error("Failed to fetch user config", "error", err, "username", username)
-		http.Error(w, "Failed to fetch user configuration", http.StatusInternalServerError)
-		return
-	}
-	if userAuth.Ntfy.Type == "" {
 		s.logger.Error("No notification backend configured for user", "username", username)
 		http.Error(w, "Notification backend not configured", http.StatusServiceUnavailable)
+
 		return
 	}
 
-	backend, err := notification.BackendFactory(s.logger, userAuth.Ntfy)
+	backend, err := notification.BackendFactory(s.logger, types.NtfyConfig{
+		Type:   ntfy.Type,
+		Config: ntfy.Config,
+	})
 	if err != nil {
 		s.logger.Error("Failed to create notification backend", "error", err, "username", username)
 		http.Error(w, "Failed to create notification backend", http.StatusInternalServerError)
@@ -2673,6 +2100,44 @@ func main() {
 					return healthCheck(c.String("url"))
 				},
 			},
+			{
+				Name:  "admin",
+				Usage: "local user administration (uses PATCHWORK_DB_PATH)",
+				Subcommands: []*cli.Command{
+					{
+						Name:  "create",
+						Usage: "create a local user (bootstrap the first admin)",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "username",
+								Usage:    "local user id (also the /u/... namespace)",
+								Required: true,
+							},
+							&cli.StringFlag{
+								Name:  "display-name",
+								Usage: "human-readable name",
+							},
+							&cli.BoolFlag{
+								Name:  "admin",
+								Value: true,
+								Usage: "grant admin privileges",
+							},
+							&cli.StringFlag{
+								Name:  "oidc-sub",
+								Usage: "link an OIDC subject at creation",
+							},
+						},
+						Action: func(c *cli.Context) error {
+							return adminCreateUser(
+								c.String("username"),
+								c.String("display-name"),
+								c.Bool("admin"),
+								c.String("oidc-sub"),
+							)
+						},
+					},
+				},
+			},
 		},
 	}
 
@@ -2822,102 +2287,52 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Server {
-	// Transport selection for direct serving. Behind a reverse proxy (the
-	// default Quadlet/Fly layout) the edge terminates TLS and HTTP/2, so
-	// plain HTTP/1.1 here is correct. Admins serving patchwork directly can
-	// opt into h2c (HTTP/2 cleartext) or provide a TLS cert, which makes
-	// Go negotiate HTTP/2 automatically.
-	transport, err := transportConfigFromEnv()
+	// Read configuration from environment variables.
+	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("Invalid transport configuration, aborting server start", "error", err)
+		logger.Error("Invalid configuration, aborting server start", "error", err)
 
 		return nil
 	}
 
-	tlsConfig, err := transport.loadTLSConfig()
+	tlsConfig, err := cfg.Transport.LoadTLSConfig()
 	if err != nil {
 		logger.Error("Failed to load TLS certificate, aborting server start", "error", err)
 
 		return nil
 	}
 
-	// Read configuration from environment variables
-	forgejoURL := os.Getenv("FORGEJO_URL")
-	if forgejoURL == "" {
-		forgejoURL = "https://forge.tionis.dev" // default value
-	}
-
-	aclTTLStr := os.Getenv("ACL_TTL")
-
-	aclTTL := 5 * time.Minute // default value
-
-	if aclTTLStr != "" {
-		parsedTTL, err := time.ParseDuration(aclTTLStr)
-		if err != nil || parsedTTL <= 0 {
-			logger.Error("Invalid ACL_TTL, aborting server start", "value", aclTTLStr)
-			return nil
-		}
-		aclTTL = parsedTTL
-	}
-
-	aclStaleGrace := time.Minute
-	if value := os.Getenv("ACL_STALE_GRACE"); value != "" {
-		parsedGrace, err := time.ParseDuration(value)
-		if err != nil || parsedGrace < 0 {
-			logger.Error("Invalid ACL_STALE_GRACE, aborting server start", "value", value)
-			return nil
-		}
-		aclStaleGrace = parsedGrace
-	}
-
-	// Read server secret key
-	secretKey := []byte(os.Getenv("SECRET_KEY"))
-	if len(secretKey) == 0 {
-		logger.Error("No SECRET_KEY provided, aborting server start")
-
-		return nil
-	}
-
-	// Read Forgejo token for API access
-	forgejoToken := os.Getenv("FORGEJO_TOKEN")
-	if forgejoToken == "" {
-		logger.Warn("FORGEJO_TOKEN is not set; user namespaces, notifications, and HuProxy are disabled")
-	}
-
-	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS"))
+	// Open the local identity store.
+	authStore, err := auth.Open(cfg.DBPath, logger.WithGroup("auth"))
 	if err != nil {
-		logger.Error("Invalid TRUSTED_PROXY_CIDRS, aborting server start", "error", err)
+		logger.Error("Failed to open auth store, aborting server start", "error", err)
+
 		return nil
 	}
-
-	// Initialize auth cache
-	authCache := NewAuthCache(forgejoURL, forgejoToken, aclTTL, logger.WithGroup("auth"))
-	authCache.staleGrace = aclStaleGrace
 
 	// Initialize metrics
 	metricsInstance := metrics.NewMetrics()
-	metricsToken := []byte(os.Getenv("METRICS_TOKEN"))
-	if len(metricsToken) == 0 {
+	if len(cfg.MetricsToken) == 0 {
 		logger.Warn("Metrics endpoint disabled because METRICS_TOKEN is not set")
 	}
 
 	server := &server{
 		logger:              logger,
 		ctx:                 ctx,
-		forgejoURL:          forgejoURL,
-		forgejoToken:        forgejoToken,
-		aclTTL:              aclTTL,
-		secretKey:           secretKey,
-		authCache:           authCache,
+		secretKey:           cfg.SecretKey,
+		authStore:           authStore,
+		oidc:                cfg.OIDC,
+		scimEnabled:         cfg.SCIM.Enabled,
+		scimToken:           []byte(cfg.SCIM.Token),
 		metrics:             metricsInstance,
-		metricsToken:        metricsToken,
+		metricsToken:        cfg.MetricsToken,
 		broker:              relay.NewBroker(),
 		switchTimeout:       30 * time.Second,
 		publicRateLimiters:  make(map[string]*rateLimiterEntry),
 		rateLimiterTTL:      10 * time.Minute,
 		maxRateLimiters:     10_000,
 		overflowRateLimiter: rate.NewLimiter(rate.Limit(10), 20),
-		trustedProxyCIDRs:   trustedProxyCIDRs,
+		trustedProxyCIDRs:   cfg.TrustedProxyCIDRs,
 	}
 
 	router := mux.NewRouter()
@@ -3028,8 +2443,12 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 
 	// User namespaces with new structure
 	router.HandleFunc("/u/{username}/_/ntfy", server.metricsMiddleware("user_ntfy", server.userNtfyHandler))
-	router.HandleFunc("/u/{username}/_/{adminPath:.*}", server.metricsMiddleware("user_admin", server.userAdminHandler))
 	router.HandleFunc("/u/{username}/{path:.*}", server.metricsMiddleware("user", server.userHandler))
+
+	// Admin API (session-authenticated), browser login flows, and optional SCIM.
+	server.registerAdminRoutes(router)
+	server.registerOIDCRoutes(router)
+	server.registerSCIMRoutes(router)
 
 	router.HandleFunc("/healthz", server.statusHandler)
 	router.HandleFunc("/status", server.statusHandler)
@@ -3067,8 +2486,6 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		wsURL := fmt.Sprintf("%s://%s", wsScheme, r.Host)
 
 		data := ConfigData{
-			ForgejoURL:   server.forgejoURL,
-			ACLTTL:       server.aclTTL,
 			BaseURL:      baseURL,
 			WebSocketURL: wsURL,
 		}
@@ -3099,81 +2516,14 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		}
 	}()
 
-	logger.Info("Starting Patchwork", "port", port, "transport", transport.name())
+	logger.Info("Starting Patchwork", "port", port, "transport", cfg.Transport.Name())
 
 	return &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
-		Handler:           transport.wrapHandler(router),
+		Handler:           cfg.Transport.WrapHandler(router),
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
-}
-
-// transportConfig selects the framing for direct serving. The default is
-// plain HTTP/1.1, correct behind a TLS-terminating reverse proxy.
-type transportConfig struct {
-	h2c      bool
-	certFile string
-	keyFile  string
-}
-
-func transportConfigFromEnv() (transportConfig, error) {
-	cfg := transportConfig{
-		h2c:      parseEnvBool(os.Getenv("H2C")),
-		certFile: strings.TrimSpace(os.Getenv("TLS_CERT_FILE")),
-		keyFile:  strings.TrimSpace(os.Getenv("TLS_KEY_FILE")),
-	}
-
-	if cfg.h2c && (cfg.certFile != "" || cfg.keyFile != "") {
-		return cfg, errors.New("H2C and TLS_CERT_FILE/TLS_KEY_FILE are mutually exclusive")
-	}
-
-	if (cfg.certFile == "") != (cfg.keyFile == "") {
-		return cfg, errors.New("TLS_CERT_FILE and TLS_KEY_FILE must be set together")
-	}
-
-	return cfg, nil
-}
-
-func parseEnvBool(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "yes", "y", "on":
-		return true
-	default:
-		return false
-	}
-}
-
-func (c transportConfig) name() string {
-	switch {
-	case c.certFile != "":
-		return "https (http/1.1 + h2)"
-	case c.h2c:
-		return "h2c"
-	default:
-		return "http/1.1"
-	}
-}
-
-func (c transportConfig) wrapHandler(handler http.Handler) http.Handler {
-	if c.h2c {
-		return h2c.NewHandler(handler, &http2.Server{})
-	}
-
-	return handler
-}
-
-func (c transportConfig) loadTLSConfig() (*tls.Config, error) {
-	if c.certFile == "" {
-		return nil, nil
-	}
-
-	cert, err := tls.LoadX509KeyPair(c.certFile, c.keyFile)
-	if err != nil {
-		return nil, err
-	}
-
-	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}, nil
 }

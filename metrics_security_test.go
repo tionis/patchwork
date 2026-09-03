@@ -8,7 +8,7 @@ import (
 )
 
 func TestHTTPRouterMetricsPolicy(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 
 	tests := []struct {
 		name       string
@@ -88,7 +88,7 @@ func TestHTTPRouterMetricsPolicy(t *testing.T) {
 }
 
 func TestMetricsEndpointDisabledWithoutToken(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	req.Header.Set("Authorization", "Bearer anything")
 	w := httptest.NewRecorder()

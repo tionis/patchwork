@@ -2,211 +2,110 @@
 
 ## Overview
 
-Patchwork uses a unified `config.yaml` configuration file that includes both authentication and notification settings. This file is placed in the `.patchwork` repository for each user or organization.
+Patchwork keeps identities, tokens, and notification backends in a local
+sqlite store (`PATCHWORK_DB_PATH`, default `./patchwork.db`). There are no
+config files in git repositories. Everything is managed through the versioned
+admin API under `/api/v1`, authenticated by WebUI sessions; the WebUI (same
+binary) is a thin consumer of that API.
 
-## Configuration File Structure
+## Bootstrap
 
-### config.yaml Format
-
-```yaml
-# Tokens are directly at the root level
-tokens:
-  "my_token_name":
-    is_admin: false
-    POST: 
-      - "/projects/*/data"  # Can POST to any project's data endpoint
-      - "/_/ntfy"          # Can send notifications
-    GET: 
-      - "/projects/myproject/*"  # Can GET from all paths under myproject
-      - "!/projects/myproject/secret/*" # But nothing in my secret project
-    huproxy:
-      - "*.example.com:*"  # Can access specific hosts via HuProxy
-      - "localhost:*"
-  
-  "restricted_token":
-    is_admin: false
-    POST: []  # No POST access
-    GET: 
-      - "*"  # Can GET from all subpaths in this namespace
-  
-  "webhook_token":
-    is_admin: false
-    POST: 
-      - "/webhooks/*"  # Can POST to any webhook endpoint
-      - "/_/ntfy"      # Can send notifications
-    GET: 
-      - "/status"  # Can only GET the status endpoint
-  
-  "admin_token":
-    is_admin: true
-    POST: ["*"]
-    GET: ["*"]
-
-# Optional: Configure notification backend
-ntfy:
-  type: matrix
-  config:
-    access_token: "your_matrix_access_token"
-    user: "@bot:matrix.org"
-    endpoint: "https://matrix.org"  # optional: Matrix server endpoint
-    room_id: "!roomid:matrix.org"   # optional: specific room ID
-```
-
-### Key Features
-
-1. **Single Configuration File**: Everything is in one `config.yaml` file
-2. **Simplified Structure**: Tokens are directly under the root level
-3. **Unified Management**: Authentication, permissions, HuProxy access, and notifications in one place
-4. **Glob Pattern Support**: Use OpenSSH-style patterns for fine-grained access control
-
-### Permission Patterns
-
-- Empty array (`[]`) denies all access for that method
-- `"*"` allows access to all subpaths
-- Specific glob patterns like `projects/*/data` allow fine-grained control
-- Negation patterns like `!secret/*` can exclude specific paths
-- Admin tokens (`is_admin: true`) have access to administrative endpoints
-
-## Repository Setup
-
-1. **Create `.patchwork` repository**: Each user/organization creates a repository named `.patchwork`
-2. **Add `config.yaml`**: Place the configuration file in the repository root
-3. **Grant access**: Give the special `patchwork` user read access to the `.patchwork` repository
-4. **Caching**: The patchwork server pulls and caches these configuration files as needed
-
-Example repository structure:
-```
-user/.patchwork/
-├── config.yaml
-└── README.md (optional)
-```
-
-## Notification System
-
-### Notification Endpoint
-
-The notification endpoint is available at:
-```
-POST /u/{username}/_/ntfy
-GET  /u/{username}/_/ntfy
-```
-
-### Authentication
-
-The endpoint requires authentication using the existing token system. Make sure your tokens have `POST` permission for `/_/ntfy`:
-
-```yaml
-tokens:
-  "my_token":
-    POST:
-      - "/_/ntfy"  # Required for notification access
-```
-
-### Usage Examples
-
-#### JSON POST Request
 ```bash
-curl -X POST "https://patchwork.example.com/u/username/_/ntfy" \
-  -H "Authorization: Bearer your-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "markdown",
-    "title": "Alert", 
-    "message": "Something **important** happened!"
-  }'
+# Create the first admin (no running server needed)
+patchwork admin create --username alice --admin
+
+# With OIDC, link the identity at creation (or later via PATCH /users/{id})
+patchwork admin create --username alice --admin --oidc-sub "<subject>"
 ```
 
-#### Form POST Request
+## Users and tokens
+
+- `POST /api/v1/users` — create a user (`id` is also the `/u/{id}` namespace).
+- `GET/PATCH/DELETE /api/v1/users/{id}` — inspect, rename, toggle
+  `is_admin`/`active`, link `oidc_sub`. The last active admin cannot be
+  removed or deactivated.
+- `POST /api/v1/users/{id}/tokens` — issue a bearer token. The response
+  contains the plaintext exactly once; only a sha256 hash is stored.
+- `POST /api/v1/users/{id}/tokens/{tid}/rotate` — atomically revoke and
+  replace; the old bearer stops working immediately.
+- `POST /api/v1/users/{id}/tokens/{tid}/revoke` — immediate revocation.
+- `GET /api/v1/users/{id}/tokens` — metadata only, never plaintext.
+
+Token payload shape:
+
+```json
+{
+  "name": "webhook-client",
+  "is_admin": false,
+  "expires_at": "2027-01-01T00:00:00Z",
+  "patterns": {
+    "POST": ["/incoming/*", "/_/ntfy"],
+    "GET": ["/published/*"],
+    "huproxy": ["git.internal.example:22"]
+  }
+}
+```
+
+### Permission patterns
+
+- Empty/absent list denies that method.
+- `"*"` allows all subpaths in the namespace.
+- OpenSSH-style globs (`projects/*/data`) with `!` negation.
+- Selected by HTTP method; `huproxy` targets gate `/huproxy/...` tunnels.
+- An omitted `Authorization` header on `/u/{username}/...` selects a literal
+  token named `public` — create one per namespace for public-readable paths.
+- Lookups hit sqlite on every request: revocation is immediate, no cache.
+
+### Notification backends
+
+- `GET/PUT /api/v1/users/{id}/ntfy` — `{"type": "matrix", "config": {...}}`.
+- Delivery endpoint is unchanged: `POST/GET /u/{username}/_/ntfy` with a
+  token carrying `POST` permission for `/_/ntfy`.
+
+## WebUI login (OIDC)
+
+Set `PATCHWORK_OIDC_ISSUER`, `PATCHWORK_OIDC_CLIENT_ID`, and
+`PATCHWORK_OIDC_CLIENT_SECRET` to enable browser login (`/api/v1/auth/login`
+→ Authentik code flow with PKCE → session cookie, 12h, revocable via
+`GET/DELETE /api/v1/sessions`).
+
+First login must match a user linked by `oidc_sub`; unknown subjects get
+403 and an audit row — admins create/link users explicitly, and `is_admin`
+is managed locally, never from claims. OIDC never touches the data plane:
+daemons keep bearer tokens.
+
+## SCIM provisioning (optional)
+
+Set `PATCHWORK_SCIM_ENABLED=true` plus `PATCHWORK_SCIM_TOKEN` (provisioner
+bearer). With it off, no SCIM routes exist. Covered subset, Users and
+Groups: create/replace/patch/deactivate, standard `filter` + `ListResponse`
+reconciliation reads, member add/remove. Provisioned users are never admins;
+deprovisioning deactivates (tokens stop validating, history preserved).
+
+## HuProxy configuration
+
+Issue a token with `huproxy` patterns, then connect:
+
 ```bash
-curl -X POST "https://patchwork.example.com/u/username/_/ntfy" \
-  -H "Authorization: Bearer your-token" \
-  -d "type=plain&title=Alert&message=Something happened!"
+curl -H "Authorization: Bearer TOKEN" \
+  https://patchwork.example.com/huproxy/alice/git.internal.example/22
 ```
 
-#### GET Request with Query Parameters
-```bash
-curl "https://patchwork.example.com/u/username/_/ntfy?token=your-token&type=plain&title=Alert&message=Something%20happened!"
-```
-
-#### Plain Text POST
-```bash
-curl -X POST "https://patchwork.example.com/u/username/_/ntfy" \
-  -H "Authorization: Bearer your-token" \
-  -H "Content-Type: text/plain" \
-  -d "This is a plain text notification"
-```
-
-### Message Types
-
-- `plain` - Plain text message (default)
-- `markdown` - Markdown formatted message 
-- `html` - HTML formatted message
-
-### Parameters
-
-- `type` - Message type (plain, markdown, html)
-- `title` - Message title (optional)
-- `message` - Message content (required, can also use `body` or `message`)
-- `room` - Target room/channel (optional, backend-specific)
-
-## Notification Backends
-
-### Matrix
-
-Configuration for Matrix notifications:
-
-```yaml
-ntfy:
-  type: matrix
-  config:
-    access_token: "your_matrix_access_token"
-    user: "@bot:matrix.org"
-    endpoint: "https://matrix.org"  # optional
-    room_id: "!roomid:matrix.org"   # optional
-```
-
-To get a Matrix access token:
-1. Log in to your Matrix account
-2. Go to Settings → Help & About → Advanced → Access Token
-3. Copy the access token
-
-## HuProxy Configuration
-
-For HuProxy access, configure tokens in the `huproxy` field of your token definition:
-
-```yaml
-tokens:
-  "production_ssh_token":
-    huproxy:
-      - "*.production.com:*"
-  "development_access":
-    huproxy:
-      - "*.dev.com:*"
-      - "localhost:*"
-  "backup_script_token":
-    huproxy:
-      - "backup.example.com:22"
-```
-
-Users can then access HuProxy endpoints using these tokens:
-```bash
-curl -H "Authorization: Bearer production_ssh_token" \
-  https://patchwork.example.com/huproxy/alice/production.com/22
-```
-
-## Server Environment Variables
+## Server environment variables
 
 Server configuration is provided via environment variables:
-- `FORGEJO_URL` - Forgejo/Gitea instance URL (default: https://forge.tionis.dev)
-- `FORGEJO_TOKEN` - Forgejo/Gitea API token for user namespaces,
-  notifications, and HuProxy. Public and hook-only relays can omit it; the
-  Forgejo-dependent routes then fail closed.
-- `ACL_TTL` - Cache TTL for configuration files (default: 5m)
-- `ACL_STALE_GRACE` - Additional time an expired ACL can be used when Forgejo
-  cannot be reached (default: 1m, `0` disables stale authorization)
-- `METRICS_TOKEN` - Dedicated bearer token that enables `/metrics`. The endpoint
-  is disabled when this is unset and does not accept the Forgejo API token.
+
 - `SECRET_KEY` - Server secret key for HMAC generation (required for hooks)
+- `PATCHWORK_DB_PATH` - sqlite identity store (default `./patchwork.db`,
+  `0600`, plain file backup)
+- `METRICS_TOKEN` - Dedicated bearer token that enables `/metrics`. The endpoint
+  is disabled when this is unset.
+- `PATCHWORK_OIDC_ISSUER` / `PATCHWORK_OIDC_CLIENT_ID` /
+  `PATCHWORK_OIDC_CLIENT_SECRET` - WebUI login when the issuer is set
+- `PATCHWORK_SCIM_ENABLED` / `PATCHWORK_SCIM_TOKEN` - Inbound SCIM provisioning
+- `H2C` - Serve HTTP/2 cleartext directly (`true`/`1`/`yes`)
+- `TLS_CERT_FILE` / `TLS_KEY_FILE` - Serve HTTPS directly (HTTP/2 negotiated
+  automatically; mutually exclusive with `H2C`)
 - `TRUSTED_PROXY_CIDRS` - Comma-separated CIDR ranges for reverse proxies that
   are allowed to supply `X-Forwarded-For`, `CF-Connecting-IP`, or
   `X-Real-IP`. The default trusts none; configure this when Patchwork is behind
@@ -214,11 +113,3 @@ Server configuration is provided via environment variables:
   address without accepting spoofed headers from direct clients.
 - `LOG_LEVEL` - Logging level (DEBUG, INFO, WARN, ERROR)
 - `LOG_SOURCE` - Add source information to logs (true/false)
-
-## Benefits of Unified Configuration
-
-- **Simplicity**: One file, one format
-- **Clarity**: No confusion about which file to use
-- **Clean codebase**: No backward compatibility code to maintain
-- **Better errors**: Missing config files properly return errors
-- **Centralized management**: All settings in one place

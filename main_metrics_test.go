@@ -8,7 +8,7 @@ import (
 )
 
 func TestMetricsHandlerWithDedicatedToken(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	server.metricsToken = []byte("metrics-secret")
 
 	// Record a sample metric so the exposition contains the HTTP requests metric

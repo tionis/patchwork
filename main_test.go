@@ -30,11 +30,11 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/tionis/patchwork/internal/auth"
 	"github.com/tionis/patchwork/internal/metrics"
 	"github.com/tionis/patchwork/internal/relay"
 	"golang.org/x/net/http2"
 	"golang.org/x/time/rate"
-	"gopkg.in/yaml.v3"
 )
 
 type observingResponseWriter struct {
@@ -137,7 +137,7 @@ func TestGetClientIP(t *testing.T) {
 }
 
 func TestServerClientIPUsesOnlyTrustedProxies(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	server.trustedProxyCIDRs = []netip.Prefix{
 		netip.MustParsePrefix("10.0.0.0/8"),
 		netip.MustParsePrefix("192.0.2.0/24"),
@@ -195,19 +195,6 @@ func TestServerClientIPUsesOnlyTrustedProxies(t *testing.T) {
 	}
 }
 
-func TestParseTrustedProxyCIDRs(t *testing.T) {
-	prefixes, err := parseTrustedProxyCIDRs("10.0.0.7/8, 2001:db8::1/32")
-	if err != nil {
-		t.Fatalf("parse trusted proxies: %v", err)
-	}
-	if len(prefixes) != 2 || prefixes[0].String() != "10.0.0.0/8" || prefixes[1].String() != "2001:db8::/32" {
-		t.Fatalf("unexpected normalized prefixes: %v", prefixes)
-	}
-	if _, err := parseTrustedProxyCIDRs("not-a-prefix"); err == nil {
-		t.Fatal("invalid trusted proxy CIDR was accepted")
-	}
-}
-
 func TestGenerateUUID(t *testing.T) {
 	// Test successful UUID generation
 	uuid1, err := generateUUID()
@@ -246,12 +233,9 @@ func TestGenerateUUID(t *testing.T) {
 func TestServerComputeSecret(t *testing.T) {
 	secretKey := []byte("test-secret-key-for-testing")
 	logger := slog.Default()
-	authCache := NewAuthCache("https://test.example.com", "test-token", 5*time.Minute, logger)
-
 	server := &server{
 		logger:    logger,
 		secretKey: secretKey,
-		authCache: authCache,
 	}
 
 	// Test secret generation
@@ -284,12 +268,9 @@ func TestServerComputeSecret(t *testing.T) {
 func TestServerVerifySecret(t *testing.T) {
 	secretKey := []byte("test-secret-key-for-testing")
 	logger := slog.Default()
-	authCache := NewAuthCache("https://test.example.com", "test-token", 5*time.Minute, logger)
-
 	server := &server{
 		logger:    logger,
 		secretKey: secretKey,
-		authCache: authCache,
 	}
 
 	namespace := "test"
@@ -373,97 +354,27 @@ func TestBuildVersion(t *testing.T) {
 }
 
 func TestGetHTTPServer(t *testing.T) {
-	// Set up environment variables
-	originalForgejoURL := os.Getenv("FORGEJO_URL")
-	originalForgejoToken := os.Getenv("FORGEJO_TOKEN")
-	originalSecretKey := os.Getenv("SECRET_KEY")
-	originalACLTTL := os.Getenv("ACL_TTL")
-	originalACLStaleGrace := os.Getenv("ACL_STALE_GRACE")
-	originalMetricsToken := os.Getenv("METRICS_TOKEN")
-	originalTrustedProxies := os.Getenv("TRUSTED_PROXY_CIDRS")
-	if err := os.Setenv("TRUSTED_PROXY_CIDRS", ""); err != nil {
-		t.Fatalf("Failed to clear TRUSTED_PROXY_CIDRS: %v", err)
-	}
-	if err := os.Setenv("ACL_STALE_GRACE", ""); err != nil {
-		t.Fatalf("Failed to clear ACL_STALE_GRACE: %v", err)
-	}
-
-	defer func() {
-		if err := os.Setenv("FORGEJO_URL", originalForgejoURL); err != nil {
-			t.Logf("Failed to restore FORGEJO_URL: %v", err)
-		}
-		if err := os.Setenv("FORGEJO_TOKEN", originalForgejoToken); err != nil {
-			t.Logf("Failed to restore FORGEJO_TOKEN: %v", err)
-		}
-		if err := os.Setenv("SECRET_KEY", originalSecretKey); err != nil {
-			t.Logf("Failed to restore SECRET_KEY: %v", err)
-		}
-		if err := os.Setenv("ACL_TTL", originalACLTTL); err != nil {
-			t.Logf("Failed to restore ACL_TTL: %v", err)
-		}
-		if err := os.Setenv("ACL_STALE_GRACE", originalACLStaleGrace); err != nil {
-			t.Logf("Failed to restore ACL_STALE_GRACE: %v", err)
-		}
-		if err := os.Setenv("METRICS_TOKEN", originalMetricsToken); err != nil {
-			t.Logf("Failed to restore METRICS_TOKEN: %v", err)
-		}
-		if err := os.Setenv("TRUSTED_PROXY_CIDRS", originalTrustedProxies); err != nil {
-			t.Logf("Failed to restore TRUSTED_PROXY_CIDRS: %v", err)
-		}
-	}()
+	t.Setenv("SECRET_KEY", "test-secret-key")
+	t.Setenv("PATCHWORK_DB_PATH", t.TempDir()+"/test.db")
+	t.Setenv("METRICS_TOKEN", "test-metrics-token")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("H2C", "")
+	t.Setenv("TLS_CERT_FILE", "")
+	t.Setenv("TLS_KEY_FILE", "")
+	t.Setenv("PATCHWORK_OIDC_ISSUER", "")
+	t.Setenv("PATCHWORK_SCIM_ENABLED", "")
 
 	t.Run("Missing SECRET_KEY", func(t *testing.T) {
-		if err := os.Setenv("FORGEJO_URL", "https://test.example.com"); err != nil {
-			t.Fatalf("Failed to set FORGEJO_URL: %v", err)
-		}
-		if err := os.Setenv("FORGEJO_TOKEN", "test-token"); err != nil {
-			t.Fatalf("Failed to set FORGEJO_TOKEN: %v", err)
-		}
-		if err := os.Setenv("SECRET_KEY", ""); err != nil {
-			t.Fatalf("Failed to set SECRET_KEY: %v", err)
-		}
+		t.Setenv("SECRET_KEY", "")
 
-		logger := slog.Default()
-		ctx := context.Background()
-
-		server := getHTTPServer(logger, ctx, 8080)
+		server := getHTTPServer(slog.New(slog.NewTextHandler(io.Discard, nil)), context.Background(), 8080)
 		if server != nil {
 			t.Error("Expected nil server when SECRET_KEY is missing")
 		}
 	})
 
-	t.Run("Missing FORGEJO_TOKEN allows standalone relay", func(t *testing.T) {
-		os.Setenv("FORGEJO_URL", "https://test.example.com")
-		os.Setenv("FORGEJO_TOKEN", "")
-		os.Setenv("SECRET_KEY", "test-secret-key")
-
-		logger := slog.Default()
-		ctx := context.Background()
-
-		server := getHTTPServer(logger, ctx, 8080)
-		if server == nil {
-			t.Fatal("Expected standalone relay server when FORGEJO_TOKEN is missing")
-		}
-
-		request := httptest.NewRequest(http.MethodGet, "/u/alice/channel", nil)
-		request.Header.Set("Authorization", "Bearer unavailable")
-		response := httptest.NewRecorder()
-		server.Handler.ServeHTTP(response, request)
-		if response.Code != http.StatusInternalServerError {
-			t.Fatalf("user namespace status = %d, want 500 while Forgejo is disabled", response.Code)
-		}
-	})
-
 	t.Run("Valid configuration", func(t *testing.T) {
-		os.Setenv("FORGEJO_URL", "https://test.example.com")
-		os.Setenv("FORGEJO_TOKEN", "test-token")
-		os.Setenv("SECRET_KEY", "test-secret-key")
-		os.Setenv("ACL_TTL", "10m")
-
-		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-		ctx := context.Background()
-
-		server := getHTTPServer(logger, ctx, 8081)
+		server := getHTTPServer(slog.New(slog.NewTextHandler(io.Discard, nil)), context.Background(), 8081)
 		if server == nil {
 			t.Fatal("Expected valid server, got nil")
 		}
@@ -488,13 +399,31 @@ func TestGetHTTPServer(t *testing.T) {
 	})
 
 	t.Run("Invalid trusted proxy configuration", func(t *testing.T) {
-		os.Setenv("FORGEJO_TOKEN", "test-token")
-		os.Setenv("SECRET_KEY", "test-secret-key")
-		os.Setenv("TRUSTED_PROXY_CIDRS", "not-a-cidr")
+		t.Setenv("TRUSTED_PROXY_CIDRS", "not-a-cidr")
 
 		server := getHTTPServer(slog.New(slog.NewTextHandler(io.Discard, nil)), context.Background(), 8081)
 		if server != nil {
 			t.Fatal("Expected invalid trusted proxy configuration to prevent startup")
+		}
+	})
+
+	t.Run("Invalid database path", func(t *testing.T) {
+		t.Setenv("PATCHWORK_DB_PATH", t.TempDir()+"/missing-dir/test.db")
+
+		server := getHTTPServer(slog.New(slog.NewTextHandler(io.Discard, nil)), context.Background(), 8081)
+		if server != nil {
+			t.Fatal("Expected unwritable database path to prevent startup")
+		}
+	})
+
+	t.Run("Conflicting transport configuration", func(t *testing.T) {
+		t.Setenv("H2C", "true")
+		t.Setenv("TLS_CERT_FILE", "cert.pem")
+		t.Setenv("TLS_KEY_FILE", "key.pem")
+
+		server := getHTTPServer(slog.New(slog.NewTextHandler(io.Discard, nil)), context.Background(), 8081)
+		if server != nil {
+			t.Fatal("Expected conflicting transport configuration to prevent startup")
 		}
 	})
 }
@@ -597,7 +526,7 @@ func TestServeFile(t *testing.T) {
 }
 
 func TestAuthenticateTokenEdgeCases(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	clientIP := net.ParseIP("192.168.1.100")
 
 	t.Run("Public namespace no authentication", func(t *testing.T) {
@@ -625,140 +554,6 @@ func TestAuthenticateTokenEdgeCases(t *testing.T) {
 			t.Errorf("Expected reason 'token not found', got %q", reason)
 		}
 	})
-}
-
-func TestTokenInfoMarshalUnmarshalYAML(t *testing.T) {
-	// Test MarshalYAML
-	tokenInfo := TokenInfo{
-		IsAdmin:   true,
-		ExpiresAt: func() *time.Time { t := time.Now(); return &t }(),
-	}
-
-	// Test that MarshalYAML doesn't panic
-	_, err := tokenInfo.MarshalYAML()
-	if err != nil {
-		t.Errorf("Expected no error from MarshalYAML, got %v", err)
-	}
-}
-
-func TestTokenInfoUnmarshalYAML(t *testing.T) {
-	tests := []struct {
-		name          string
-		yamlData      string
-		expectedAdmin bool
-		expectError   bool
-	}{
-		{
-			name:          "Valid admin token",
-			yamlData:      "is_admin: true",
-			expectedAdmin: true,
-			expectError:   false,
-		},
-		{
-			name:          "Valid non-admin token",
-			yamlData:      "is_admin: false",
-			expectedAdmin: false,
-			expectError:   false,
-		},
-		{
-			name:          "Empty YAML",
-			yamlData:      "",
-			expectedAdmin: false,
-			expectError:   false,
-		},
-		{
-			name:          "Only admin field",
-			yamlData:      "is_admin: true",
-			expectedAdmin: true,
-			expectError:   false,
-		},
-		{
-			name:        "Invalid YAML",
-			yamlData:    "is_admin: [invalid",
-			expectError: true,
-		},
-		{
-			name:        "Admin field with string value",
-			yamlData:    "is_admin: \"true\"",
-			expectError: true, // String values can't be unmarshaled to bool
-		},
-		{
-			name:        "Admin field with string false",
-			yamlData:    "is_admin: \"false\"",
-			expectError: true, // String values can't be unmarshaled to bool
-		},
-		{
-			name:          "Complex YAML with other fields",
-			yamlData:      "is_admin: true\nGET:\n  - \"/api/*\"\nPOST:\n  - \"/data/*\"",
-			expectedAdmin: true,
-			expectError:   false,
-		},
-		{
-			name:          "YAML with expires_at field",
-			yamlData:      "is_admin: false\nexpires_at: 2024-12-31T23:59:59Z",
-			expectedAdmin: false,
-			expectError:   false,
-		},
-		{
-			name:          "YAML with HTTP method patterns",
-			yamlData:      "is_admin: false\nGET:\n  - \"/api/*\"\n  - \"/health\"\nPOST:\n  - \"/data/*\"\nhuproxy:\n  - \"example.com:*\"",
-			expectedAdmin: false,
-			expectError:   false,
-		},
-		{
-			name:          "YAML with all HTTP methods",
-			yamlData:      "is_admin: true\nGET:\n  - \"/*\"\nPOST:\n  - \"/*\"\nPUT:\n  - \"/*\"\nDELETE:\n  - \"/*\"\nPATCH:\n  - \"/*\"",
-			expectedAdmin: true,
-			expectError:   false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var tokenInfo TokenInfo
-
-			// Use yaml.Unmarshal to trigger the UnmarshalYAML method
-			err := yaml.Unmarshal([]byte(tt.yamlData), &tokenInfo)
-
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error from UnmarshalYAML, got none")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Errorf("Expected no error from UnmarshalYAML, got %v", err)
-				return
-			}
-
-			if tokenInfo.IsAdmin != tt.expectedAdmin {
-				t.Errorf("Expected IsAdmin %v, got %v", tt.expectedAdmin, tokenInfo.IsAdmin)
-			}
-		})
-	}
-}
-
-func TestTokenInfoUnmarshalYAMLClearsExistingPatterns(t *testing.T) {
-	var tokenInfo TokenInfo
-
-	if err := yaml.Unmarshal([]byte("GET:\n  - \"/old/*\"\nPOST:\n  - \"/old-post/*\""), &tokenInfo); err != nil {
-		t.Fatalf("Failed to unmarshal initial token: %v", err)
-	}
-
-	if err := yaml.Unmarshal([]byte("GET:\n  - \"/new/*\""), &tokenInfo); err != nil {
-		t.Fatalf("Failed to unmarshal replacement token: %v", err)
-	}
-
-	if got := len(tokenInfo.GET); got != 1 {
-		t.Fatalf("Expected exactly one GET pattern after replacement, got %d", got)
-	}
-	if got := tokenInfo.GET[0].String(); got != "/new/*" {
-		t.Fatalf("Expected replacement GET pattern, got %q", got)
-	}
-	if got := len(tokenInfo.POST); got != 0 {
-		t.Fatalf("Expected POST patterns to be cleared, got %d", got)
-	}
 }
 
 func TestAddPassthroughHeadersSetsHeadersBeforeStatus(t *testing.T) {
@@ -791,7 +586,7 @@ func TestAddPassthroughHeadersSetsHeadersBeforeStatus(t *testing.T) {
 }
 
 func TestHandlePatchAcceptsPATCHAsWrite(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	path := "/patch-write"
 
 	consumerDone := make(chan *httptest.ResponseRecorder, 1)
@@ -833,7 +628,7 @@ func TestHandlePatchAcceptsPATCHAsWrite(t *testing.T) {
 }
 
 func TestRelayBrokerInitialization(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	if server.broker == nil {
 		t.Fatal("expected relay broker to be initialized")
 	}
@@ -842,206 +637,11 @@ func TestRelayBrokerInitialization(t *testing.T) {
 	}
 }
 
-func TestNewAuthCache(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	forgejoURL := "https://test.example.com"
-	forgejoToken := "test-token"
-	ttl := 10 * time.Minute
-
-	cache := NewAuthCache(forgejoURL, forgejoToken, ttl, logger)
-
-	if cache == nil {
-		t.Fatal("Expected AuthCache to be created, got nil")
-	}
-
-	if cache.forgejoURL != forgejoURL {
-		t.Errorf("Expected forgejoURL %q, got %q", forgejoURL, cache.forgejoURL)
-	}
-
-	if cache.forgejoToken != forgejoToken {
-		t.Errorf("Expected forgejoToken %q, got %q", forgejoToken, cache.forgejoToken)
-	}
-
-	if cache.ttl != ttl {
-		t.Errorf("Expected ttl %v, got %v", ttl, cache.ttl)
-	}
-
-	if cache.data == nil {
-		t.Error("Expected data map to be initialized")
-	}
-
-	if len(cache.data) != 0 {
-		t.Errorf("Expected empty data map, got %d entries", len(cache.data))
-	}
-}
-
-func TestAuthCacheCoalescesConcurrentRefreshes(t *testing.T) {
-	var requests atomic.Int32
-	started := make(chan struct{})
-	release := make(chan struct{})
-	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if requests.Add(1) == 1 {
-			close(started)
-			<-release
-		}
-		_, _ = io.WriteString(w, "tokens:\n  shared:\n    GET: ['*']\n")
-	}))
-	defer forgejo.Close()
-
-	cache := NewAuthCache(forgejo.URL, "token", time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	const callers = 64
-	results := make(chan error, callers)
-	var wg sync.WaitGroup
-	for i := 0; i < callers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			auth, err := cache.GetUserAuth("alice")
-			if err == nil {
-				if _, ok := auth.Tokens["shared"]; !ok {
-					err = errors.New("refreshed auth omitted shared token")
-				}
-			}
-			results <- err
-		}()
-	}
-	<-started
-	close(release)
-	wg.Wait()
-	close(results)
-
-	for err := range results {
-		if err != nil {
-			t.Fatalf("concurrent refresh failed: %v", err)
-		}
-	}
-	if got := requests.Load(); got != 1 {
-		t.Fatalf("Concurrent cache miss made %d backend requests, want 1", got)
-	}
-}
-
-func TestAuthCacheInvalidationWinsAgainstInflightRefresh(t *testing.T) {
-	var requests atomic.Int32
-	firstStarted := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		request := requests.Add(1)
-		if request == 1 {
-			close(firstStarted)
-			<-releaseFirst
-		}
-		_, _ = fmt.Fprintf(w, "tokens:\n  fetch-%d:\n    GET: ['*']\n", request)
-	}))
-	defer forgejo.Close()
-
-	cache := NewAuthCache(forgejo.URL, "token", time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	result := make(chan *UserAuth, 1)
-	errResult := make(chan error, 1)
-	go func() {
-		auth, err := cache.GetUserAuth("alice")
-		result <- auth
-		errResult <- err
-	}()
-
-	<-firstStarted
-	cache.InvalidateUser("alice")
-	close(releaseFirst)
-
-	auth := <-result
-	if err := <-errResult; err != nil {
-		t.Fatalf("refresh after invalidation: %v", err)
-	}
-	if got := requests.Load(); got != 2 {
-		t.Fatalf("Invalidated in-flight refresh made %d requests, want 2", got)
-	}
-	if _, stale := auth.Tokens["fetch-1"]; stale {
-		t.Fatal("In-flight result repopulated cache after invalidation")
-	}
-	if _, fresh := auth.Tokens["fetch-2"]; !fresh {
-		t.Fatalf("Second refresh result missing: %#v", auth.Tokens)
-	}
-}
-
-func TestAuthCacheStaleGraceIsBounded(t *testing.T) {
-	var requests atomic.Int32
-	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests.Add(1)
-		http.Error(w, "unavailable", http.StatusServiceUnavailable)
-	}))
-	defer forgejo.Close()
-
-	cache := NewAuthCache(forgejo.URL, "token", time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	cache.staleGrace = 30 * time.Second
-	now := time.Unix(1_700_000_000, 0)
-	cache.now = func() time.Time { return now }
-	cache.data["alice"] = &UserAuth{
-		Tokens:    map[string]TokenInfo{"old-token": {}},
-		UpdatedAt: now.Add(-70 * time.Second),
-	}
-
-	auth, err := cache.GetUserAuth("alice")
-	if err != nil || auth == nil {
-		t.Fatalf("Expected bounded stale fallback, auth=%v err=%v", auth, err)
-	}
-
-	now = now.Add(21 * time.Second)
-	if _, err := cache.GetUserAuth("alice"); err == nil {
-		t.Fatal("Authorization remained fail-open beyond stale grace")
-	}
-	if _, _, _, err := cache.validateToken("alice", "old-token", http.MethodGet, "/", false); err == nil {
-		t.Fatal("Authentication backend failure was hidden as an ordinary token denial")
-	}
-	if got := requests.Load(); got != 2 {
-		t.Fatalf("Backend outage caused %d refresh attempts, want retry backoff to keep it at 2", got)
-	}
-}
-
-func TestAuthCacheRejectsOversizedConfig(t *testing.T) {
-	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, strings.Repeat("x", maxAuthConfigBytes+1))
-	}))
-	defer forgejo.Close()
-
-	cache := NewAuthCache(forgejo.URL, "token", time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if _, err := cache.GetUserAuth("alice"); err == nil || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatalf("Oversized auth config error = %v", err)
-	}
-}
-
-func TestConfigDataStruct(t *testing.T) {
-	// Test ConfigData struct creation
-	config := ConfigData{
-		ForgejoURL:   "https://test.example.com",
-		ACLTTL:       5 * time.Minute,
-		BaseURL:      "https://patchwork.example.com",
-		WebSocketURL: "wss://patchwork.example.com",
-	}
-
-	if config.ForgejoURL != "https://test.example.com" {
-		t.Errorf("Expected ForgejoURL to be set correctly")
-	}
-
-	if config.ACLTTL != 5*time.Minute {
-		t.Errorf("Expected ACLTTL to be set correctly")
-	}
-
-	if config.BaseURL != "https://patchwork.example.com" {
-		t.Errorf("Expected BaseURL to be set correctly")
-	}
-
-	if config.WebSocketURL != "wss://patchwork.example.com" {
-		t.Errorf("Expected WebSocketURL to be set correctly")
-	}
-}
-
-// Test that server implements the ServerInterface for huproxy
 func TestServerInterface(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	authCache := NewAuthCache("https://test.example.com", "test-token", 5*time.Minute, logger)
 
 	server := &server{
-		logger:    logger,
-		authCache: authCache,
+		logger: logger,
 	}
 
 	// Test AuthenticateToken method
@@ -1064,28 +664,33 @@ func TestServerInterface(t *testing.T) {
 	}
 }
 
-// Helper function to create a test server with mock auth cache
-func createTestMainServer() *server {
+// Helper function to create a test server with a temp sqlite store.
+func createTestMainServer(t testing.TB) *server {
+	t.Helper()
+
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	secretKey := []byte("test-secret-key-for-testing-purposes")
-	authCache := NewAuthCache("https://test.forgejo.dev", "test-token", 5*time.Minute, logger)
 
-	// Create mock auth data to avoid actual HTTP requests
-	mockUserAuth := &UserAuth{
-		Tokens: map[string]TokenInfo{
-			"valid-token": {
-				IsAdmin: false,
-			},
-			"admin-token": {
-				IsAdmin: true,
-			},
-		},
-		UpdatedAt: time.Now(),
+	store, err := auth.Open(t.TempDir()+"/test.db", logger)
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
 	}
 
-	authCache.data = map[string]*UserAuth{
-		"testuser": mockUserAuth,
-		"admin":    mockUserAuth,
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	// Seed identities used across handler unit tests.
+	if _, err := store.CreateUser("testuser", "", false); err != nil {
+		t.Fatalf("seed testuser: %v", err)
+	}
+
+	if _, err := store.CreateUser("admin", "", false); err != nil {
+		t.Fatalf("seed admin user: %v", err)
+	}
+
+	if _, err := store.IssueToken("testuser", "patternless", auth.Patterns{}, nil, false); err != nil {
+		t.Fatalf("seed token: %v", err)
 	}
 
 	// Create metrics instance for testing
@@ -1094,11 +699,8 @@ func createTestMainServer() *server {
 	return &server{
 		logger:              logger,
 		ctx:                 context.Background(),
-		forgejoURL:          "https://test.forgejo.dev",
-		forgejoToken:        "test-token",
-		aclTTL:              5 * time.Minute,
 		secretKey:           secretKey,
-		authCache:           authCache,
+		authStore:           store,
 		metrics:             metricsInstance,
 		broker:              relay.NewBroker(),
 		switchTimeout:       250 * time.Millisecond,
@@ -1164,7 +766,7 @@ func TestPublicHandler(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create fresh server for each test to avoid channel pollution
-			server := createTestMainServer()
+			server := createTestMainServer(t)
 
 			var body io.Reader
 			if tt.body != "" {
@@ -1199,7 +801,7 @@ func TestPublicHandler(t *testing.T) {
 }
 
 func TestPublicRateLimiting(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	// Create a mock handler that doesn't block (unlike the real publicHandler)
 	mockHandler := func(w http.ResponseWriter, r *http.Request) {
@@ -1251,7 +853,7 @@ func TestPublicRateLimiting(t *testing.T) {
 }
 
 func TestPublicRateLimiterIgnoresSpoofedForwardingAddresses(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	handler := server.rateLimitMiddleware(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -1277,7 +879,7 @@ func TestPublicRateLimiterIgnoresSpoofedForwardingAddresses(t *testing.T) {
 }
 
 func TestRateLimiterCleanupUsesLastSeen(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	server.rateLimiterTTL = time.Minute
 	now := time.Unix(1_700_000_000, 0)
 	server.now = func() time.Time { return now }
@@ -1297,7 +899,7 @@ func TestRateLimiterCleanupUsesLastSeen(t *testing.T) {
 }
 
 func TestRateLimiterMapIsBounded(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	server.maxRateLimiters = 2
 
 	server.getOrCreateRateLimiter("first")
@@ -1316,7 +918,12 @@ func TestRateLimiterMapIsBounded(t *testing.T) {
 }
 
 func TestUserHandler(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
+
+	patternless, err := server.authStore.IssueToken("testuser", "patternless-login", auth.Patterns{}, nil, false)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
 
 	tests := []struct {
 		name           string
@@ -1351,7 +958,7 @@ func TestUserHandler(t *testing.T) {
 			method:         "POST",
 			username:       "testuser",
 			path:           "test-path",
-			token:          "valid-token",
+			token:          patternless.Plaintext,
 			body:           "test data",
 			expectedStatus: http.StatusUnauthorized,
 			shouldComplete: true, // Auth will fail due to no patterns
@@ -1361,7 +968,7 @@ func TestUserHandler(t *testing.T) {
 			method:         "GET",
 			username:       "testuser",
 			path:           "test-path",
-			token:          "valid-token",
+			token:          patternless.Plaintext,
 			expectedStatus: http.StatusUnauthorized,
 			shouldComplete: true, // Auth will fail due to no patterns
 		},
@@ -1411,77 +1018,8 @@ func TestUserHandler(t *testing.T) {
 	}
 }
 
-func TestUserAdminHandler(t *testing.T) {
-	tests := []struct {
-		name           string
-		username       string
-		adminPath      string
-		token          string
-		expectedStatus int
-		expectedBody   string
-	}{
-		{
-			name:           "Valid admin token for cache invalidation",
-			username:       "admin",
-			adminPath:      "invalidate_cache",
-			token:          "admin-token",
-			expectedStatus: http.StatusOK,
-			expectedBody:   `{"status": "cache invalidated"}`,
-		},
-		{
-			name:           "No authorization header",
-			username:       "admin",
-			adminPath:      "invalidate_cache",
-			token:          "",
-			expectedStatus: http.StatusUnauthorized,
-		},
-		{
-			name:           "Invalid admin path",
-			username:       "admin",
-			adminPath:      "unknown-endpoint",
-			token:          "admin-token",
-			expectedStatus: http.StatusNotFound, // Should get 404 for unknown endpoint
-		},
-		{
-			name:           "Non-admin token",
-			username:       "testuser",
-			adminPath:      "invalidate_cache",
-			token:          "valid-token",
-			expectedStatus: http.StatusForbidden,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := createTestMainServer() // Create fresh server for each test
-			req := httptest.NewRequest("POST", "/u/"+tt.username+"/_/"+tt.adminPath, nil)
-			req = mux.SetURLVars(req, map[string]string{
-				"username":  tt.username,
-				"adminPath": tt.adminPath,
-			})
-
-			if tt.token != "" {
-				req.Header.Set("Authorization", "Bearer "+tt.token)
-			}
-
-			w := httptest.NewRecorder()
-			server.userAdminHandler(w, req)
-
-			if w.Code != tt.expectedStatus {
-				t.Errorf("Expected status %d, got %d. Body: %s", tt.expectedStatus, w.Code, w.Body.String())
-			}
-
-			if tt.expectedBody != "" {
-				if strings.TrimSpace(w.Body.String()) != tt.expectedBody {
-					t.Errorf("Expected body %q, got %q", tt.expectedBody, strings.TrimSpace(w.Body.String()))
-				}
-			}
-		})
-	}
-}
-
 func TestForwardHookRootHandler(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	t.Run("GET request creates channel", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/h", nil)
@@ -1566,7 +1104,7 @@ func TestForwardHookHandler(t *testing.T) {
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create fresh server for each test
-			server := createTestMainServer()
+			server := createTestMainServer(t)
 
 			// Create a unique channel for this test
 			req := httptest.NewRequest("GET", "/h", nil)
@@ -1633,7 +1171,7 @@ func TestForwardHookHandler(t *testing.T) {
 }
 
 func TestReverseHookRootHandler(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	t.Run("GET request creates channel", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/r", nil)
@@ -1718,7 +1256,7 @@ func TestReverseHookHandler(t *testing.T) {
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create fresh server for each test
-			server := createTestMainServer()
+			server := createTestMainServer(t)
 
 			// Create a unique channel for this test
 			req := httptest.NewRequest("GET", "/r", nil)
@@ -1785,7 +1323,7 @@ func TestReverseHookHandler(t *testing.T) {
 }
 
 func TestHandlePatch(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	tests := []struct {
 		name           string
@@ -1886,7 +1424,7 @@ func TestHandlePatch(t *testing.T) {
 }
 
 func TestHandlePatchChannelOperations(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	t.Run("Channel creation and path normalization", func(t *testing.T) {
 		// Test that channels are created properly without actually using them
@@ -1919,7 +1457,7 @@ func TestHandlePatchChannelOperations(t *testing.T) {
 }
 
 func TestHandlePatchProducerConsumer(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	t.Run("Producer-Consumer communication", func(t *testing.T) {
 		channelPath := "p/test-producer-consumer"
@@ -1963,7 +1501,7 @@ func TestHandlePatchProducerConsumer(t *testing.T) {
 }
 
 func TestHandlePatchStreamsBeforeUploadCompletes(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -2043,7 +1581,7 @@ func TestHandlePatchStreamsBeforeUploadCompletes(t *testing.T) {
 }
 
 func TestHandlePatchConcurrentProducerConsumerStress(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	const pairs = 64
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -2113,7 +1651,7 @@ func TestHandlePatchConcurrentProducerConsumerStress(t *testing.T) {
 }
 
 func TestHandlePatchSequentialDeliveryPreservesPayloads(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	const messages = 20
 
 	for i := 0; i < messages; i++ {
@@ -2159,7 +1697,7 @@ func TestHandlePatchSequentialDeliveryPreservesPayloads(t *testing.T) {
 }
 
 func TestHandlePatchPubSubBroadcastsToWaitingConsumers(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	const consumers = 8
 
 	results := make(chan string, consumers)
@@ -2210,7 +1748,7 @@ func TestHandlePatchPubSubBroadcastsToWaitingConsumers(t *testing.T) {
 }
 
 func TestHandlePatchCanceledConsumerDoesNotStealMessage(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	path := "/canceled-consumer"
 
 	canceledCtx, cancelCanceled := context.WithCancel(context.Background())
@@ -2266,7 +1804,7 @@ func TestHandlePatchCanceledConsumerDoesNotStealMessage(t *testing.T) {
 }
 
 func TestHandlePatchCanceledProducerDoesNotLeaveStaleMessage(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	producerCtx, producerCancel := context.WithCancel(context.Background())
 	producerCancel()
@@ -2300,7 +1838,7 @@ func TestHandlePatchCanceledProducerDoesNotLeaveStaleMessage(t *testing.T) {
 }
 
 func TestHandlePatchStopsBlockedOperationsOnServerShutdown(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	serverContext, stopServer := context.WithCancel(context.Background())
 	server.ctx = serverContext
 
@@ -2386,18 +1924,30 @@ func TestHTTPRouterPublicRouteMessagePassing(t *testing.T) {
 	}
 }
 
-func newHTTPServerForTest(t *testing.T, forgejoURL string) *http.Server {
+// testServer is an HTTP handler wired to a temp sqlite store.
+type testServer struct {
+	Handler http.Handler
+	Store   *auth.Store
+	Server  *http.Server
+}
+
+func newHTTPServerForTest(t *testing.T, env ...string) *testServer {
 	t.Helper()
 
 	t.Setenv("SECRET_KEY", "test-secret-key")
-	t.Setenv("FORGEJO_TOKEN", "test-token")
-	t.Setenv("TRUSTED_PROXY_CIDRS", "")
-	t.Setenv("ACL_STALE_GRACE", "")
+	t.Setenv("PATCHWORK_DB_PATH", t.TempDir()+"/test.db")
 	t.Setenv("METRICS_TOKEN", "test-metrics-token")
-	if forgejoURL == "" {
-		forgejoURL = "https://forgejo.example.test"
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("PATCHWORK_OIDC_ISSUER", "")
+	t.Setenv("PATCHWORK_OIDC_CLIENT_ID", "")
+	t.Setenv("PATCHWORK_OIDC_CLIENT_SECRET", "")
+	t.Setenv("PATCHWORK_SCIM_ENABLED", "")
+	t.Setenv("PATCHWORK_SCIM_TOKEN", "")
+
+	for _, kv := range env {
+		key, value, _ := strings.Cut(kv, "=")
+		t.Setenv(key, value)
 	}
-	t.Setenv("FORGEJO_URL", forgejoURL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -2407,46 +1957,101 @@ func newHTTPServerForTest(t *testing.T, forgejoURL string) *http.Server {
 		t.Fatal("expected HTTP server")
 	}
 
-	return srv
+	store, err := auth.Open(os.Getenv("PATCHWORK_DB_PATH"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = store.Close()
+	})
+
+	return &testServer{Handler: srv.Handler, Store: store, Server: srv}
 }
 
-func TestHTTPRouterUserNamespaceAuthWithMockForgejo(t *testing.T) {
-	const configYAML = `
-tokens:
-  good-token:
-    GET:
-      - "/queue/user-flow"
-    POST:
-      - "/queue/user-flow"
-  limited-token:
-    GET:
-      - "/queue/user-flow"
-`
+// seedUserToken creates a user and issues a bearer token, returning the plaintext.
+func seedUserToken(t *testing.T, store *auth.Store, user, name string, patterns auth.Patterns) string {
+	t.Helper()
 
-	var (
-		fetchMu sync.Mutex
-		fetches int
-	)
-	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fetchMu.Lock()
-		fetches++
-		fetchMu.Unlock()
+	if _, err := store.CreateUser(user, "", false); err != nil && !errors.Is(err, auth.ErrExists) {
+		t.Fatalf("create user: %v", err)
+	}
 
-		if r.URL.Path != "/api/v1/repos/alice/.patchwork/media/config.yaml" {
-			http.NotFound(w, r)
-			return
+	issued, err := store.IssueToken(user, name, patterns, nil, false)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	return issued.Plaintext
+}
+
+// seedAdminSession creates an admin user and returns a session cookie value.
+func seedAdminSession(t *testing.T, store *auth.Store, user string) string {
+	t.Helper()
+
+	if _, err := store.CreateUser(user, "", true); err != nil && !errors.Is(err, auth.ErrExists) {
+		t.Fatalf("create admin: %v", err)
+	}
+
+	session, err := store.CreateSession(user, time.Hour)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	return session.ID
+}
+
+func adminRequest(t *testing.T, srv *testServer, session, method, target string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+
+	var reader *strings.Reader
+	if body == nil {
+		reader = strings.NewReader("")
+	} else {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
 		}
-		if got := r.Header.Get("Authorization"); got != "token test-token" {
-			t.Errorf("unexpected Forgejo auth header %q", got)
-			http.Error(w, "bad auth", http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		_, _ = w.Write([]byte(configYAML))
-	}))
-	defer forgejo.Close()
 
-	srv := newHTTPServerForTest(t, forgejo.URL)
+		reader = strings.NewReader(string(encoded))
+	}
+
+	req := httptest.NewRequest(method, target, reader)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	if session != "" {
+		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session})
+	}
+
+	w := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(w, req)
+
+	return w
+}
+
+func TestHTTPRouterUserNamespaceAuthWithLocalStore(t *testing.T) {
+	srv := newHTTPServerForTest(t)
+
+	if _, err := srv.Store.CreateUser("alice", "", false); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	good, err := srv.Store.IssueToken("alice", "good", auth.Patterns{
+		GET:  []string{"/queue/user-flow"},
+		POST: []string{"/queue/user-flow"},
+	}, nil, false)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	limited, err := srv.Store.IssueToken("alice", "limited", auth.Patterns{
+		GET: []string{"/queue/user-flow"},
+	}, nil, false)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
 
 	consumerDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
@@ -2454,7 +2059,7 @@ tokens:
 		defer cancel()
 
 		req := httptest.NewRequest(http.MethodGet, "/u/alice/queue/user-flow", nil).WithContext(reqCtx)
-		req.Header.Set("Authorization", "Bearer good-token")
+		req.Header.Set("Authorization", "Bearer "+good.Plaintext)
 		w := httptest.NewRecorder()
 
 		srv.Handler.ServeHTTP(w, req)
@@ -2466,7 +2071,7 @@ tokens:
 	producerDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		req := httptest.NewRequest(http.MethodPost, "/u/alice/queue/user-flow", strings.NewReader("private payload"))
-		req.Header.Set("Authorization", "Bearer good-token")
+		req.Header.Set("Authorization", "Bearer "+good.Plaintext)
 		w := httptest.NewRecorder()
 
 		srv.Handler.ServeHTTP(w, req)
@@ -2495,21 +2100,28 @@ tokens:
 	}
 
 	deniedReq := httptest.NewRequest(http.MethodPost, "/u/alice/queue/user-flow", strings.NewReader("denied"))
-	deniedReq.Header.Set("Authorization", "Bearer limited-token")
+	deniedReq.Header.Set("Authorization", "Bearer "+limited.Plaintext)
 	denied := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(denied, deniedReq)
 	if denied.Code != http.StatusUnauthorized {
 		t.Fatalf("limited token POST got status %d, want %d", denied.Code, http.StatusUnauthorized)
 	}
 
-	fetchMu.Lock()
-	defer fetchMu.Unlock()
-	if fetches == 0 {
-		t.Fatal("expected auth config to be fetched from mock Forgejo")
+	// Revocation takes effect immediately: no stale grace.
+	if err := srv.Store.RevokeToken("alice", good.Token.ID); err != nil {
+		t.Fatalf("revoke token: %v", err)
+	}
+
+	revokedReq := httptest.NewRequest(http.MethodGet, "/u/alice/queue/user-flow", nil)
+	revokedReq.Header.Set("Authorization", "Bearer "+good.Plaintext)
+	revoked := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(revoked, revokedReq)
+	if revoked.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked token GET got status %d, want %d", revoked.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestHTTPRouterNotificationUsesOneBoundedConfigSnapshot(t *testing.T) {
+func TestHTTPRouterNotificationDeliversViaStoredConfig(t *testing.T) {
 	var matrixRequests atomic.Int32
 	matrix := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		matrixRequests.Add(1)
@@ -2524,28 +2136,20 @@ func TestHTTPRouterNotificationUsesOneBoundedConfigSnapshot(t *testing.T) {
 	}))
 	defer matrix.Close()
 
-	var forgejoRequests atomic.Int32
-	config := fmt.Sprintf(`
-tokens:
-  notify-token:
-    POST: ["/_/ntfy"]
-ntfy:
-  type: matrix
-  config:
-    access_token: matrix-token
-    user: "@bot:example.test"
-    endpoint: %q
-    room_id: "!room:example.test"
-`, matrix.URL)
-	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		forgejoRequests.Add(1)
-		_, _ = io.WriteString(w, config)
-	}))
-	defer forgejo.Close()
+	srv := newHTTPServerForTest(t)
 
-	srv := newHTTPServerForTest(t, forgejo.URL)
+	notify := seedUserToken(t, srv.Store, "alice", "notify", auth.Patterns{POST: []string{"/_/ntfy"}})
+	if err := srv.Store.SetNtfy("alice", "matrix", map[string]any{
+		"access_token": "matrix-token",
+		"user":         "@bot:example.test",
+		"endpoint":     matrix.URL,
+		"room_id":      "!room:example.test",
+	}); err != nil {
+		t.Fatalf("set ntfy: %v", err)
+	}
+
 	req := httptest.NewRequest(http.MethodPost, "/u/alice/_/ntfy", strings.NewReader(`{"type":"plain","message":"hello"}`))
-	req.Header.Set("Authorization", "Bearer notify-token")
+	req.Header.Set("Authorization", "Bearer "+notify)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	w := httptest.NewRecorder()
 
@@ -2554,22 +2158,14 @@ ntfy:
 	if w.Code != http.StatusOK {
 		t.Fatalf("Notification status = %d: %s", w.Code, w.Body.String())
 	}
-	if got := forgejoRequests.Load(); got != 1 {
-		t.Fatalf("Notification fetched config %d times, want one shared snapshot", got)
-	}
 	if got := matrixRequests.Load(); got != 1 {
 		t.Fatalf("Matrix received %d notifications, want 1", got)
 	}
 }
 
 func TestHTTPRouterNotificationBodyLimit(t *testing.T) {
-	var forgejoRequests atomic.Int32
-	forgejo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		forgejoRequests.Add(1)
-		_, _ = io.WriteString(w, "tokens:\n  notify-token:\n    POST: ['/_/ntfy']\n")
-	}))
-	defer forgejo.Close()
-	srv := newHTTPServerForTest(t, forgejo.URL)
+	srv := newHTTPServerForTest(t)
+	notify := seedUserToken(t, srv.Store, "alice", "notify", auth.Patterns{POST: []string{"/_/ntfy"}})
 
 	tests := []struct {
 		name          string
@@ -2595,7 +2191,7 @@ func TestHTTPRouterNotificationBodyLimit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/u/alice/_/ntfy", strings.NewReader(tt.body))
 			req.ContentLength = tt.contentLength
-			req.Header.Set("Authorization", "Bearer notify-token")
+			req.Header.Set("Authorization", "Bearer "+notify)
 			req.Header.Set("Content-Type", tt.contentType)
 			w := httptest.NewRecorder()
 
@@ -2606,13 +2202,9 @@ func TestHTTPRouterNotificationBodyLimit(t *testing.T) {
 			}
 		})
 	}
-	if got := forgejoRequests.Load(); got != 1 {
-		t.Fatalf("Config fetched %d times across cached requests, want 1", got)
-	}
 }
-
 func TestHTTPRouterForwardHookMessagePassing(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 
 	createReq := httptest.NewRequest(http.MethodGet, "/h", nil)
 	create := httptest.NewRecorder()
@@ -2679,7 +2271,7 @@ func TestHTTPRouterForwardHookMessagePassing(t *testing.T) {
 }
 
 func TestHTTPRouterForwardHookRejectsUnauthenticatedWrites(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 	channel := "protected-hook"
 
 	tests := []struct {
@@ -2708,7 +2300,7 @@ func TestHTTPRouterForwardHookRejectsUnauthenticatedWrites(t *testing.T) {
 }
 
 func TestHTTPRouterReverseHookMessagePassing(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 
 	createReq := httptest.NewRequest(http.MethodGet, "/r", nil)
 	create := httptest.NewRecorder()
@@ -2760,7 +2352,7 @@ func TestHTTPRouterReverseHookMessagePassing(t *testing.T) {
 }
 
 func TestHTTPRouterReverseHookMethodPolicy(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 
 	for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		t.Run(method, func(t *testing.T) {
@@ -2778,7 +2370,7 @@ func TestHTTPRouterReverseHookMethodPolicy(t *testing.T) {
 	}
 }
 
-func createForwardHookForTest(t *testing.T, srv *http.Server) HookResponse {
+func createForwardHookForTest(t *testing.T, srv *testServer) HookResponse {
 	t.Helper()
 
 	createReq := httptest.NewRequest(http.MethodGet, "/h", nil)
@@ -2800,7 +2392,7 @@ func createForwardHookForTest(t *testing.T, srv *http.Server) HookResponse {
 }
 
 func TestHookSenderModeQueueDeliversToPlainConsumer(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 	hook := createForwardHookForTest(t, srv)
 
 	consumerDone := make(chan *httptest.ResponseRecorder, 1)
@@ -2842,7 +2434,7 @@ func TestHookSenderModeQueueDeliversToPlainConsumer(t *testing.T) {
 }
 
 func TestHookSenderModePubsubDropsWithoutConsumer(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 	hook := createForwardHookForTest(t, srv)
 
 	producerReq := httptest.NewRequest(
@@ -2868,7 +2460,7 @@ func TestHookSenderModePubsubDropsWithoutConsumer(t *testing.T) {
 }
 
 func TestHookSenderModePubsubDeliversToWaitingConsumer(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 	hook := createForwardHookForTest(t, srv)
 
 	consumerDone := make(chan *httptest.ResponseRecorder, 1)
@@ -2906,7 +2498,7 @@ func TestHookSenderModePubsubDeliversToWaitingConsumer(t *testing.T) {
 }
 
 func TestHookDiscardDropsBodyKeepsMetadata(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 	hook := createForwardHookForTest(t, srv)
 
 	consumerDone := make(chan *httptest.ResponseRecorder, 1)
@@ -2947,7 +2539,7 @@ func TestHookDiscardDropsBodyKeepsMetadata(t *testing.T) {
 }
 
 func TestHookDiscardPubsubNoConsumerAckImmediately(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 	hook := createForwardHookForTest(t, srv)
 
 	producerReq := httptest.NewRequest(
@@ -2963,7 +2555,7 @@ func TestHookDiscardPubsubNoConsumerAckImmediately(t *testing.T) {
 }
 
 func TestHookInvalidModeRejected(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 	hook := createForwardHookForTest(t, srv)
 
 	producerReq := httptest.NewRequest(
@@ -2978,54 +2570,9 @@ func TestHookInvalidModeRejected(t *testing.T) {
 	}
 }
 
-func TestTransportConfigFromEnv(t *testing.T) {
-	tests := []struct {
-		name     string
-		h2c      string
-		certFile string
-		keyFile  string
-		wantName string
-		wantErr  bool
-	}{
-		{name: "defaults to http/1.1"},
-		{name: "h2c enabled", h2c: "true", wantName: "h2c"},
-		{name: "h2c truthy values", h2c: "1", wantName: "h2c"},
-		{name: "h2c falsy values", h2c: "false", wantName: "http/1.1"},
-		{name: "tls pair", certFile: "c.pem", keyFile: "k.pem", wantName: "https (http/1.1 + h2)"},
-		{name: "h2c and tls conflict", h2c: "true", certFile: "c.pem", keyFile: "k.pem", wantErr: true},
-		{name: "cert without key", certFile: "c.pem", wantErr: true},
-		{name: "key without cert", keyFile: "k.pem", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("H2C", tt.h2c)
-			t.Setenv("TLS_CERT_FILE", tt.certFile)
-			t.Setenv("TLS_KEY_FILE", tt.keyFile)
-
-			cfg, err := transportConfigFromEnv()
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			if tt.wantName != "" && cfg.name() != tt.wantName {
-				t.Fatalf("transport name = %q, want %q", cfg.name(), tt.wantName)
-			}
-		})
-	}
-}
-
 func TestH2CServerSpeaksHTTP2PriorKnowledge(t *testing.T) {
 	t.Setenv("H2C", "true")
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -3109,9 +2656,9 @@ func TestDirectTLSServesHTTP2(t *testing.T) {
 	certFile, keyFile := writeSelfSignedCertForTest(t)
 	t.Setenv("TLS_CERT_FILE", certFile)
 	t.Setenv("TLS_KEY_FILE", keyFile)
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 
-	if srv.TLSConfig == nil {
+	if srv.Server.TLSConfig == nil {
 		t.Fatal("expected TLSConfig to be set")
 	}
 
@@ -3120,7 +2667,7 @@ func TestDirectTLSServesHTTP2(t *testing.T) {
 		t.Fatalf("failed to listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	go func() { _ = srv.ServeTLS(ln, "", "") }()
+	go func() { _ = srv.Server.ServeTLS(ln, "", "") }()
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -3166,7 +2713,7 @@ func TestMissingTLSCertAbortsServerStart(t *testing.T) {
 }
 
 func TestHTTPRouterPublicRateLimitConcurrentRequests(t *testing.T) {
-	srv := newHTTPServerForTest(t, "")
+	srv := newHTTPServerForTest(t)
 
 	const requests = 40
 	statuses := make(chan int, requests)
@@ -3228,7 +2775,7 @@ func TestHTTPRouterPublicRateLimitConcurrentRequests(t *testing.T) {
 }
 
 func TestHandlePatchWithPubSub(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	t.Run("POST with pubsub mode - no consumers", func(t *testing.T) {
 		req := httptest.NewRequest("POST", "/p/test?pubsub=true", strings.NewReader("pubsub data"))
@@ -3661,7 +3208,7 @@ func TestResponseWrapperRecordsFirstStatus(t *testing.T) {
 }
 
 func TestRequestResponderBasicCommunication(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	t.Run("Basic requester-responder communication", func(t *testing.T) {
 		channelID := "test-basic-communication"
@@ -3720,7 +3267,7 @@ func TestRequestResponderBasicCommunication(t *testing.T) {
 }
 
 func TestRequestResponderConcurrentSharedChannel(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	const exchanges = 12
 	channelID := "shared-concurrent"
 
@@ -3792,7 +3339,7 @@ func TestRequestResponderConcurrentSharedChannel(t *testing.T) {
 }
 
 func TestRequestResponderHeaders(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	t.Run("Headers are passed through correctly", func(t *testing.T) {
 		channelID := "test-headers"
@@ -3851,7 +3398,7 @@ func TestRequestResponderHeaders(t *testing.T) {
 }
 
 func TestRequestResponderHTTPMethods(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	tests := []struct {
 		name   string
@@ -3910,7 +3457,7 @@ func TestRequestResponderHTTPMethods(t *testing.T) {
 }
 
 func TestRequestResponderSwitchMode(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	t.Run("Switch mode returns request info", func(t *testing.T) {
 		channelID := "test-switch-mode"
@@ -4129,7 +3676,7 @@ func TestRequestResponderSwitchMode(t *testing.T) {
 }
 
 func TestRequestResponderErrorCases(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 
 	tests := []struct {
 		name           string
@@ -4184,7 +3731,7 @@ func TestRequestResponderErrorCases(t *testing.T) {
 }
 
 func TestInvalidResponderMetadataDoesNotConsumeRequest(t *testing.T) {
-	server := createTestMainServer()
+	server := createTestMainServer(t)
 	channelID := "invalid-responder-metadata"
 	requesterDone := make(chan *httptest.ResponseRecorder, 1)
 
@@ -4225,7 +3772,7 @@ func TestInvalidResponderMetadataDoesNotConsumeRequest(t *testing.T) {
 }
 
 func BenchmarkHandlePatchProducerConsumer(b *testing.B) {
-	server := createTestMainServer()
+	server := createTestMainServer(b)
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
