@@ -12,16 +12,13 @@ builds:
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
     binary: patchwork
     main: .
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
@@ -31,7 +28,7 @@ archives:
       {{- if .Arm }}v{{ .Arm }}{{ end }}
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
     files:
       - README.md
       - LICENSE
@@ -41,7 +38,7 @@ checksum:
   name_template: 'checksums.txt'
 
 snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  version_template: "{{ incpatch .Version }}-next"
 
 changelog:
   sort: asc
@@ -66,9 +63,9 @@ release:
     Welcome to this new release!
 
   footer: |
-    ## Docker Images
+    ## OCI Images
     
-    Docker images are available at:
+    Multi-architecture OCI images are available at:
     - `ghcr.io/tionis/patchwork:{{ .Tag }}`
     - `ghcr.io/tionis/patchwork:latest`
     
@@ -78,10 +75,10 @@ release:
     
     Download the appropriate binary for your platform from the assets below.
     
-    ### Docker
+    ### Podman
     
     ```bash
-    docker run -p 8080:8080 ghcr.io/tionis/patchwork:{{ .Tag }}
+    podman run -p 8080:8080 -e SECRET_KEY=change-me ghcr.io/tionis/patchwork:{{ .Tag }}
     ```
     
     ### From Source
@@ -89,21 +86,3 @@ release:
     ```bash
     go install github.com/tionis/patchwork@{{ .Tag }}
     ```
-
-dockers:
-  - image_templates:
-      - "ghcr.io/tionis/patchwork:{{ .Tag }}"
-      - "ghcr.io/tionis/patchwork:v{{ .Major }}"
-      - "ghcr.io/tionis/patchwork:v{{ .Major }}.{{ .Minor }}"
-      - "ghcr.io/tionis/patchwork:latest"
-    dockerfile: Dockerfile.goreleaser
-    build_flag_templates:
-      - --platform=linux/amd64
-      - --label=org.opencontainers.image.title={{ .ProjectName }}
-      - --label=org.opencontainers.image.description=A simple communication backend for scripts and other small applications
-      - --label=org.opencontainers.image.url=https://github.com/tionis/patchwork
-      - --label=org.opencontainers.image.source=https://github.com/tionis/patchwork
-      - --label=org.opencontainers.image.version={{ .Version }}
-      - --label=org.opencontainers.image.created={{ time "2006-01-02T15:04:05Z07:00" }}
-      - --label=org.opencontainers.image.revision={{ .FullCommit }}
-      - --label=org.opencontainers.image.licenses=MIT
