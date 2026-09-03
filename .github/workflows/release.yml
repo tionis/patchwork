@@ -3,98 +3,114 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  GOFLAGS: -mod=vendor
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: Verify release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-    - uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version-file: 'go.mod'
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
 
-    - name: Cache Go modules
-      uses: actions/cache@v5
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+      - name: Verify source and tests
+        run: make verify
 
-    - name: Verify vendored build and tests
-      run: make verify
-
-    - name: Stress relay concurrency
-      run: make test-stress
+      - name: Stress relay concurrency
+        run: make test-stress
 
   release:
+    name: Publish release
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: write
       packages: write
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v5
-      with:
-        fetch-depth: 0
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
 
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version-file: 'go.mod'
+      - name: Require tag commit on default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
 
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GH_TOKEN }}
+      - name: Build and smoke-test native image
+        run: |
+          build_date="$(date --utc --date="@$(git show -s --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
+          make container-smoke \
+            REGISTRY=localhost IMAGE_TAG=release \
+            VERSION="$GITHUB_REF_NAME" COMMIT="$GITHUB_SHA" BUILD_DATE="$build_date"
 
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=tag
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{major}}
+      - name: Build multi-architecture image
+        run: |
+          build_date="$(date --utc --date="@$(git show -s --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
+          make container-build-multiarch \
+            MANIFEST_NAME=localhost/patchwork-release-manifest \
+            VERSION="$GITHUB_REF_NAME" COMMIT="$GITHUB_SHA" BUILD_DATE="$build_date"
 
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v6
-      with:
-        context: .
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        target: build-release-stage
+      - name: Log in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
-    - name: Run GoReleaser
-      uses: goreleaser/goreleaser-action@v6
-      with:
-        distribution: goreleaser
-        version: latest
-        args: release --clean
-      env:
-        GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+      - name: Publish OCI image tags
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          if [[ ! "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag is not valid semantic versioning: $tag" >&2
+            exit 1
+          fi
+
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          tags=("$tag" "$version")
+          if [[ "$version" != *-* ]]; then
+            tags+=("$major.$minor" "$major" "v$major.$minor" "v$major" latest)
+          fi
+
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          for image_tag in "${tags[@]}"; do
+            podman manifest push --all localhost/patchwork-release-manifest \
+              "docker://$image:$image_tag"
+          done
+
+      - name: Publish binaries and release notes
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

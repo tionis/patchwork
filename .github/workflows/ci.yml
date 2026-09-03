@@ -120,3 +120,72 @@ jobs:
           distribution: goreleaser
           version: v2.17.1
           args: release --snapshot --clean --skip=publish
+
+  container:
+    name: Container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Smoke-test native image
+        run: |
+          build_date="$(date --utc --date="@$(git show -s --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
+          make container-smoke \
+            REGISTRY=localhost IMAGE_TAG=ci VERSION=ci \
+            COMMIT="$GITHUB_SHA" BUILD_DATE="$build_date"
+
+      - name: Verify multi-architecture image
+        run: |
+          build_date="$(date --utc --date="@$(git show -s --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
+          make container-build-multiarch \
+            MANIFEST_NAME=localhost/patchwork-ci-manifest VERSION=ci \
+            COMMIT="$GITHUB_SHA" BUILD_DATE="$build_date"
+          architectures="$(podman manifest inspect localhost/patchwork-ci-manifest |
+            jq -r '.manifests[].platform | "\(.os)/\(.architecture)"' | sort)"
+          expected="$(printf '%s\n' linux/amd64 linux/arm64 | sort)"
+          test "$architectures" = "$expected"
+
+  publish-container:
+    name: Publish container
+    if: github.event_name == 'push'
+    needs: [verify, lint, build, release-config, container]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Build multi-architecture image
+        run: |
+          build_date="$(date --utc --date="@$(git show -s --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
+          make container-build-multiarch \
+            MANIFEST_NAME=localhost/patchwork-publish-manifest \
+            VERSION="0.0.0-${GITHUB_REF_NAME//\//-}" \
+            COMMIT="$GITHUB_SHA" BUILD_DATE="$build_date"
+
+      - name: Log in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push branch and commit tags
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          branch_tag="$(printf '%s' "$GITHUB_REF_NAME" |
+            tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g')"
+          short_sha="${GITHUB_SHA:0:7}"
+          tags=("$branch_tag" "sha-$short_sha")
+          if [[ "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then
+            tags+=(latest)
+          fi
+          for tag in "${tags[@]}"; do
+            podman manifest push --all localhost/patchwork-publish-manifest \
+              "docker://$image:$tag"
+          done

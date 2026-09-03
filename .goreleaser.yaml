@@ -67,7 +67,6 @@ release:
     
     Multi-architecture OCI images are available at:
     - `ghcr.io/tionis/patchwork:{{ .Tag }}`
-    - `ghcr.io/tionis/patchwork:latest`
     
     ## Installation
     
