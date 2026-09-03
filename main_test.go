@@ -2702,6 +2702,7 @@ func TestMissingTLSCertAbortsServerStart(t *testing.T) {
 	t.Setenv("TLS_CERT_FILE", dir+"/missing-cert.pem")
 	t.Setenv("TLS_KEY_FILE", dir+"/missing-key.pem")
 	t.Setenv("SECRET_KEY", "test-secret-key")
+	t.Setenv("PATCHWORK_DB_PATH", dir+"/test.db")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
