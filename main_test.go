@@ -2,12 +2,20 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +32,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/tionis/patchwork/internal/metrics"
 	"github.com/tionis/patchwork/internal/relay"
+	"golang.org/x/net/http2"
 	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
 )
@@ -2766,6 +2775,393 @@ func TestHTTPRouterReverseHookMethodPolicy(t *testing.T) {
 				t.Fatalf("got Allow header %q", got)
 			}
 		})
+	}
+}
+
+func createForwardHookForTest(t *testing.T, srv *http.Server) HookResponse {
+	t.Helper()
+
+	createReq := httptest.NewRequest(http.MethodGet, "/h", nil)
+	create := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(create, createReq)
+	if create.Code != http.StatusOK {
+		t.Fatalf("hook creation returned status %d: %s", create.Code, create.Body.String())
+	}
+
+	var hook HookResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &hook); err != nil {
+		t.Fatalf("failed to decode hook response: %v", err)
+	}
+	if hook.Channel == "" || hook.Secret == "" {
+		t.Fatalf("expected channel and secret, got %#v", hook)
+	}
+
+	return hook
+}
+
+func TestHookSenderModeQueueDeliversToPlainConsumer(t *testing.T) {
+	srv := newHTTPServerForTest(t, "")
+	hook := createForwardHookForTest(t, srv)
+
+	consumerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		reqCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		// Plain consumer: no mode parameter.
+		req := httptest.NewRequest(http.MethodGet, "/h/"+hook.Channel, nil).WithContext(reqCtx)
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+		consumerDone <- w
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	producerReq := httptest.NewRequest(
+		http.MethodPost,
+		"/h/"+hook.Channel+"?secret="+url.QueryEscape(hook.Secret)+"&mode=queue",
+		strings.NewReader("queue payload"),
+	)
+	producer := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(producer, producerReq)
+	if producer.Code != http.StatusOK {
+		t.Fatalf("queue producer returned status %d: %s", producer.Code, producer.Body.String())
+	}
+
+	select {
+	case consumer := <-consumerDone:
+		if got := consumer.Body.String(); got != "queue payload" {
+			t.Fatalf("consumer got %q, want %q", got, "queue payload")
+		}
+		if got := consumer.Header().Get("Patch-Method"); got != http.MethodPost {
+			t.Fatalf("relayed method = %q, want POST", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("consumer did not receive queue payload")
+	}
+}
+
+func TestHookSenderModePubsubDropsWithoutConsumer(t *testing.T) {
+	srv := newHTTPServerForTest(t, "")
+	hook := createForwardHookForTest(t, srv)
+
+	producerReq := httptest.NewRequest(
+		http.MethodPost,
+		"/h/"+hook.Channel+"?secret="+url.QueryEscape(hook.Secret)+"&mode=pubsub",
+		strings.NewReader("nobody listens"),
+	)
+	producer := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(producer, producerReq)
+	if producer.Code != http.StatusOK {
+		t.Fatalf("pubsub producer without consumers returned status %d: %s", producer.Code, producer.Body.String())
+	}
+
+	// A consumer arriving after the broadcast must not receive the dropped body.
+	reqCtx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/h/"+hook.Channel, nil).WithContext(reqCtx)
+	w := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(w, req)
+	if got := w.Body.String(); got != "" {
+		t.Fatalf("late consumer got %q, want empty (message should be dropped)", got)
+	}
+}
+
+func TestHookSenderModePubsubDeliversToWaitingConsumer(t *testing.T) {
+	srv := newHTTPServerForTest(t, "")
+	hook := createForwardHookForTest(t, srv)
+
+	consumerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		reqCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		req := httptest.NewRequest(http.MethodGet, "/h/"+hook.Channel, nil).WithContext(reqCtx)
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+		consumerDone <- w
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	producerReq := httptest.NewRequest(
+		http.MethodPost,
+		"/h/"+hook.Channel+"?secret="+url.QueryEscape(hook.Secret)+"&mode=pubsub",
+		strings.NewReader("broadcast payload"),
+	)
+	producer := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(producer, producerReq)
+	if producer.Code != http.StatusOK {
+		t.Fatalf("pubsub producer returned status %d: %s", producer.Code, producer.Body.String())
+	}
+
+	select {
+	case consumer := <-consumerDone:
+		if got := consumer.Body.String(); got != "broadcast payload" {
+			t.Fatalf("consumer got %q, want %q", got, "broadcast payload")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiting consumer did not receive pubsub payload")
+	}
+}
+
+func TestHookDiscardDropsBodyKeepsMetadata(t *testing.T) {
+	srv := newHTTPServerForTest(t, "")
+	hook := createForwardHookForTest(t, srv)
+
+	consumerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		reqCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		req := httptest.NewRequest(http.MethodGet, "/h/"+hook.Channel, nil).WithContext(reqCtx)
+		w := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(w, req)
+		consumerDone <- w
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	producerReq := httptest.NewRequest(
+		http.MethodPost,
+		"/h/"+hook.Channel+"?secret="+url.QueryEscape(hook.Secret)+"&mode=queue&discard=true",
+		strings.NewReader("sensitive-payload"),
+	)
+	producer := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(producer, producerReq)
+	if producer.Code != http.StatusOK {
+		t.Fatalf("discard producer returned status %d: %s", producer.Code, producer.Body.String())
+	}
+
+	select {
+	case consumer := <-consumerDone:
+		if got := consumer.Body.String(); got != "" {
+			t.Fatalf("discard consumer got body %q, want empty", got)
+		}
+		if got := consumer.Header().Get("Patch-Method"); got != http.MethodPost {
+			t.Fatalf("discard consumer relayed method = %q, want POST", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("consumer did not receive discard notification")
+	}
+}
+
+func TestHookDiscardPubsubNoConsumerAckImmediately(t *testing.T) {
+	srv := newHTTPServerForTest(t, "")
+	hook := createForwardHookForTest(t, srv)
+
+	producerReq := httptest.NewRequest(
+		http.MethodPost,
+		"/h/"+hook.Channel+"?secret="+url.QueryEscape(hook.Secret)+"&mode=pubsub&discard=true",
+		strings.NewReader("sensitive-ping"),
+	)
+	producer := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(producer, producerReq)
+	if producer.Code != http.StatusOK {
+		t.Fatalf("discard pubsub producer returned status %d: %s", producer.Code, producer.Body.String())
+	}
+}
+
+func TestHookInvalidModeRejected(t *testing.T) {
+	srv := newHTTPServerForTest(t, "")
+	hook := createForwardHookForTest(t, srv)
+
+	producerReq := httptest.NewRequest(
+		http.MethodPost,
+		"/h/"+hook.Channel+"?secret="+url.QueryEscape(hook.Secret)+"&mode=bogus",
+		strings.NewReader("payload"),
+	)
+	producer := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(producer, producerReq)
+	if producer.Code != http.StatusBadRequest {
+		t.Fatalf("invalid mode got status %d, want %d: %s", producer.Code, http.StatusBadRequest, producer.Body.String())
+	}
+}
+
+func TestTransportConfigFromEnv(t *testing.T) {
+	tests := []struct {
+		name     string
+		h2c      string
+		certFile string
+		keyFile  string
+		wantName string
+		wantErr  bool
+	}{
+		{name: "defaults to http/1.1"},
+		{name: "h2c enabled", h2c: "true", wantName: "h2c"},
+		{name: "h2c truthy values", h2c: "1", wantName: "h2c"},
+		{name: "h2c falsy values", h2c: "false", wantName: "http/1.1"},
+		{name: "tls pair", certFile: "c.pem", keyFile: "k.pem", wantName: "https (http/1.1 + h2)"},
+		{name: "h2c and tls conflict", h2c: "true", certFile: "c.pem", keyFile: "k.pem", wantErr: true},
+		{name: "cert without key", certFile: "c.pem", wantErr: true},
+		{name: "key without cert", keyFile: "k.pem", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("H2C", tt.h2c)
+			t.Setenv("TLS_CERT_FILE", tt.certFile)
+			t.Setenv("TLS_KEY_FILE", tt.keyFile)
+
+			cfg, err := transportConfigFromEnv()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.wantName != "" && cfg.name() != tt.wantName {
+				t.Fatalf("transport name = %q, want %q", cfg.name(), tt.wantName)
+			}
+		})
+	}
+}
+
+func TestH2CServerSpeaksHTTP2PriorKnowledge(t *testing.T) {
+	t.Setenv("H2C", "true")
+	srv := newHTTPServerForTest(t, "")
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = http.Serve(ln, srv.Handler) }()
+
+	transport := &http2.Transport{
+		AllowHTTP: true,
+		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	}
+	client := &http.Client{Transport: transport}
+
+	resp, err := client.Get("http://" + ln.Addr().String() + "/status")
+	if err != nil {
+		t.Fatalf("h2c request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("protocol = %q, want HTTP/2", resp.Proto)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read body: %v", err)
+	}
+	if string(body) != "OK!\n" {
+		t.Fatalf("body = %q, want %q", body, "OK!\n")
+	}
+}
+
+func writeSelfSignedCertForTest(t *testing.T) (certFile, keyFile string) {
+	t.Helper()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "patchwork-test"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:              []string{"localhost"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		BasicConstraintsValid: true,
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, priv.Public(), priv)
+	if err != nil {
+		t.Fatalf("failed to create certificate: %v", err)
+	}
+
+	keyDER, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		t.Fatalf("failed to marshal key: %v", err)
+	}
+
+	dir := t.TempDir()
+	certFile = dir + "/test-cert.pem"
+	keyFile = dir + "/test-key.pem"
+
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatalf("failed to write cert: %v", err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatalf("failed to write key: %v", err)
+	}
+
+	return certFile, keyFile
+}
+
+func TestDirectTLSServesHTTP2(t *testing.T) {
+	certFile, keyFile := writeSelfSignedCertForTest(t)
+	t.Setenv("TLS_CERT_FILE", certFile)
+	t.Setenv("TLS_KEY_FILE", keyFile)
+	srv := newHTTPServerForTest(t, "")
+
+	if srv.TLSConfig == nil {
+		t.Fatal("expected TLSConfig to be set")
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = srv.ServeTLS(ln, "", "") }()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			//nolint:gosec // test-only self-signed cert
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			// A custom TLSClientConfig disables automatic HTTP/2; opt back in.
+			ForceAttemptHTTP2: true,
+		},
+	}
+
+	resp, err := client.Get("https://" + ln.Addr().String() + "/status")
+	if err != nil {
+		t.Fatalf("TLS request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("protocol = %q, want HTTP/2", resp.Proto)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read body: %v", err)
+	}
+	if string(body) != "OK!\n" {
+		t.Fatalf("body = %q, want %q", body, "OK!\n")
+	}
+}
+
+func TestMissingTLSCertAbortsServerStart(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TLS_CERT_FILE", dir+"/missing-cert.pem")
+	t.Setenv("TLS_KEY_FILE", dir+"/missing-key.pem")
+	t.Setenv("SECRET_KEY", "test-secret-key")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	srv := getHTTPServer(slog.New(slog.NewTextHandler(io.Discard, nil)), ctx, 0)
+	if srv != nil {
+		t.Fatal("expected nil server for missing TLS certificate")
 	}
 }
 

@@ -96,6 +96,28 @@ curl --no-buffer 'http://localhost:8080/r/CHANNEL?secret=SECRET'
 Hook secrets are accepted only in the `secret` query parameter. Request logs
 record query parameter names, not values.
 
+Delivery mode is sender-selected per producer request:
+
+- `mode=queue` (default): block until exactly one consumer takes the message.
+- `mode=pubsub`: fan out to all currently waiting consumers; succeed
+  immediately with the message dropped when none are waiting. The legacy
+  `?pubsub` flag is equivalent.
+
+Consumers just `GET` the channel with no mode parameter and accept whichever
+mode the producer chose:
+
+```bash
+curl --no-buffer http://localhost:8080/h/CHANNEL
+curl --data-binary @event.json \
+  'http://localhost:8080/h/CHANNEL?secret=SECRET&mode=pubsub'
+```
+
+`discard=true` on the producer drains and drops the body and delivers only
+metadata (`Patch-Method`, `Patch-Uri`, `Patch-H-*`) with an empty body. Use it
+for notify-only pings or payloads the relay should not see. Combined with
+`mode=pubsub` it is a fire-and-forget ping that succeeds even with no
+consumer waiting.
+
 ## Relayed HTTP metadata
 
 The consumer receives the original request body plus:
@@ -204,6 +226,8 @@ the WebSocket and TCP sides so blocked reads do not leak connections.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SECRET_KEY` | required | HMAC key for hook secrets |
+| `H2C` | unset | Set to `true`/`1`/`yes` to serve HTTP/2 cleartext directly instead of HTTP/1.1 |
+| `TLS_CERT_FILE` / `TLS_KEY_FILE` | unset | Serve HTTPS directly when both are set; Go negotiates HTTP/2 automatically. Mutually exclusive with `H2C` |
 | `FORGEJO_URL` | `https://forge.tionis.dev` | Forgejo/Gitea base URL |
 | `FORGEJO_TOKEN` | unset | Enables user namespaces, notifications, and HuProxy |
 | `ACL_TTL` | `5m` | Fresh ACL cache duration |
@@ -222,6 +246,11 @@ belongs to `TRUSTED_PROXY_CIDRS`.
 unless `METRICS_TOKEN` is configured, then requires
 `Authorization: Bearer METRICS_TOKEN`. Do not reuse the more privileged Forgejo
 token.
+
+By default patchwork serves plain HTTP/1.1, which is correct behind a
+TLS-terminating reverse proxy (the Quadlet/Fly layout). Admins serving it
+directly can set `H2C` or `TLS_CERT_FILE`/`TLS_KEY_FILE` for HTTP/2-capable
+endpoints; point `healthcheck --url` at the matching scheme in that case.
 
 ## Containers and Quadlet
 

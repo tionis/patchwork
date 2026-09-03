@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -38,6 +39,8 @@ import (
 	"github.com/tionis/patchwork/internal/types"
 	sshUtil "github.com/tionis/ssh-tools/util"
 	"github.com/urfave/cli/v2"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
 )
@@ -1421,6 +1424,50 @@ func determinePathBehavior(path string, hasQueueParam bool) PathBehavior {
 	return BehaviorBlocking
 }
 
+// resolveProducerPubsub reports whether a producer request broadcasts.
+// Explicit /pubsub/... paths always broadcast. Otherwise an explicit
+// ?mode=queue|pubsub wins and the legacy ?pubsub presence flag is the
+// fallback. The second return value reports an invalid ?mode value.
+func resolveProducerPubsub(behavior PathBehavior, queries url.Values) (bool, bool) {
+	if behavior == BehaviorPubsub {
+		return true, false
+	}
+
+	switch mode := strings.ToLower(strings.TrimSpace(queries.Get("mode"))); mode {
+	case "":
+		_, pubsub := queries["pubsub"]
+		return pubsub, false
+	case "queue":
+		return false, false
+	case "pubsub":
+		return true, false
+	default:
+		return false, true
+	}
+}
+
+// queryFlagTrue reports a sender-side boolean flag. Presence enables it;
+// explicit false-like values disable it so ?discard=false is honored.
+func queryFlagTrue(values url.Values, key string) bool {
+	vals, ok := values[key]
+	if !ok {
+		return false
+	}
+
+	if len(vals) == 0 {
+		return true
+	}
+
+	switch strings.ToLower(strings.TrimSpace(vals[0])) {
+	case "", "true", "1", "yes", "y", "on":
+		return true
+	case "false", "0", "no", "n", "off":
+		return false
+	default:
+		return true
+	}
+}
+
 // addPassthroughHeaders validates and adds end-to-end response metadata. HTTP
 // framing is owned by the receiving server and cannot be supplied by a relay
 // producer.
@@ -2235,6 +2282,66 @@ func (rw *responseWrapper) Unwrap() http.ResponseWriter {
 // CORE COMMUNICATION LOGIC
 // =============================================================================
 
+// receiveEither waits on both the queue and pub/sub pools so the producer
+// can select the delivery mode per request. Exactly one delivery is returned;
+// a concurrently delivered loser is completed with an error so its sender is
+// released instead of hanging.
+func (s *server) receiveEither(ctx context.Context, channelPath string) (*relay.Stream, error) {
+	subscription := s.broker.Subscribe(channelPath)
+	defer subscription.Close()
+
+	child, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type outcome struct {
+		stream *relay.Stream
+		err    error
+	}
+
+	results := make(chan outcome, 2)
+
+	go func() {
+		stream, err := s.broker.Receive(child, channelPath)
+		results <- outcome{stream: stream, err: err}
+	}()
+
+	go func() {
+		stream, err := subscription.Receive(child)
+		results <- outcome{stream: stream, err: err}
+	}()
+
+	first := <-results
+	cancel()
+	second := <-results
+
+	var winner *relay.Stream
+
+	for _, res := range []outcome{first, second} {
+		if res.err == nil && res.stream != nil {
+			if winner == nil {
+				winner = res.stream
+			} else {
+				res.stream.Complete(context.Canceled)
+			}
+		}
+	}
+
+	if winner != nil {
+		if ctx.Err() != nil {
+			winner.Complete(ctx.Err())
+			return nil, ctx.Err()
+		}
+
+		return winner, nil
+	}
+
+	if first.err != nil {
+		return nil, first.err
+	}
+
+	return nil, second.err
+}
+
 // handlePatch implements the core duct-like channel communication logic.
 // It handles both GET and POST requests to create producer-consumer channels
 // where data can be passed through various namespaces (public, user, hooks).
@@ -2341,16 +2448,16 @@ func (s *server) handlePatch(
 		)
 	}
 
-	// Determine behavior based on path structure and query params
-	// (queries, hasPubsubParam, and behavior already defined above)
-
-	// For backward compatibility, also check the old pubsub query parameter
-	_, pubsub := queries["pubsub"]
-	if behavior == BehaviorPubsub || pubsub {
-		pubsub = true
-	} else {
-		pubsub = false
+	// Producer mode is sender-selected. Explicit /pubsub/... paths always
+	// broadcast; otherwise ?mode=queue|pubsub wins, falling back to the
+	// legacy ?pubsub presence flag for backward compatibility. Consumers
+	// ignore the mode and accept whichever the producer chose.
+	pubsub, invalidMode := resolveProducerPubsub(behavior, queries)
+	if invalidMode {
+		http.Error(w, "Invalid mode, use queue or pubsub", http.StatusBadRequest)
+		return
 	}
+	discard := queryFlagTrue(queries, "discard")
 
 	// Handle GET with body parameter (convert to POST)
 	method := r.Method
@@ -2387,12 +2494,8 @@ func (s *server) handlePatch(
 			stream *relay.Stream
 			err    error
 		)
-		if pubsub {
-			subscription := s.broker.Subscribe(channelPath)
-			stream, err = subscription.Receive(requestContext)
-		} else {
-			stream, err = s.broker.Receive(requestContext, channelPath)
-		}
+		// Consumers accept whichever mode the producer selects.
+		stream, err = s.receiveEither(requestContext, channelPath)
 		if err != nil {
 			s.logger.Info("Consumer request canceled",
 				"channel_path", channelPath,
@@ -2420,7 +2523,8 @@ func (s *server) handlePatch(
 			"channel_path", channelPath,
 			"client_ip", s.clientIP(r),
 			"content_type", r.Header.Get("Content-Type"),
-			"pubsub", pubsub)
+			"pubsub", pubsub,
+			"discard", discard)
 
 		source := r.Body
 		contentLength := r.ContentLength
@@ -2431,6 +2535,17 @@ func (s *server) handlePatch(
 
 		// Create stream with headers including passthrough headers
 		headers := prepareRequestHeaders(r)
+
+		if discard {
+			// Notify-only delivery: observe the upload for connection reuse,
+			// then rendezvous on metadata with an empty body.
+			_, _ = io.Copy(io.Discard, source)
+			if closer, ok := source.(io.Closer); ok {
+				_ = closer.Close()
+			}
+			source = io.NopCloser(strings.NewReader(""))
+			contentLength = 0
+		}
 
 		var bytesTransferred int64
 		if !pubsub {
@@ -2460,7 +2575,15 @@ func (s *server) handlePatch(
 			bytesTransferred = bytesRead
 			s.logger.Debug("Published message", "channelPath", channelPath, "subscribers", delivered)
 		}
-		s.metrics.RecordMessage(namespace, getBehaviorString(behavior), float64(bytesTransferred))
+		behaviorLabel := getBehaviorString(behavior)
+		if behavior == BehaviorBlocking {
+			if pubsub {
+				behaviorLabel = "pubsub"
+			} else {
+				behaviorLabel = "blocking"
+			}
+		}
+		s.metrics.RecordMessage(namespace, behaviorLabel, float64(bytesTransferred))
 
 		w.WriteHeader(http.StatusOK)
 
@@ -2611,7 +2734,13 @@ func startServer(port int) error {
 
 	serveErrors := make(chan error, 1)
 	go func() {
-		serveErrors <- srv.ListenAndServe()
+		if srv.TLSConfig != nil {
+			// Certificates are already loaded into TLSConfig, so Go
+			// negotiates HTTP/2 automatically.
+			serveErrors <- srv.ListenAndServeTLS("", "")
+		} else {
+			serveErrors <- srv.ListenAndServe()
+		}
 	}()
 
 	select {
@@ -2693,6 +2822,25 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Server {
+	// Transport selection for direct serving. Behind a reverse proxy (the
+	// default Quadlet/Fly layout) the edge terminates TLS and HTTP/2, so
+	// plain HTTP/1.1 here is correct. Admins serving patchwork directly can
+	// opt into h2c (HTTP/2 cleartext) or provide a TLS cert, which makes
+	// Go negotiate HTTP/2 automatically.
+	transport, err := transportConfigFromEnv()
+	if err != nil {
+		logger.Error("Invalid transport configuration, aborting server start", "error", err)
+
+		return nil
+	}
+
+	tlsConfig, err := transport.loadTLSConfig()
+	if err != nil {
+		logger.Error("Failed to load TLS certificate, aborting server start", "error", err)
+
+		return nil
+	}
+
 	// Read configuration from environment variables
 	forgejoURL := os.Getenv("FORGEJO_URL")
 	if forgejoURL == "" {
@@ -2951,13 +3099,81 @@ func getHTTPServer(logger *slog.Logger, ctx context.Context, port int) *http.Ser
 		}
 	}()
 
-	logger.Info("Starting Patchwork", "port", port)
+	logger.Info("Starting Patchwork", "port", port, "transport", transport.name())
 
 	return &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
-		Handler:           router,
+		Handler:           transport.wrapHandler(router),
+		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
+}
+
+// transportConfig selects the framing for direct serving. The default is
+// plain HTTP/1.1, correct behind a TLS-terminating reverse proxy.
+type transportConfig struct {
+	h2c      bool
+	certFile string
+	keyFile  string
+}
+
+func transportConfigFromEnv() (transportConfig, error) {
+	cfg := transportConfig{
+		h2c:      parseEnvBool(os.Getenv("H2C")),
+		certFile: strings.TrimSpace(os.Getenv("TLS_CERT_FILE")),
+		keyFile:  strings.TrimSpace(os.Getenv("TLS_KEY_FILE")),
+	}
+
+	if cfg.h2c && (cfg.certFile != "" || cfg.keyFile != "") {
+		return cfg, errors.New("H2C and TLS_CERT_FILE/TLS_KEY_FILE are mutually exclusive")
+	}
+
+	if (cfg.certFile == "") != (cfg.keyFile == "") {
+		return cfg, errors.New("TLS_CERT_FILE and TLS_KEY_FILE must be set together")
+	}
+
+	return cfg, nil
+}
+
+func parseEnvBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c transportConfig) name() string {
+	switch {
+	case c.certFile != "":
+		return "https (http/1.1 + h2)"
+	case c.h2c:
+		return "h2c"
+	default:
+		return "http/1.1"
+	}
+}
+
+func (c transportConfig) wrapHandler(handler http.Handler) http.Handler {
+	if c.h2c {
+		return h2c.NewHandler(handler, &http2.Server{})
+	}
+
+	return handler
+}
+
+func (c transportConfig) loadTLSConfig() (*tls.Config, error) {
+	if c.certFile == "" {
+		return nil, nil
+	}
+
+	cert, err := tls.LoadX509KeyPair(c.certFile, c.keyFile)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}, nil
 }
