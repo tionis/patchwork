@@ -346,6 +346,23 @@ func TestHealthCheck(t *testing.T) {
 	}
 }
 
+func TestBuildVersion(t *testing.T) {
+	originalVersion, originalCommit, originalDate := version, commit, date
+	t.Cleanup(func() {
+		version, commit, date = originalVersion, originalCommit, originalDate
+	})
+
+	version, commit, date = "v1.2.3", "abcdef0", "2026-09-03T00:00:00Z"
+	if got, want := buildVersion(), "v1.2.3 (commit abcdef0, built 2026-09-03T00:00:00Z)"; got != want {
+		t.Fatalf("buildVersion() = %q, want %q", got, want)
+	}
+
+	version, commit, date = "dev", "unknown", "unknown"
+	if got := buildVersion(); got != "dev" {
+		t.Fatalf("development buildVersion() = %q, want dev", got)
+	}
+}
+
 func TestGetHTTPServer(t *testing.T) {
 	// Set up environment variables
 	originalForgejoURL := os.Getenv("FORGEJO_URL")

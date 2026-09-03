@@ -45,6 +45,13 @@ import (
 //go:embed assets/*
 var assets embed.FS
 
+// Set by GoReleaser. Development builds retain explicit, useful defaults.
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 // =============================================================================
 // TYPE DEFINITIONS
 // =============================================================================
@@ -2500,8 +2507,9 @@ func healthCheck(url string) error {
 
 func main() {
 	app := &cli.App{
-		Name:  "patchwork",
-		Usage: "patchwork communication server",
+		Name:    "patchwork",
+		Usage:   "patchwork communication server",
+		Version: buildVersion(),
 		Commands: []*cli.Command{
 			{
 				Name:    "start",
@@ -2541,6 +2549,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func buildVersion() string {
+	if commit == "unknown" && date == "unknown" {
+		return version
+	}
+	return fmt.Sprintf("%s (commit %s, built %s)", version, commit, date)
 }
 
 func startServer(port int) error {
