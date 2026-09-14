@@ -6,7 +6,9 @@ Image=ghcr.io/tionis/patchwork:latest
 ContainerName=patchwork
 AutoUpdate=registry
 EnvironmentFile=/etc/patchwork/patchwork.env
+Environment=PATCHWORK_DB_PATH=/var/lib/patchwork/patchwork.db
 PublishPort=127.0.0.1:8080:8080
+Volume=patchwork-data:/var/lib/patchwork:U,Z
 ReadOnly=true
 DropCapability=all
 NoNewPrivileges=true

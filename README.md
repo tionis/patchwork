@@ -226,7 +226,7 @@ the WebSocket and TCP sides so blocked reads do not leak connections.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SECRET_KEY` | required | HMAC key for hook secrets |
-| `PATCHWORK_DB_PATH` | `./patchwork.db` | sqlite identity store location (`0600`, plain file backup) |
+| `PATCHWORK_DB_PATH` | `./patchwork.db` | sqlite identity store location (created/tightened to `0600`) |
 | `H2C` | unset | Set to `true`/`1`/`yes` to serve HTTP/2 cleartext directly instead of HTTP/1.1 |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | unset | Serve HTTPS directly when both are set; Go negotiates HTTP/2 automatically. Mutually exclusive with `H2C` |
 | `PATCHWORK_OIDC_ISSUER` | unset | OIDC issuer for WebUI login when set (plus `PATCHWORK_OIDC_CLIENT_ID`, `PATCHWORK_OIDC_CLIENT_SECRET`) |
@@ -258,8 +258,14 @@ manifest:
 ```bash
 make container-smoke REGISTRY=localhost
 podman run --rm -p 8080:8080 \
+  --volume patchwork-data:/var/lib/patchwork:U,Z \
   -e SECRET_KEY="a-long-random-secret" localhost/patchwork:latest
 ```
+
+The image sets `PATCHWORK_DB_PATH=/var/lib/patchwork/patchwork.db`. Mount that
+directory, rather than only the database file, so SQLite can create its WAL and
+shared-memory sidecars. The `:U` option initializes named-volume ownership for
+the image's non-root user; `:Z` gives it a private SELinux label.
 
 [`deployments/patchwork.container`](deployments/patchwork.container) is a
 production-oriented system Quadlet example. Install it under
@@ -275,11 +281,16 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now patchwork.service
 ```
 
-The environment file must contain `SECRET_KEY=...`. The Quadlet binds only to
-loopback for a local reverse proxy, runs the image read-only with no added Linux
-capabilities, performs application-level health checks, and uses Podman's
-registry auto-update integration. Adjust `PublishPort` and `EnvironmentFile`
-for a rootless user unit.
+The environment file must contain `SECRET_KEY=...`. The Quadlet creates the
+`patchwork-data` named volume, binds only to loopback for a local reverse proxy,
+runs the image read-only with no added Linux capabilities, performs
+application-level health checks, and uses Podman's registry auto-update
+integration. Adjust `PublishPort` and `EnvironmentFile` for a rootless user
+unit.
+
+For backups, stop Patchwork cleanly before copying `patchwork.db`, or use
+SQLite's online-backup tooling. Do not copy only the main database while the
+service is running in WAL mode.
 
 The process handles SIGINT and SIGTERM with graceful HTTP shutdown. Active
 relays are canceled if they do not complete within the shutdown window.

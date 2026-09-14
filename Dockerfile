@@ -15,6 +15,7 @@ RUN test -n "${TARGETARCH}" && \
   CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" go build -mod=vendor -trimpath \
   -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
   -o /patchwork
+RUN mkdir -p /runtime && touch /runtime/.keep
 
 # Run the tests in the container
 FROM build AS run-test
@@ -34,14 +35,16 @@ LABEL org.opencontainers.image.title="Patchwork" \
   org.opencontainers.image.created="${DATE}" \
   org.opencontainers.image.licenses="MIT"
 
-WORKDIR /
-
 COPY --from=build /patchwork /patchwork
+COPY --from=build --chown=nonroot:nonroot /runtime/ /var/lib/patchwork/
+
+WORKDIR /var/lib/patchwork
 
 EXPOSE 8080
 
 USER nonroot:nonroot
 
-ENV LOG_LEVEL=info
+ENV LOG_LEVEL=info \
+  PATCHWORK_DB_PATH=/var/lib/patchwork/patchwork.db
 ENTRYPOINT ["/patchwork"]
 CMD ["start"]

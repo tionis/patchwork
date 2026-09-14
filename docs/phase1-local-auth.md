@@ -24,10 +24,11 @@ Forgejo-repo-file to local sqlite.
   were just made host-independent; `mattn/go-sqlite3` would regress that).
   New vendored dependency; Phase 1 is the sanction for it.
 - Location: single file, `PATCHWORK_DB_PATH` (default `./patchwork.db`),
-  `0600`. Backups are plain file copies through the existing ansible setup —
-  no litestream. The operator bind-mounts/volumes it wherever the deployment
-  needs it; the exact path is documentation, not code. WAL mode on; single
-  writer (admin API), readers on every data-plane request.
+  created or tightened to `0600`. The operator mounts its containing directory
+  wherever the deployment needs it so SQLite can create WAL/SHM sidecars. A
+  plain-file backup is safe after a clean stop; live backups use SQLite-aware
+  tooling. WAL mode on; serialized writers, readers on every data-plane
+  request.
 - Lookup is direct per request (prepared statements, indexed); **no TTL or
   stale-grace cache**. This is what makes revocation immediate and deletes
   the `AuthCache` refresh/coalescing machinery outright.

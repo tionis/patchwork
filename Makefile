@@ -80,11 +80,15 @@ container-build: ## Build a native OCI image with Podman
 
 .PHONY: container-smoke
 container-smoke: container-build ## Verify image metadata and the live health endpoint
-	@name="patchwork-smoke-$$$$"; \
+	@set -eu; \
+		name="patchwork-smoke-$$$$"; \
+		volume="$$name-data"; \
+		trap '$(CONTAINER_TOOL) rm --force "$$name" >/dev/null 2>&1 || true; $(CONTAINER_TOOL) volume rm --force "$$volume" >/dev/null 2>&1 || true' EXIT; \
+		$(CONTAINER_TOOL) volume create "$$volume" >/dev/null; \
 		$(CONTAINER_TOOL) run --detach --name "$$name" \
+			--read-only --volume "$$volume":/var/lib/patchwork:U,Z \
 			--publish 127.0.0.1::8080 --env SECRET_KEY=container-smoke-test \
 			$(FULL_IMAGE_NAME):$(IMAGE_TAG) >/dev/null; \
-		trap '$(CONTAINER_TOOL) rm --force "$$name" >/dev/null 2>&1' EXIT; \
 		port="$$( $(CONTAINER_TOOL) port "$$name" 8080/tcp | awk -F: 'NR == 1 {print $$NF}' )"; \
 		for attempt in $$(seq 1 50); do \
 			curl --fail --silent --show-error "http://127.0.0.1:$$port/healthz" && break; \

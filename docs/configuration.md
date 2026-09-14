@@ -97,7 +97,7 @@ Server configuration is provided via environment variables:
 
 - `SECRET_KEY` - Server secret key for HMAC generation (required for hooks)
 - `PATCHWORK_DB_PATH` - sqlite identity store (default `./patchwork.db`,
-  `0600`, plain file backup)
+  created or tightened to `0600`)
 - `METRICS_TOKEN` - Dedicated bearer token that enables `/metrics`. The endpoint
   is disabled when this is unset.
 - `PATCHWORK_OIDC_ISSUER` / `PATCHWORK_OIDC_CLIENT_ID` /
@@ -113,3 +113,9 @@ Server configuration is provided via environment variables:
   address without accepting spoofed headers from direct clients.
 - `LOG_LEVEL` - Logging level (DEBUG, INFO, WARN, ERROR)
 - `LOG_SOURCE` - Add source information to logs (true/false)
+
+When running the container image, the default is
+`/var/lib/patchwork/patchwork.db`; mount `/var/lib/patchwork` as a writable
+persistent volume. Stop Patchwork before copying the database, or use SQLite's
+online-backup tooling. Copying only the main database while WAL mode is active
+is not a complete live backup.
