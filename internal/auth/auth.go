@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -25,6 +27,8 @@ var (
 	ErrNotFound = errors.New("auth: not found")
 	// ErrExists is returned when creating something that already exists.
 	ErrExists = errors.New("auth: already exists")
+	// ErrLastAdmin is returned when a mutation would remove the final active admin.
+	ErrLastAdmin = errors.New("auth: refusing to remove the last active admin")
 )
 
 const schema = `
@@ -110,6 +114,16 @@ type User struct {
 	UpdatedAt   time.Time
 }
 
+// UserPatch applies an atomic partial update to a user. Nil fields retain
+// their current value; a non-nil empty identity value clears that link.
+type UserPatch struct {
+	DisplayName *string
+	IsAdmin     *bool
+	Active      *bool
+	OIDCSub     *string
+	SCIMID      *string
+}
+
 // Token is an issued bearer credential. Plaintext exists only at issuance.
 type Token struct {
 	ID        string
@@ -144,6 +158,12 @@ type Group struct {
 	Members     []string
 }
 
+// GroupMemberMutation is an ordered, atomic group membership change.
+type GroupMemberMutation struct {
+	UserID string
+	Remove bool
+}
+
 // AuditEvent is a single audit trail row.
 type AuditEvent struct {
 	ID     int64
@@ -164,17 +184,32 @@ type Store struct {
 
 // Open opens (creating if needed) the sqlite store at path and applies the schema.
 func Open(path string, logger *slog.Logger) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn, filePath, err := sqliteOpenConfig(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if filePath != "" {
+		if err := secureSQLiteFiles(filePath); err != nil {
+			return nil, err
+		}
+	}
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("auth: open %q: %w", path, err)
 	}
 
-	db.SetMaxOpenConns(8)
+	if filePath == "" {
+		// Each :memory: SQLite connection is a separate database unless callers
+		// opt into shared-cache URI semantics. One connection is safe for both.
+		db.SetMaxOpenConns(1)
+	} else {
+		db.SetMaxOpenConns(8)
+	}
 
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
 	} {
 		if _, err := db.Exec(pragma); err != nil {
 			_ = db.Close()
@@ -186,8 +221,189 @@ func Open(path string, logger *slog.Logger) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("auth: apply schema: %w", err)
 	}
+	if err := migratePublicTokens(db, logger); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 
 	return &Store{db: db, logger: logger, now: time.Now}, nil
+}
+
+// sqliteOpenConfig forces connection-local safety settings onto every
+// physical connection created by database/sql. It also resolves the backing
+// file so Open can create or tighten it to mode 0600 before SQLite sees it.
+func sqliteOpenConfig(path string) (dsn, filePath string, err error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", "", errors.New("auth: database path is empty")
+	}
+
+	base, rawQuery, _ := strings.Cut(path, "?")
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return "", "", fmt.Errorf("auth: parse database options: %w", err)
+	}
+	if query.Has("_pragma") {
+		return "", "", errors.New("auth: database option _pragma is not supported")
+	}
+
+	query.Set("_busy_timeout", "5000")
+	query.Del("_timeout")
+	query.Set("_foreign_keys", "on")
+	query.Del("_fk")
+	query.Set("_txlock", "immediate")
+
+	dsn = base + "?" + query.Encode()
+	if base == ":memory:" || strings.EqualFold(query.Get("mode"), "memory") {
+		return dsn, "", nil
+	}
+
+	filePath = base
+	if strings.HasPrefix(base, "file:") {
+		location := strings.TrimPrefix(base, "file:")
+		if strings.HasPrefix(location, "//") {
+			parsed, parseErr := url.Parse(base)
+			if parseErr != nil {
+				return "", "", fmt.Errorf("auth: parse database URI: %w", parseErr)
+			}
+			if parsed.Host != "" && parsed.Host != "localhost" {
+				return "", "", fmt.Errorf("auth: unsupported database URI host %q", parsed.Host)
+			}
+			location = parsed.Path
+		}
+
+		filePath, err = url.PathUnescape(location)
+		if err != nil {
+			return "", "", fmt.Errorf("auth: parse database path: %w", err)
+		}
+		if filePath == ":memory:" {
+			filePath = ""
+		}
+	}
+
+	return dsn, filePath, nil
+}
+
+func secureSQLiteFiles(path string) error {
+	if err := secureSQLiteFile(path, true); err != nil {
+		return err
+	}
+
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if err := secureSQLiteFile(path+suffix, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func secureSQLiteFile(path string, create bool) error {
+	before, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if !create {
+			return nil
+		}
+
+		file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return fmt.Errorf("auth: create %q: %w", path, err)
+		}
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("auth: close %q: %w", path, err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("auth: inspect %q: %w", path, err)
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return fmt.Errorf("auth: database file %q is not a regular file", path)
+	}
+
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("auth: open %q: %w", path, err)
+	}
+	defer func() { _ = file.Close() }()
+
+	after, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("auth: inspect open file %q: %w", path, err)
+	}
+	if !os.SameFile(before, after) {
+		return fmt.Errorf("auth: database file %q changed while opening", path)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		return fmt.Errorf("auth: secure %q: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("auth: close %q: %w", path, err)
+	}
+
+	return nil
+}
+
+func migratePublicTokens(db *sql.DB, logger *slog.Logger) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("auth: public token migration begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.Query(
+		`SELECT user_id FROM tokens
+		 WHERE name = 'public' AND revoked_at IS NULL
+		 GROUP BY user_id HAVING COUNT(*) > 1`,
+	)
+	if err != nil {
+		return fmt.Errorf("auth: find ambiguous public tokens: %w", err)
+	}
+
+	var ambiguousUsers []string
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("auth: scan ambiguous public tokens: %w", err)
+		}
+		ambiguousUsers = append(ambiguousUsers, userID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("auth: list ambiguous public tokens: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("auth: close public token migration rows: %w", err)
+	}
+
+	now := formatTime(time.Now())
+	for _, userID := range ambiguousUsers {
+		if _, err := tx.Exec(
+			`UPDATE tokens SET revoked_at = ?
+			 WHERE user_id = ? AND name = 'public' AND revoked_at IS NULL`, now, userID,
+		); err != nil {
+			return fmt.Errorf("auth: revoke ambiguous public tokens for %q: %w", userID, err)
+		}
+	}
+
+	if _, err := tx.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_tokens_public ON tokens(user_id)
+		 WHERE name = 'public' AND revoked_at IS NULL`,
+	); err != nil {
+		return fmt.Errorf("auth: create public token index: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("auth: public token migration commit: %w", err)
+	}
+
+	if logger != nil {
+		for _, userID := range ambiguousUsers {
+			logger.Warn("Revoked ambiguous public tokens during migration", "user", userID)
+		}
+	}
+
+	return nil
 }
 
 // Close closes the underlying database.
@@ -225,19 +441,30 @@ func hashBearer(bearer string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// CreateUser creates a local user. OIDCSub and SCIMID are empty unless linked.
+// CreateUser creates an active local user without external identity links.
 func (s *Store) CreateUser(id, displayName string, isAdmin bool) (*User, error) {
+	return s.CreateUserWithIdentity(id, displayName, isAdmin, true, "", "")
+}
+
+// CreateUserWithIdentity creates a user and its external identity links in one
+// statement so callers never observe a partially provisioned identity.
+func (s *Store) CreateUserWithIdentity(
+	id, displayName string,
+	isAdmin, active bool,
+	oidcSub, scimID string,
+) (*User, error) {
 	id = strings.TrimSpace(id)
 	if id == "" || strings.ContainsAny(id, "/?#") {
 		return nil, fmt.Errorf("auth: invalid user id %q", id)
 	}
 
-	now := formatTime(s.now())
+	now := s.now()
 
 	_, err := s.db.Exec(
-		`INSERT INTO users(id, display_name, is_admin, active, created_at, updated_at)
-		 VALUES(?, ?, ?, 1, ?, ?)`,
-		id, displayName, boolInt(isAdmin), now, now,
+		`INSERT INTO users(id, display_name, is_admin, active, oidc_sub, scim_id, created_at, updated_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, displayName, boolInt(isAdmin), boolInt(active), nullableIdentity(oidcSub),
+		nullableIdentity(scimID), formatTime(now), formatTime(now),
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "PRIMARY") {
@@ -250,8 +477,23 @@ func (s *Store) CreateUser(id, displayName string, isAdmin bool) (*User, error) 
 	return s.GetUser(id)
 }
 
+func nullableIdentity(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+
+	return &value
+}
+
 // GetUser returns the user or ErrNotFound.
 func (s *Store) GetUser(id string) (*User, error) {
+	return scanUser(s.db.QueryRow(
+		`SELECT id, display_name, is_admin, active, oidc_sub, scim_id, created_at, updated_at
+		 FROM users WHERE id = ?`, id,
+	))
+}
+
+func scanUser(row scannable) (*User, error) {
 	var (
 		user                 User
 		isAdmin, active      int
@@ -259,10 +501,7 @@ func (s *Store) GetUser(id string) (*User, error) {
 		createdAt, updatedAt string
 	)
 
-	err := s.db.QueryRow(
-		`SELECT id, display_name, is_admin, active, oidc_sub, scim_id, created_at, updated_at
-		 FROM users WHERE id = ?`, id,
-	).Scan(
+	err := row.Scan(
 		&user.ID, &user.DisplayName, &isAdmin, &active,
 		&oidcSub, &scimID, &createdAt, &updatedAt,
 	)
@@ -344,33 +583,116 @@ func (s *Store) ListUsers() ([]User, error) {
 	return users, nil
 }
 
-// UpdateUser updates display name, admin flag, and active state.
+// UpdateUser replaces display name, admin flag, and active state atomically.
 func (s *Store) UpdateUser(id, displayName string, isAdmin, active bool) (*User, error) {
-	res, err := s.db.Exec(
-		`UPDATE users SET display_name = ?, is_admin = ?, active = ?, updated_at = ?
-		 WHERE id = ?`,
-		displayName, boolInt(isAdmin), boolInt(active), formatTime(s.now()), id,
-	)
+	return s.PatchUser(id, UserPatch{
+		DisplayName: &displayName,
+		IsAdmin:     &isAdmin,
+		Active:      &active,
+	})
+}
+
+// PatchUser updates a user and its identity links in a single immediate
+// transaction. The transaction also serializes and enforces the last-admin
+// invariant for every caller, including SCIM.
+func (s *Store) PatchUser(id string, patch UserPatch) (*User, error) {
+	tx, err := s.db.Begin()
 	if err != nil {
+		return nil, fmt.Errorf("auth: update user begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := scanUser(tx.QueryRow(
+		`SELECT id, display_name, is_admin, active, oidc_sub, scim_id, created_at, updated_at
+		 FROM users WHERE id = ?`, id,
+	))
+	if err != nil {
+		return nil, err
+	}
+
+	next := *current
+	if patch.DisplayName != nil {
+		next.DisplayName = *patch.DisplayName
+	}
+	if patch.IsAdmin != nil {
+		next.IsAdmin = *patch.IsAdmin
+	}
+	if patch.Active != nil {
+		next.Active = *patch.Active
+	}
+	if patch.OIDCSub != nil {
+		next.OIDCSub = *patch.OIDCSub
+	}
+	if patch.SCIMID != nil {
+		next.SCIMID = *patch.SCIMID
+	}
+
+	if err := protectLastAdmin(tx, current, &next); err != nil {
+		return nil, err
+	}
+
+	next.UpdatedAt = s.now()
+	if _, err := tx.Exec(
+		`UPDATE users SET display_name = ?, is_admin = ?, active = ?, oidc_sub = ?, scim_id = ?, updated_at = ?
+		 WHERE id = ?`,
+		next.DisplayName, boolInt(next.IsAdmin), boolInt(next.Active),
+		nullableIdentity(next.OIDCSub), nullableIdentity(next.SCIMID),
+		formatTime(next.UpdatedAt), next.ID,
+	); err != nil {
 		return nil, fmt.Errorf("auth: update user: %w", err)
 	}
 
-	if n, _ := res.RowsAffected(); n == 0 {
-		return nil, ErrNotFound
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("auth: update user commit: %w", err)
 	}
 
-	return s.GetUser(id)
+	return &next, nil
 }
 
 // DeleteUser removes a user and, via cascade, its tokens, sessions, and ntfy config.
 func (s *Store) DeleteUser(id string) error {
-	res, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return fmt.Errorf("auth: delete user begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := scanUser(tx.QueryRow(
+		`SELECT id, display_name, is_admin, active, oidc_sub, scim_id, created_at, updated_at
+		 FROM users WHERE id = ?`, id,
+	))
+	if err != nil {
+		return err
+	}
+
+	if err := protectLastAdmin(tx, current, &User{ID: current.ID}); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM users WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("auth: delete user: %w", err)
 	}
 
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("auth: delete user commit: %w", err)
+	}
+
+	return nil
+}
+
+func protectLastAdmin(tx *sql.Tx, current, next *User) error {
+	if !current.IsAdmin || !current.Active || (next.IsAdmin && next.Active) {
+		return nil
+	}
+
+	var remaining int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM users WHERE id <> ? AND is_admin = 1 AND active = 1`, current.ID,
+	).Scan(&remaining); err != nil {
+		return fmt.Errorf("auth: count active admins: %w", err)
+	}
+	if remaining == 0 {
+		return ErrLastAdmin
 	}
 
 	return nil
@@ -379,19 +701,7 @@ func (s *Store) DeleteUser(id string) error {
 // LinkOIDCSub attaches an OIDC subject to an existing user. An empty sub
 // clears the link.
 func (s *Store) LinkOIDCSub(id, sub string) (*User, error) {
-	var value *string
-	if strings.TrimSpace(sub) != "" {
-		value = &sub
-	}
-
-	if _, err := s.db.Exec(
-		`UPDATE users SET oidc_sub = ?, updated_at = ? WHERE id = ?`,
-		value, formatTime(s.now()), id,
-	); err != nil {
-		return nil, fmt.Errorf("auth: link OIDC subject: %w", err)
-	}
-
-	return s.GetUser(id)
+	return s.PatchUser(id, UserPatch{OIDCSub: &sub})
 }
 
 // FindUserByOIDCSub returns the user linked to sub or ErrNotFound.
@@ -693,11 +1003,16 @@ func (s *Store) Validate(
 		createdAt   string
 	)
 
-	err := s.db.QueryRow(
-		`SELECT id, user_id, name, prefix, is_admin, patterns, expires_at, created_at
-		 FROM tokens WHERE user_id = ? AND token_hash = ? AND revoked_at IS NULL`,
-		username, hashBearer(bearer),
-	).Scan(
+	query := `SELECT id, user_id, name, prefix, is_admin, patterns, expires_at, created_at
+		 FROM tokens WHERE user_id = ? AND token_hash = ? AND revoked_at IS NULL`
+	args := []any{username, hashBearer(bearer)}
+	if bearer == "" {
+		query = `SELECT id, user_id, name, prefix, is_admin, patterns, expires_at, created_at
+			 FROM tokens WHERE user_id = ? AND name = 'public' AND revoked_at IS NULL`
+		args = []any{username}
+	}
+
+	err := s.db.QueryRow(query, args...).Scan(
 		&token.ID, &token.UserID, &token.Name, &token.Prefix,
 		&isAdmin, &patternJSON, &expiresAt, &createdAt,
 	)

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -266,6 +265,38 @@ func (s *Store) UpsertGroup(id, displayName, scimID string) (*Group, error) {
 	return s.GetGroup(id)
 }
 
+// UpsertGroupWithMembers creates or updates a group and replaces its complete
+// membership in one transaction. A validation or constraint failure leaves
+// both the group metadata and prior membership unchanged.
+func (s *Store) UpsertGroupWithMembers(id, displayName, scimID string, userIDs []string) (*Group, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("auth: group begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := formatTime(s.now())
+	if _, err := tx.Exec(
+		`INSERT INTO groups(id, display_name, scim_id, created_at, updated_at)
+		 VALUES(?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name,
+		   scim_id = excluded.scim_id, updated_at = excluded.updated_at`,
+		id, displayName, nullableIdentity(scimID), now, now,
+	); err != nil {
+		return nil, fmt.Errorf("auth: upsert group: %w", err)
+	}
+
+	if err := replaceGroupMembers(tx, id, userIDs); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("auth: group commit: %w", err)
+	}
+
+	return s.GetGroup(id)
+}
+
 // FindGroupBySCIMID returns the group with the SCIM external id or ErrNotFound.
 func (s *Store) FindGroupBySCIMID(scimID string) (*Group, error) {
 	var id string
@@ -386,10 +417,6 @@ func (s *Store) groupMembers(groupID string) ([]string, error) {
 // SetGroupMembers replaces the membership list. Unknown users are rejected
 // so SCIM cannot reference identities that do not exist.
 func (s *Store) SetGroupMembers(groupID string, userIDs []string) error {
-	if _, err := s.GetGroup(groupID); err != nil {
-		return err
-	}
-
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("auth: members begin: %w", err)
@@ -399,21 +426,15 @@ func (s *Store) SetGroupMembers(groupID string, userIDs []string) error {
 		_ = tx.Rollback()
 	}()
 
-	if _, err := tx.Exec(`DELETE FROM group_members WHERE group_id = ?`, groupID); err != nil {
-		return fmt.Errorf("auth: clear members: %w", err)
+	var exists int
+	if err := tx.QueryRow(`SELECT 1 FROM groups WHERE id = ?`, groupID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("auth: get group: %w", err)
 	}
 
-	for _, userID := range userIDs {
-		var exists int
-		if err := tx.QueryRow(`SELECT 1 FROM users WHERE id = ?`, userID).Scan(&exists); err != nil {
-			return fmt.Errorf("auth: unknown member %q", userID)
-		}
-
-		if _, err := tx.Exec(
-			`INSERT INTO group_members(group_id, user_id) VALUES(?, ?)`, groupID, userID,
-		); err != nil {
-			return fmt.Errorf("auth: add member: %w", err)
-		}
+	if err := replaceGroupMembers(tx, groupID, userIDs); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -421,6 +442,88 @@ func (s *Store) SetGroupMembers(groupID string, userIDs []string) error {
 	}
 
 	return nil
+}
+
+func replaceGroupMembers(tx *sql.Tx, groupID string, userIDs []string) error {
+	unique := make([]string, 0, len(userIDs))
+	seen := make(map[string]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if _, duplicate := seen[userID]; duplicate {
+			continue
+		}
+
+		var exists int
+		if err := tx.QueryRow(`SELECT 1 FROM users WHERE id = ?`, userID).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("auth: unknown member %q", userID)
+			}
+			return fmt.Errorf("auth: validate member %q: %w", userID, err)
+		}
+		seen[userID] = struct{}{}
+		unique = append(unique, userID)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM group_members WHERE group_id = ?`, groupID); err != nil {
+		return fmt.Errorf("auth: clear members: %w", err)
+	}
+
+	for _, userID := range unique {
+		if _, err := tx.Exec(
+			`INSERT INTO group_members(group_id, user_id) VALUES(?, ?)`, groupID, userID,
+		); err != nil {
+			return fmt.Errorf("auth: add member: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// PatchGroupMembers applies ordered additions and removals against the latest
+// membership while holding SQLite's write lock, preventing concurrent SCIM
+// patches from silently overwriting one another.
+func (s *Store) PatchGroupMembers(groupID string, mutations []GroupMemberMutation) (*Group, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("auth: patch members begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var exists int
+	if err := tx.QueryRow(`SELECT 1 FROM groups WHERE id = ?`, groupID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, fmt.Errorf("auth: get group: %w", err)
+	}
+
+	for _, mutation := range mutations {
+		if err := tx.QueryRow(`SELECT 1 FROM users WHERE id = ?`, mutation.UserID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("auth: unknown member %q", mutation.UserID)
+		} else if err != nil {
+			return nil, fmt.Errorf("auth: validate member %q: %w", mutation.UserID, err)
+		}
+
+		if mutation.Remove {
+			if _, err := tx.Exec(
+				`DELETE FROM group_members WHERE group_id = ? AND user_id = ?`, groupID, mutation.UserID,
+			); err != nil {
+				return nil, fmt.Errorf("auth: remove member: %w", err)
+			}
+			continue
+		}
+
+		if _, err := tx.Exec(
+			`INSERT INTO group_members(group_id, user_id) VALUES(?, ?)
+			 ON CONFLICT(group_id, user_id) DO NOTHING`, groupID, mutation.UserID,
+		); err != nil {
+			return nil, fmt.Errorf("auth: add member: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("auth: patch members commit: %w", err)
+	}
+
+	return s.GetGroup(groupID)
 }
 
 // DeleteGroup removes a group and its memberships.
@@ -455,22 +558,5 @@ func (s *Store) FindUserBySCIMID(scimID string) (*User, error) {
 
 // UpdateUserSCIMID attaches a SCIM external id to an existing user.
 func (s *Store) UpdateUserSCIMID(id, scimID string) (*User, error) {
-	var value *string
-	if strings.TrimSpace(scimID) != "" {
-		value = &scimID
-	}
-
-	res, err := s.db.Exec(
-		`UPDATE users SET scim_id = ?, updated_at = ? WHERE id = ?`,
-		value, formatTime(s.now()), id,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("auth: update user scim id: %w", err)
-	}
-
-	if n, _ := res.RowsAffected(); n == 0 {
-		return nil, ErrNotFound
-	}
-
-	return s.GetUser(id)
+	return s.PatchUser(id, UserPatch{SCIMID: &scimID})
 }

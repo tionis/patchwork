@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -60,8 +59,14 @@ func writeAPIJSON(w http.ResponseWriter, status int, value any) {
 
 func decodeAdminJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBodyBytes)
+	decoder := json.NewDecoder(r.Body)
 
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+	if err := decoder.Decode(dst); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "Invalid JSON", "Request body must be a single JSON value.")
+		return false
+	}
+
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		writeAPIError(w, http.StatusBadRequest, "Invalid JSON", "Request body must be a single JSON value.")
 		return false
 	}
@@ -239,80 +244,36 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		current, err := s.authStore.GetUser(id)
+		updated, err := s.authStore.PatchUser(id, auth.UserPatch{
+			DisplayName: body.DisplayName,
+			IsAdmin:     body.IsAdmin,
+			Active:      body.Active,
+			OIDCSub:     body.OIDCSub,
+		})
 		if errors.Is(err, auth.ErrNotFound) {
 			writeAPIError(w, http.StatusNotFound, "Not found", "")
 			return
 		}
-
-		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "Store error", err.Error())
+		if errors.Is(err, auth.ErrLastAdmin) {
+			writeAPIError(w, http.StatusConflict, "Conflict", "Refusing to remove the last active admin.")
 			return
 		}
-
-		next := *current
-		if body.DisplayName != nil {
-			next.DisplayName = *body.DisplayName
-		}
-
-		if body.IsAdmin != nil {
-			next.IsAdmin = *body.IsAdmin
-		}
-
-		if body.Active != nil {
-			next.Active = *body.Active
-		}
-
-		if !next.Active || !next.IsAdmin {
-			if protected, err := s.wouldLoseLastAdmin(next); err != nil {
-				writeAPIError(w, http.StatusInternalServerError, "Store error", err.Error())
-				return
-			} else if protected {
-				writeAPIError(w, http.StatusConflict, "Conflict", "Refusing to remove the last active admin.")
-				return
-			}
-		}
-
-		updated, err := s.authStore.UpdateUser(next.ID, next.DisplayName, next.IsAdmin, next.Active)
 		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "Store error", err.Error())
+			writeAPIError(w, http.StatusBadRequest, "Invalid user", err.Error())
 			return
-		}
-
-		if body.OIDCSub != nil {
-			if updated, err = s.authStore.LinkOIDCSub(updated.ID, *body.OIDCSub); err != nil {
-				writeAPIError(w, http.StatusBadRequest, "Invalid OIDC subject", err.Error())
-				return
-			}
 		}
 
 		s.audit(r, admin.ID, "user.update", updated.ID, "ok")
 		writeAPIJSON(w, http.StatusOK, userJSON(updated))
 
 	case http.MethodDelete:
-		current, err := s.authStore.GetUser(id)
-		if errors.Is(err, auth.ErrNotFound) {
+		if err := s.authStore.DeleteUser(id); errors.Is(err, auth.ErrNotFound) {
 			writeAPIError(w, http.StatusNotFound, "Not found", "")
 			return
-		}
-
-		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "Store error", err.Error())
-			return
-		}
-
-		deactivated := *current
-		deactivated.Active = false
-
-		if protected, err := s.wouldLoseLastAdmin(deactivated); err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "Store error", err.Error())
-			return
-		} else if protected {
+		} else if errors.Is(err, auth.ErrLastAdmin) {
 			writeAPIError(w, http.StatusConflict, "Conflict", "Refusing to remove the last active admin.")
 			return
-		}
-
-		if err := s.authStore.DeleteUser(id); err != nil {
+		} else if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, "Store error", err.Error())
 			return
 		}
@@ -324,29 +285,6 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, PATCH, DELETE")
 		writeAPIError(w, http.StatusMethodNotAllowed, "Method not allowed", "")
 	}
-}
-
-// wouldLoseLastAdmin reports whether applying next would leave zero active admins.
-func (s *server) wouldLoseLastAdmin(next auth.User) (bool, error) {
-	users, err := s.authStore.ListUsers()
-	if err != nil {
-		return false, err
-	}
-
-	admins := 0
-
-	for _, user := range users {
-		candidate := user
-		if candidate.ID == next.ID {
-			candidate = next
-		}
-
-		if candidate.IsAdmin && candidate.Active {
-			admins++
-		}
-	}
-
-	return admins == 0, nil
 }
 
 func (s *server) handleUserTokens(w http.ResponseWriter, r *http.Request) {
@@ -698,15 +636,9 @@ func adminCreateUser(username, displayName string, isAdmin bool, oidcSub string)
 		_ = store.Close()
 	}()
 
-	user, err := store.CreateUser(username, displayName, isAdmin)
+	user, err := store.CreateUserWithIdentity(username, displayName, isAdmin, true, oidcSub, "")
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
-	}
-
-	if strings.TrimSpace(oidcSub) != "" {
-		if _, err := store.LinkOIDCSub(user.ID, oidcSub); err != nil {
-			return fmt.Errorf("link OIDC subject: %w", err)
-		}
 	}
 
 	fmt.Printf("created user %q (admin=%v)\n", user.ID, user.IsAdmin)

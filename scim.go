@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -48,9 +49,15 @@ func writeSCIMJSON(w http.ResponseWriter, status int, value any) {
 
 func decodeSCIMJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBodyBytes)
+	decoder := json.NewDecoder(r.Body)
 
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		writeSCIMError(w, http.StatusBadRequest, "Invalid JSON body.")
+	if err := decoder.Decode(dst); err != nil {
+		writeSCIMError(w, http.StatusBadRequest, "Request body must be a single JSON value.")
+		return false
+	}
+
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeSCIMError(w, http.StatusBadRequest, "Request body must be a single JSON value.")
 		return false
 	}
 
@@ -182,7 +189,14 @@ func (s *server) handleSCIMUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		user, err := s.authStore.CreateUser(body.UserName, body.DisplayName, false)
+		active := true
+		if body.Active != nil {
+			active = *body.Active
+		}
+
+		user, err := s.authStore.CreateUserWithIdentity(
+			body.UserName, body.DisplayName, false, active, "", body.ExternalID,
+		)
 		if errors.Is(err, auth.ErrExists) {
 			writeSCIMError(w, http.StatusConflict, "User already exists.")
 			return
@@ -191,20 +205,6 @@ func (s *server) handleSCIMUsers(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeSCIMError(w, http.StatusBadRequest, err.Error())
 			return
-		}
-
-		if body.ExternalID != "" {
-			if user, err = s.authStore.UpdateUserSCIMID(user.ID, body.ExternalID); err != nil {
-				writeSCIMError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-		}
-
-		if body.Active != nil && !*body.Active {
-			if user, err = s.authStore.UpdateUser(user.ID, user.DisplayName, false, false); err != nil {
-				writeSCIMError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
 		}
 
 		s.audit(r, "scim", "user.create", user.ID, "ok")
@@ -282,6 +282,10 @@ func (s *server) handleSCIMUser(w http.ResponseWriter, r *http.Request) {
 			writeSCIMError(w, http.StatusNotFound, "User not found.")
 			return
 		}
+		if errors.Is(err, auth.ErrLastAdmin) {
+			writeSCIMError(w, http.StatusConflict, "Refusing to remove the last active admin.")
+			return
+		}
 
 		if err != nil {
 			writeSCIMError(w, http.StatusBadRequest, err.Error())
@@ -303,20 +307,7 @@ func (s *server) handleSCIMUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		user, err := s.authStore.GetUser(id)
-		if errors.Is(err, auth.ErrNotFound) {
-			writeSCIMError(w, http.StatusNotFound, "User not found.")
-			return
-		}
-
-		if err != nil {
-			writeSCIMError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-
-		displayName := user.DisplayName
-		externalID := user.SCIMID
-		active := user.Active
+		var patch auth.UserPatch
 
 		for _, operation := range body.Operations {
 			if !strings.EqualFold(operation.Op, "replace") {
@@ -326,11 +317,26 @@ func (s *server) handleSCIMUser(w http.ResponseWriter, r *http.Request) {
 
 			switch strings.ToLower(strings.TrimSpace(operation.Path)) {
 			case "displayname":
-				displayName, _ = operation.Value.(string)
+				value, ok := operation.Value.(string)
+				if !ok {
+					writeSCIMError(w, http.StatusBadRequest, "displayName must be a string.")
+					return
+				}
+				patch.DisplayName = &value
 			case "externalid":
-				externalID, _ = operation.Value.(string)
+				value, ok := operation.Value.(string)
+				if !ok {
+					writeSCIMError(w, http.StatusBadRequest, "externalId must be a string.")
+					return
+				}
+				patch.SCIMID = &value
 			case "active":
-				active, _ = operation.Value.(bool)
+				value, ok := operation.Value.(bool)
+				if !ok {
+					writeSCIMError(w, http.StatusBadRequest, "active must be a boolean.")
+					return
+				}
+				patch.Active = &value
 			case "username", "id":
 				writeSCIMError(w, http.StatusBadRequest, "userName is immutable.")
 				return
@@ -343,9 +349,15 @@ func (s *server) handleSCIMUser(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		replaceActive := active
-
-		updated, err := s.applySCIMUserReplace(id, displayName, externalID, &replaceActive)
+		updated, err := s.authStore.PatchUser(id, patch)
+		if errors.Is(err, auth.ErrNotFound) {
+			writeSCIMError(w, http.StatusNotFound, "User not found.")
+			return
+		}
+		if errors.Is(err, auth.ErrLastAdmin) {
+			writeSCIMError(w, http.StatusConflict, "Refusing to remove the last active admin.")
+			return
+		}
 		if err != nil {
 			writeSCIMError(w, http.StatusBadRequest, err.Error())
 			return
@@ -357,18 +369,17 @@ func (s *server) handleSCIMUser(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		// Deprovisioning deactivates: tokens stop validating while history
 		// and audit rows are preserved.
-		user, err := s.authStore.GetUser(id)
+		active := false
+		_, err := s.authStore.PatchUser(id, auth.UserPatch{Active: &active})
 		if errors.Is(err, auth.ErrNotFound) {
 			writeSCIMError(w, http.StatusNotFound, "User not found.")
 			return
 		}
-
-		if err != nil {
-			writeSCIMError(w, http.StatusInternalServerError, err.Error())
+		if errors.Is(err, auth.ErrLastAdmin) {
+			writeSCIMError(w, http.StatusConflict, "Refusing to remove the last active admin.")
 			return
 		}
-
-		if _, err := s.authStore.UpdateUser(user.ID, user.DisplayName, user.IsAdmin, false); err != nil {
+		if err != nil {
 			writeSCIMError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -383,22 +394,11 @@ func (s *server) handleSCIMUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) applySCIMUserReplace(id, displayName, externalID string, active *bool) (*auth.User, error) {
-	user, err := s.authStore.GetUser(id)
-	if err != nil {
-		return nil, err
-	}
-
-	nextActive := user.Active
-	if active != nil {
-		nextActive = *active
-	}
-
-	updated, err := s.authStore.UpdateUser(id, displayName, user.IsAdmin, nextActive)
-	if err != nil {
-		return nil, err
-	}
-
-	return s.authStore.UpdateUserSCIMID(updated.ID, externalID)
+	return s.authStore.PatchUser(id, auth.UserPatch{
+		DisplayName: &displayName,
+		Active:      active,
+		SCIMID:      &externalID,
+	})
 }
 
 // scimGroupBody is the shared shape for group create/replace payloads.
@@ -450,12 +450,6 @@ func (s *server) handleSCIMGroups(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		group, err := s.authStore.UpsertGroup(scimGroupID(body), body.DisplayName, body.ExternalID)
-		if err != nil {
-			writeSCIMError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
 		members := make([]string, 0, len(body.Members))
 		for _, member := range body.Members {
 			resolved, err := s.resolveSCIMMember(member.Value)
@@ -467,14 +461,11 @@ func (s *server) handleSCIMGroups(w http.ResponseWriter, r *http.Request) {
 			members = append(members, resolved)
 		}
 
-		if err := s.authStore.SetGroupMembers(group.ID, members); err != nil {
-			writeSCIMError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		group, err = s.authStore.GetGroup(group.ID)
+		group, err := s.authStore.UpsertGroupWithMembers(
+			scimGroupID(body), body.DisplayName, body.ExternalID, members,
+		)
 		if err != nil {
-			writeSCIMError(w, http.StatusInternalServerError, err.Error())
+			writeSCIMError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -569,12 +560,6 @@ func (s *server) handleSCIMGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		group, err := s.authStore.UpsertGroup(id, body.DisplayName, body.ExternalID)
-		if err != nil {
-			writeSCIMError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
 		members := make([]string, 0, len(body.Members))
 		for _, member := range body.Members {
 			resolved, err := s.resolveSCIMMember(member.Value)
@@ -586,14 +571,9 @@ func (s *server) handleSCIMGroup(w http.ResponseWriter, r *http.Request) {
 			members = append(members, resolved)
 		}
 
-		if err := s.authStore.SetGroupMembers(group.ID, members); err != nil {
-			writeSCIMError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		group, err = s.authStore.GetGroup(group.ID)
+		group, err := s.authStore.UpsertGroupWithMembers(id, body.DisplayName, body.ExternalID, members)
 		if err != nil {
-			writeSCIMError(w, http.StatusInternalServerError, err.Error())
+			writeSCIMError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -623,7 +603,7 @@ func (s *server) handleSCIMGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		members := append([]string(nil), group.Members...)
+		mutations := make([]auth.GroupMemberMutation, 0)
 
 		for _, operation := range body.Operations {
 			switch {
@@ -641,9 +621,7 @@ func (s *server) handleSCIMGroup(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 
-					if !containsString(members, resolved) {
-						members = append(members, resolved)
-					}
+					mutations = append(mutations, auth.GroupMemberMutation{UserID: resolved})
 				}
 			case strings.EqualFold(operation.Op, "remove"):
 				removed := scimMemberRemovePattern.FindStringSubmatch(strings.TrimSpace(operation.Path))
@@ -658,21 +636,16 @@ func (s *server) handleSCIMGroup(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 
-				members = removeString(members, resolved)
+				mutations = append(mutations, auth.GroupMemberMutation{UserID: resolved, Remove: true})
 			default:
 				writeSCIMError(w, http.StatusBadRequest, "Only member add/remove operations are supported.")
 				return
 			}
 		}
 
-		if err := s.authStore.SetGroupMembers(id, members); err != nil {
-			writeSCIMError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		group, err = s.authStore.GetGroup(id)
+		group, err = s.authStore.PatchGroupMembers(id, mutations)
 		if err != nil {
-			writeSCIMError(w, http.StatusInternalServerError, err.Error())
+			writeSCIMError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -720,25 +693,4 @@ func scimMemberValues(value any) ([]string, error) {
 	}
 
 	return values, nil
-}
-
-func containsString(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-
-	return false
-}
-
-func removeString(items []string, target string) []string {
-	kept := items[:0]
-	for _, item := range items {
-		if item != target {
-			kept = append(kept, item)
-		}
-	}
-
-	return kept
 }

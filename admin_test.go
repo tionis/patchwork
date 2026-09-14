@@ -8,12 +8,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +27,42 @@ func decodeTestJSON(t *testing.T, w *httptest.ResponseRecorder, dst any) {
 
 	if err := json.Unmarshal(w.Body.Bytes(), dst); err != nil {
 		t.Fatalf("decode response: %v: %s", err, w.Body.String())
+	}
+}
+
+func TestMutationAPIsRejectTrailingJSON(t *testing.T) {
+	srv := newHTTPServerForTest(t,
+		"PATCHWORK_SCIM_ENABLED=true",
+		"PATCHWORK_SCIM_TOKEN=scim-secret",
+	)
+	session := seedAdminSession(t, srv.Store, "root")
+
+	adminReq := httptest.NewRequest(
+		http.MethodPost, "/api/v1/users",
+		strings.NewReader(`{"id":"alice"} {"id":"bob"}`),
+	)
+	adminReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session})
+	adminRecorder := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(adminRecorder, adminReq)
+	if adminRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("admin trailing JSON got %d, want 400", adminRecorder.Code)
+	}
+	if _, err := srv.Store.GetUser("alice"); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("admin request mutated before rejecting trailing JSON: %v", err)
+	}
+
+	scimReq := httptest.NewRequest(
+		http.MethodPost, "/scim/v2/Users",
+		strings.NewReader(`{"userName":"carol"} {"userName":"dave"}`),
+	)
+	scimReq.Header.Set("Authorization", "Bearer scim-secret")
+	scimRecorder := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(scimRecorder, scimReq)
+	if scimRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("SCIM trailing JSON got %d, want 400", scimRecorder.Code)
+	}
+	if _, err := srv.Store.GetUser("carol"); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("SCIM request mutated before rejecting trailing JSON: %v", err)
 	}
 }
 
@@ -691,6 +729,227 @@ func TestSCIMUsersLifecycle(t *testing.T) {
 	}
 }
 
+func TestSCIMCannotDeactivateLastAdmin(t *testing.T) {
+	srv := newHTTPServerForTest(t,
+		"PATCHWORK_SCIM_ENABLED=true",
+		"PATCHWORK_SCIM_TOKEN=scim-secret",
+	)
+	seedAdminSession(t, srv.Store, "root")
+
+	requests := []struct {
+		name   string
+		method string
+		body   any
+	}{
+		{"put", http.MethodPut, map[string]any{"userName": "root", "active": false}},
+		{"patch", http.MethodPatch, map[string]any{
+			"Operations": []any{map[string]any{"op": "replace", "path": "active", "value": false}},
+		}},
+		{"delete", http.MethodDelete, nil},
+	}
+
+	for _, test := range requests {
+		t.Run(test.name, func(t *testing.T) {
+			response := scimRequest(t, srv, test.method, "/scim/v2/Users/root", test.body)
+			if response.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409: %s", response.Code, response.Body.String())
+			}
+
+			root, err := srv.Store.GetUser("root")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !root.Active || !root.IsAdmin {
+				t.Fatalf("last admin changed: %+v", root)
+			}
+		})
+	}
+}
+
+func TestConcurrentAdminAndSCIMMutationsPreserveAdmin(t *testing.T) {
+	srv := newHTTPServerForTest(t,
+		"PATCHWORK_SCIM_ENABLED=true",
+		"PATCHWORK_SCIM_TOKEN=scim-secret",
+	)
+	session := seedAdminSession(t, srv.Store, "one")
+	if _, err := srv.Store.CreateUser("two", "", true); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	adminBody, err := json.Marshal(map[string]any{"is_admin": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminReq := httptest.NewRequest(http.MethodPatch, "/api/v1/users/one", strings.NewReader(string(adminBody)))
+	adminReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session})
+	scimReq := httptest.NewRequest(http.MethodDelete, "/scim/v2/Users/two", nil)
+	scimReq.Header.Set("Authorization", "Bearer scim-secret")
+
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		<-start
+		response := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(response, adminReq)
+		responses <- response
+	}()
+	go func() {
+		defer group.Done()
+		<-start
+		response := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(response, scimReq)
+		responses <- response
+	}()
+	close(start)
+	group.Wait()
+	close(responses)
+
+	var success, conflict int
+	for response := range responses {
+		switch response.Code {
+		case http.StatusOK, http.StatusNoContent:
+			success++
+		case http.StatusConflict:
+			conflict++
+		default:
+			t.Fatalf("unexpected status %d: %s", response.Code, response.Body.String())
+		}
+	}
+	if success != 1 || conflict != 1 {
+		t.Fatalf("success=%d conflict=%d, want one each", success, conflict)
+	}
+
+	users, err := srv.Store.ListUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeAdmins := 0
+	for _, user := range users {
+		if user.Active && user.IsAdmin {
+			activeAdmins++
+		}
+	}
+	if activeAdmins != 1 {
+		t.Fatalf("active admins = %d, want 1", activeAdmins)
+	}
+}
+
+func TestConcurrentSCIMPatchesDoNotRestoreStaleFields(t *testing.T) {
+	srv := newHTTPServerForTest(t,
+		"PATCHWORK_SCIM_ENABLED=true",
+		"PATCHWORK_SCIM_TOKEN=scim-secret",
+	)
+	if _, err := srv.Store.CreateUser("alice", "Old", false); err != nil {
+		t.Fatal(err)
+	}
+
+	for iteration := range 50 {
+		active := true
+		displayName := "Old"
+		if _, err := srv.Store.PatchUser("alice", auth.UserPatch{
+			DisplayName: &displayName,
+			Active:      &active,
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		displayReq := httptest.NewRequest(
+			http.MethodPatch, "/scim/v2/Users/alice",
+			strings.NewReader(`{"Operations":[{"op":"replace","path":"displayName","value":"New"}]}`),
+		)
+		displayReq.Header.Set("Authorization", "Bearer scim-secret")
+		activeReq := httptest.NewRequest(
+			http.MethodPatch, "/scim/v2/Users/alice",
+			strings.NewReader(`{"Operations":[{"op":"replace","path":"active","value":false}]}`),
+		)
+		activeReq.Header.Set("Authorization", "Bearer scim-secret")
+
+		start := make(chan struct{})
+		responses := make(chan *httptest.ResponseRecorder, 2)
+		var wait sync.WaitGroup
+		for _, request := range []*http.Request{displayReq, activeReq} {
+			wait.Add(1)
+			go func(request *http.Request) {
+				defer wait.Done()
+				<-start
+				response := httptest.NewRecorder()
+				srv.Handler.ServeHTTP(response, request)
+				responses <- response
+			}(request)
+		}
+		close(start)
+		wait.Wait()
+		close(responses)
+		for response := range responses {
+			if response.Code != http.StatusOK {
+				t.Fatalf("iteration %d status=%d body=%s", iteration, response.Code, response.Body.String())
+			}
+		}
+
+		user, err := srv.Store.GetUser("alice")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if user.Active || user.DisplayName != "New" {
+			t.Fatalf("iteration %d restored stale state: %+v", iteration, user)
+		}
+	}
+}
+
+func TestNamedPublicTokenAuthorizesAnonymousDataPlane(t *testing.T) {
+	srv := newHTTPServerForTest(t)
+	if _, err := srv.Store.CreateUser("alice", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.Store.IssueToken("alice", "public", auth.Patterns{
+		GET:  []string{"/shared"},
+		POST: []string{"/shared"},
+	}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	consumerRequest := httptest.NewRequest(http.MethodGet, "/u/alice/shared", nil).WithContext(ctx)
+	consumer := httptest.NewRecorder()
+	consumerDone := make(chan struct{})
+	go func() {
+		srv.Handler.ServeHTTP(consumer, consumerRequest)
+		close(consumerDone)
+	}()
+
+	producerRequest := httptest.NewRequest(
+		http.MethodPost, "/u/alice/shared", strings.NewReader("anonymous payload"),
+	).WithContext(ctx)
+	producer := httptest.NewRecorder()
+	producerDone := make(chan struct{})
+	go func() {
+		srv.Handler.ServeHTTP(producer, producerRequest)
+		close(producerDone)
+	}()
+
+	for name, done := range map[string]<-chan struct{}{
+		"consumer": consumerDone,
+		"producer": producerDone,
+	} {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			t.Fatalf("%s did not complete: %v", name, ctx.Err())
+		}
+	}
+
+	if consumer.Code != http.StatusOK || consumer.Body.String() != "anonymous payload" {
+		t.Fatalf("consumer status=%d body=%q", consumer.Code, consumer.Body.String())
+	}
+	if producer.Code != http.StatusOK {
+		t.Fatalf("producer status=%d body=%q", producer.Code, producer.Body.String())
+	}
+}
+
 func TestSCIMGroupsLifecycle(t *testing.T) {
 	srv := newHTTPServerForTest(t,
 		"PATCHWORK_SCIM_ENABLED=true",
@@ -746,6 +1005,25 @@ func TestSCIMGroupsLifecycle(t *testing.T) {
 	})
 	if unknown.Code != http.StatusBadRequest {
 		t.Fatalf("unknown member got %d, want 400", unknown.Code)
+	}
+	if _, err := srv.Store.GetGroup("grp-bad"); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("failed SCIM create left group behind: %v", err)
+	}
+
+	badReplace := scimRequest(t, srv, http.MethodPut, "/scim/v2/Groups/ext-ops", map[string]any{
+		"displayName": "Changed", "externalId": "changed-external-id",
+		"members": []any{map[string]any{"value": "ghost"}},
+	})
+	if badReplace.Code != http.StatusBadRequest {
+		t.Fatalf("unknown replacement member got %d, want 400", badReplace.Code)
+	}
+	unchanged, err := srv.Store.GetGroup("ext-ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.DisplayName != "Ops" || unchanged.SCIMID != "ext-ops" ||
+		len(unchanged.Members) != 1 || unchanged.Members[0] != "erin" {
+		t.Fatalf("failed SCIM replacement persisted partially: %+v", unchanged)
 	}
 
 	deleted := scimRequest(t, srv, http.MethodDelete, "/scim/v2/Groups/ext-ops", nil)
@@ -978,6 +1256,26 @@ func TestSCIMUserValidationBranches(t *testing.T) {
 	})
 	if patched.Code != http.StatusOK {
 		t.Fatalf("patch displayName got %d: %s", patched.Code, patched.Body.String())
+	}
+
+	for _, invalid := range []map[string]any{
+		{"op": "replace", "path": "displayName", "value": true},
+		{"op": "replace", "path": "externalId", "value": false},
+		{"op": "replace", "path": "active", "value": "true"},
+	} {
+		w := scimRequest(t, srv, http.MethodPatch, "/scim/v2/Users/mallory", map[string]any{
+			"Operations": []any{invalid},
+		})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("invalid %v got %d, want 400", invalid, w.Code)
+		}
+	}
+	unchanged, err := srv.Store.GetUser("mallory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.DisplayName != "Mal" || unchanged.Active || unchanged.SCIMID != "" {
+		t.Fatalf("invalid typed patch changed user: %+v", unchanged)
 	}
 
 	if w := scimRequest(t, srv, http.MethodPost, "/scim/v2/Users",

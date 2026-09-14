@@ -228,11 +228,6 @@ func (s *server) authenticateToken(
 		return true, "public", nil
 	}
 
-	if token == "" {
-		// Missing token in user namespace should be treated as "public" token
-		token = "public"
-	}
-
 	// Use the local store to validate the token.
 	valid, reason, tokenInfo, err := s.authStore.Validate(
 		username,
