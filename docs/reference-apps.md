@@ -25,8 +25,11 @@ Domain bindings verify ownership before routing/TLS activation; exact Host/SNI d
 | Todos | Stable document reference/stream ID, Automerge changes/heads, complete CRDT snapshots and attachment roots | Peer sync state and presence | Document-aware transport, offline merge, causal recovery and safe compaction |
 | Quotes | Collection command stream, KV/prolly materialization, indexes and public projection | Coalesced update hints | Structured app commands, indexed pagination, CAS and safe publication |
 | Release portal | Directory artifacts and revisioned release refs | Upload progress | Coherent deployment, subtree reuse and CAS rollback |
+| Short links | Typed redirect descriptors under hierarchical revisioned refs, plus approved route bindings | Optional bounded hit accounting | Namespace ownership, destination policy, expiry, abuse limits and cache-aware updates |
 | Photo album | Originals, derivative roots, manifests and processing jobs | Upload progress | Scoped workers, bounded expensive processing and explicit roots |
 | Intake form | Private submissions stream and owner materialization | Rate limiting | Submit-only guest permission without list/read access |
+
+A short-link app creates a typed immutable HTTPS redirect descriptor, then publishes its root under a named reference with revision CAS. An approved domain/path binding serves GET/HEAD redirects without exposing general reference or object APIs; route administration is separate from ref publication. Expiry, hit/egress limits and public visibility are binding/ledger policy rather than magic reference fields. A destination update preserves the link name but may not invalidate a redirect already cached by a browser; use temporary responses and conservative caching by default. If arbitrary external destinations are allowed, use an isolated untrusted origin and pass G-REDIRECT abuse, URL validation, and credential-leak fixtures. This app introduces no generic URL-valued reference or server-side proxy.
 
 ## 1. Expiring file sharing
 

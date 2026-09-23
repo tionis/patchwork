@@ -52,7 +52,8 @@ Return head/tail or snapshot descriptors only if the caller has the relevant rea
 | `POST /object-diffs` | Two roots, kind/profile, bounds | Bounded diff pages; read both roots |
 | `POST /object-pins` | `{object, expires_at?}` | Retention; `object.pin` + link |
 | `DELETE /object-pins/{pin_id}` | — | 204; pin ownership/admin |
-| `GET, POST /refs` | Authorized list / name, kind, root | `ref.list/create` + link on create |
+| `GET, POST /refs` | Authorized `prefix`, page / canonical name, fixed kind, root | Bounded name-ordered descriptors / create; `ref.list/create` + link on create |
+| `GET /refs/resolve?name=…` | Exact canonical hierarchical name | Authorized descriptor with stable ID/revision; `ref.read` |
 | `GET, DELETE /refs/{rid}` | CAS for delete | Descriptor or deletion; `ref.read/delete` |
 | `POST /refs/{rid}/publish` | Expected revision, root, optional record | Atomic ref + zero/one record; publish + link/append |
 | `GET /streams/{sid}/snapshots` | `type`, `at_or_before`, page | Descriptors; `snapshot.list` |
@@ -162,6 +163,10 @@ To avoid missed wakeups: establish watch and receive ready, read current authori
 Byte upload streams through canonical chunking and validates durable closure before success. Response 201: `{object, size, verified_digest?, upload_lease_id, expires_at}`; a raw digest is not the object ID. Default upload lease: one hour. Internal deduplication must not disclose another principal's content. Expired unlinked uploads may be collected.
 
 Linking requires an owner-scoped upload lease or explicit `object.link` authority in a validated access context. Knowing a root/hash alone is insufficient. Byte GET supports one range with 206/416 and a strong representation ETag. Map/directory edits do not mutate their inputs; publication is a separate reference command. The server verifies root context and descendant membership, not merely a client-supplied parent ID. Pinning controls lifetime, not visibility.
+
+Reference names use the shared canonical resource-name grammar. Exact resolution and prefix listing are metadata operations, not content reads; pagination is ordered by canonical name, binds prefix and caller context, and rechecks visibility on every page. A keyset cursor does not provide a stable namespace snapshot across concurrent mutations; a newly inserted name before the cursor may be omitted. A deletion/recreation can reuse a name but has a different ID; clients use ID plus expected revision for mutation. `POST /refs/{rid}/publish` requires a current revision, matching immutable target kind and link authority. The destination root is durably prepared before commit; a failed CAS does not transfer root ownership. No implicit reference creation on resolve/read or public hash lookup.
+
+An optional public redirect route is installed only through a separately approved domain/path binding to an exact reference ID by default. A prefix binding that covers future names is a separate explicit administrative choice. GET/HEAD resolves a typed HTTPS redirect descriptor, checks the current binding and destination policy, and returns 302 plus `Location` and conservative `Cache-Control` by default; other methods fail rather than preserving credentials or request bodies across origins. It never performs server-side fetch/proxying, forwards Patchwork credentials/cookies, or merges caller query parameters into the target. The route is not the general `/refs` API. Permanent redirects require a separately tested immutable mode; mutable/expiring refs must not claim instant revocation of already cached redirects. Public arbitrary-destination shorteners remain gated by isolated origin, abuse controls and URL-policy fixtures. These routes are not available in the bootstrap server.
 
 Snapshot descriptor:
 

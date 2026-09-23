@@ -8,7 +8,7 @@ The [system overview](unified-design.md) defines the three data primitives and t
 | --- | --- | --- |
 | Stream | Random stable ID; unique canonical name | Concrete config, metadata, head, tail, records |
 | Object | Versioned typed content root | Immutable bytes/map/directory descriptor and required block graph |
-| Reference | Random stable ID; unique canonical name | Root, target-kind constraint, lifecycle and monotonic revision |
+| Reference | Random stable ID; unique canonical hierarchical name | One typed object root, fixed target-kind constraint, lifecycle and monotonic revision |
 | Snapshot | Random snapshot ID | Stream ID, type, position, object root, declared opaque dependencies, producer provenance |
 | Recovery requirement | Stream-scoped stable ID | Format/config and acceptance policy; optional server producer; protected anchors |
 | Attachment | Stream ID and attachment ID | Kind, pinned implementation version, config revision, status |
@@ -16,7 +16,7 @@ The [system overview](unified-design.md) defines the three data primitives and t
 | Credential | Server credential ID | Issuer/key reference, expiry ceiling, revocation state, issuance scope |
 | Hook | Random hook ID | Target stream, provider authentication, pipeline, response mapping |
 
-Names are an ergonomic lookup mechanism. IDs are the durable identity used in cursors, attachments, and exact-resource grants. Deleting and recreating a name creates a new ID. Rename is deferred to reduce first-release lifecycle complexity.
+Names are an ergonomic lookup mechanism, including hierarchical reference namespaces; they do not create parent resources or imply directory ACLs. IDs are the durable identity used in cursors, attachments, and exact-resource grants. Deleting and recreating a name creates a new ID. Rename is deferred to reduce first-release lifecycle complexity.
 
 Proposed name grammar: 1–240 UTF-8 bytes, restricted initially to ASCII path components `[A-Za-z0-9][A-Za-z0-9._-]*`, separated by `/`. Reject empty, `.` and `..` components, leading/trailing slash, backslash, NUL, and noncanonical encodings. Names are case-sensitive. A rule for `foo/` matches descendants such as `foo/bar`, never `foobar`; exact `foo` is a separate selector.
 

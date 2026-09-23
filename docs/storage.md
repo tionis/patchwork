@@ -16,7 +16,7 @@ These are schema responsibilities, not ready migrations. Use checked IDs/counter
 | --- | --- |
 | Streams/records/segments | Stable stream ID; live name; config/metadata revisions; head/tail; immutable positioned bytes; logical byte/time summaries |
 | Blocks/objects/edges | Block hash and lifecycle; typed descriptor/root/profile; validated direct required edges and optional history links |
-| References | Stable ID/name; target-kind constraint; object root; monotonic revision and lifecycle |
+| References | Stable ID; unique indexed canonical hierarchical name; fixed target-kind constraint; current object root; monotonic revision and lifecycle |
 | Roots/leases | Owning resource and object root; or bounded owner-scoped object/source-range protection with expiry/generation |
 | Snapshots | Immutable stream/type/boundary/object root; producer/format/config provenance and declared opaque dependencies |
 | Recovery requirements/acceptances | Stream-scoped format/config; producer/trust policy revision; selected accepted anchors and approving identity |
@@ -29,6 +29,8 @@ These are schema responsibilities, not ready migrations. Use checked IDs/counter
 | Usage ledger | Scoped reservations/charges for storage, invocation and served bytes; durable settlement identity |
 
 Use the same root/lease machinery for uploads, readers, snapshots, app assets, transfers and jobs. Source-range protection additionally blocks logical trim. A lease protects lifetime, not authority. Keep typed purpose-specific constraints; shared machinery does not imply arbitrary public access to internal tables.
+
+Reference names live in the authoritative SQLite catalog, with a uniqueness constraint and an index supporting exact lookup and bounded prefix scans. Do not make an immutable prolly map another mutable reference authority. A reference CAS changes its current root, revision, root ownership and optional publication record in one transaction; deleting it releases only that owner's root. Namespace quotas and listing cost need G-LIMITS evidence. Redirect descriptors are ordinary typed objects: URL bytes carry no graph edge or server-fetch obligation. Public route bindings, destination policy and usage accounting are separate host-owned platform state, not fields trusted from the descriptor or inferred from a reference name.
 
 Persist positions/revisions as nonnegative signed 64-bit integers with checked increments. Tail may reach `i64::MAX`; the last appendable position is `i64::MAX - 1`. Never order records by wall-clock time.
 
