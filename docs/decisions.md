@@ -53,6 +53,7 @@ These are the current plan. Changes require rationale, affected contract updates
 | D19 | Retained retry receipts last 24 hours by default; none for live publication | Explicit bounded idempotency |
 | D20 | Default-limit KV PUT values cap at 720 KiB and every canonical event must fit its stream's record limit | Base64/envelope cannot violate the 1 MiB record budget |
 | D21 | Superseded production frontend assets stay available for seven days, quota-charged, then versioned URLs expire | Old tabs get a bounded coherent asset window without indefinite roots |
+| D22 | Optional CRDT sidecars are rebuildable derived state; only the main SQLite database and accepted object roots carry authoritative recovery state | Keeps C12 while permitting pinned engine integrations without cross-file WAL atomicity claims |
 
 ## Validation gates
 
@@ -69,6 +70,7 @@ These are the current plan. Changes require rationale, affected contract updates
 | G-APP / G-SHARE | Browser isolation/deployments, previous-release retention/GC and quota, safe redemption and atomic usage accounting | Hosted apps and sharing |
 | G-FUNCTIONS / G-FUNCTION-TX / G-FUNCTION-AUTH / G-FUNCTION-RECOVERY | Isolation, host command contracts, authority and replay/effect tests | Untrusted execution and its profiles |
 | G-RTC / G-MEDIA / G-CRDT | Protocol interoperability, lifecycle/limits and recovery fixtures | P2P, recording and Automerge integrations |
+| G-CRSQL | Pinned extension/SQLite, whole-resource merge and replay, sidecar crash/restore/trim/backup, schema constraints, isolation and budgets | cr-sqlite integration |
 
 Detailed evidence lives in [objects](unified-design.md), [authorization](authorization.md), [Functions](functions-design.md), [apps](reference-apps.md) and their conformance plans. A gate is closed only with executed evidence for its scope; a library feature list is insufficient.
 

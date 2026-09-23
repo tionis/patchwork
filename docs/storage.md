@@ -2,7 +2,7 @@
 
 ## Chosen starting point
 
-One SQLite database owns mutable authoritative state. Local content-addressed files hold shared chunks and typed nodes; [object formats](unified-design.md) define their identities and edges. Logical segments group SQLite records, not physical log files. Do not add a second authoritative database or independent tree-library collector.
+One SQLite database owns mutable authoritative state. Local content-addressed files hold shared chunks and typed nodes; [object formats](unified-design.md) define their identities and edges. Logical segments group SQLite records, not physical log files. Do not add a second authoritative database or independent tree-library collector. A later CRDT integration may use a separate, disposable derived SQLite sidecar only if its state and applied position commit together there and can be reconstructed from an accepted snapshot plus protected retained suffix; cross-file WAL commits are not a correctness boundary. See [processing](processing.md).
 
 Use WAL, `synchronous=FULL`, foreign keys on every connection, bounded busy handling/write admission and short transactions. SQLite has a single WAL writer; long readers can delay checkpoints. The deployment needs a supported local filesystem and tested synchronization behavior. [SQLite WAL](https://www.sqlite.org/wal.html), [synchronous setting](https://www.sqlite.org/pragma.html#pragma_synchronous).
 
@@ -36,7 +36,7 @@ Persist positions/revisions as nonnegative signed 64-bit integers with checked i
 
 Authenticate and perform bounded preflight/pipeline evaluation outside a write transaction. In the short commit transaction recheck lifecycle, complete read dependencies, config/policy revisions, quotas, required object durability/link rights and receipt uniqueness. A retained append inserts at tail, establishes roots, advances tail/segment summaries and saves the receipt atomically. Notify only after commit.
 
-One command appends zero or one record to one stream. The supported coupled command publishes one reference and one truthful record atomically. Built-in KV additionally validates conditions and updates state/checkpoint in that same transaction. Private consumer state and checkpoint updates use the same coordinator; they are not arbitrary user-table writes. [Functions](functions-design.md) uses these commands, not another transaction engine.
+One command appends zero or one record to one stream. The supported coupled command publishes one reference and one truthful record atomically. Built-in KV additionally validates conditions and updates state/checkpoint in that same transaction. Private consumer state and checkpoint updates in the main database use the same coordinator; they are not arbitrary user-table writes. An optional derived sidecar commits its own state/checkpoint locally and recovers by idempotent replay, not by a cross-file WAL transaction. [Functions](functions-design.md) uses these commands, not another transaction engine.
 
 A matching authorized receipt bypasses reexecution, not current authentication. Concurrent matching requests serialize on receipt identity. A lost response may mean a committed operation; retry resolves that only within the advertised receipt window. Receipts do not pin original records.
 

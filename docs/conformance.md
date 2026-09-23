@@ -57,6 +57,11 @@ Each test records initial state, actions, expected HTTP/status/events, and durab
 | E14 | Rebuild a materializer | No external HTTP requests or command execution |
 | E15 | Retry committed conditional KV write with same key/digest after state changes | Current auth required; receipt returned before conditions reexecute; changed input conflicts |
 | E16 | PUT 720 KiB value with maximum key/content type/condition on default stream; repeat at configured lower record limit and one byte above either limit; try equivalent raw events | Accepted serialized events fit record limit; over-limit adapter PUT returns 413 and raw append is rejected; no position allocated or state changed on rejection |
+| E17 | Automerge change is retained before async peer application; missing dependency or crash stalls consumer | Append receipt proves durability only; sync-level incorporation acknowledgement waits for validated applied position, otherwise pending/stalled/retry is explicit |
+| E18 | Two offline cr-sqlite peers edit/delete concurrently, reconnect, duplicate changes and cross resource IDs | Pinned-library merge converges; accepted envelope and CRR site/db versions remain distinct from stream positions; replay/dedup and whole-resource isolation hold |
+| E19 | Hard-kill after main record commit, during sidecar apply and after sidecar commit before status propagation | Reopen/replay yields exactly one derived effect per accepted position; sidecar state and applied position never diverge; no false incorporation acknowledgement |
+| E20 | Snapshot complete CRR database at P, trim, discard sidecar, restore backup and reconnect an old peer | Schema/site/merge metadata, tombstones and applied position survive; accepted snapshot plus protected suffix rebuilds independently or recovery fails visibly; no unsafe trim |
+| E21 | Malicious SQL/schema/extension path, forged site/owner identity, unsupported uniqueness/foreign-key invariant, schema migration or oversized sync batch | No user SQL or core extension loading; identity comes from Patchwork admission, not CRR fields; schema/invariant failure is explicit; migration and native failure cannot corrupt authoritative data; work is bounded |
 
 ## Snapshots and GC
 

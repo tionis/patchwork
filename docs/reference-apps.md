@@ -100,7 +100,7 @@ Browsers use Automerge Repo with local persistence, so offline edits survive rel
 
 Document ID identifies the collaboration resource. Automerge heads/change hashes identify causal state. Patchwork stream position identifies durable acceptance order. None replaces the others, and an object root is a snapshot representation rather than a mutable document identity.
 
-The adapter processes actual Automerge sync exchanges and persists validated document changes with deduplication scoped to document/change hash, transactional checkpoint metadata and explicit attachment roots. Session-specific sync frames are not a replayable application log; persisting arbitrary network messages is insufficient. Changes with missing causal dependencies are bounded/pending or rejected with a retry protocol, never acknowledged as incorporated state prematurely. Original accepted change bytes must not be transformed by a generic payload filter. Document validation and resource limits use the common authorization/commit fences.
+The adapter processes actual Automerge sync exchanges and persists validated document changes with deduplication scoped to document/change hash, transactional checkpoint metadata and explicit attachment roots. Session-specific sync frames are not a replayable application log; persisting arbitrary network messages is insufficient. A retained-append receipt proves durable acceptance, not that an asynchronous server peer has incorporated the change. A sync-level incorporation acknowledgement requires validated causal application and a committed applied position; otherwise return explicit pending/stalled state rather than claiming convergence. Changes with missing causal dependencies are bounded/pending or rejected with a retry protocol, never acknowledged as incorporated state prematurely. Original accepted change bytes must not be transformed by a generic payload filter. Document validation and resource limits use the common authorization/commit fences.
 
 Reconnect merges causal changes; it must not replace the server document with a last-writer-wins JSON snapshot or force every offline edit through a single reference CAS. Conflicting task-field edits use Automerge's pinned-version semantics and can be surfaced in the UI. CRDT convergence does not automatically enforce business invariants such as a unique assignee or an immutable completed task; avoid those constraints initially or add a deliberate validated-command design.
 
@@ -112,7 +112,7 @@ A revoked offline editor retains their local copy, but new sync reads/writes are
 
 With client-side encryption the server stores opaque changes and cannot act as a plaintext-validating Automerge peer. Clients perform causal validation/merge and publish encrypted snapshots under the [external acceptance policy](external-snapshots.md). Attachment dependencies remain declared or self-contained. Do not claim the plaintext server-adapter interoperability gate proves encrypted-client correctness.
 
-Acceptance: TODO-01–TODO-05 plus SNAP-03/10 for the encrypted variant. Automerge interoperability and compaction remain gated.
+Acceptance: TODO-01–TODO-06 plus E17 and SNAP-03/10 for the encrypted variant. Automerge interoperability and compaction remain gated.
 
 ## 4. Quotes: personal collection and deliberate sharing
 
@@ -167,6 +167,7 @@ All cases are **specified only**. Use non-admin users and malicious/old clients,
 | TODO-03 | Snapshot/trim/restart followed by very old peer edits | Complete causal state restored; valid offline changes merge; attachment roots retained; JSON-only snapshots fail fixture |
 | TODO-04 | Revoke offline editor, reconnect; switch browser account | Server denies new sync; local edits preserved/exportable; app does not expose previous account's cached board |
 | TODO-05 | Automerge library/schema upgrade and snapshot builder failure | Compatible pinned fixtures or explicit incompatibility; no silent history loss or trim past failed adapter |
+| TODO-06 | Retained change commits before asynchronous peer application; dependencies are missing or consumer crashes | Append receipt states only durability; sync incorporation acknowledgement waits for validated applied position, otherwise pending/stalled/retry is explicit; no false convergence |
 | QUOTE-01 | Concurrent edits/retried creates, tag queries over pagination | CAS/idempotency correct; stable bounded query results; supported filters explicit |
 | QUOTE-02 | Publish quotes containing private notes/draft attachments; inspect raw shared root/diff | No private fields/dependencies in public graph; server authority required to expand published set |
 | QUOTE-03 | Unpublish or expire share while another user is paging; public cached copy exists | New server access denied; cache/download limitation documented; no broad private-root grant |

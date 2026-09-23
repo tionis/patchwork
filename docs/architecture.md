@@ -48,7 +48,7 @@ Drop is intentional successful ingestion with no append. Runtime failure is sepa
 
 ## Consumers and adapters
 
-Consumers have type/version/config, consistent materialized state and applied position, health, and optionally an HTTP API. A consumer failure leaves a visible stalled position. It never silently advances past a poison record.
+Consumers have type/version/config, consistent materialized state and applied position, health, and optionally an HTTP API. A consumer failure leaves a visible stalled position. It never silently advances past a poison record. A retained append receipt is not an asynchronous consumer-incorporation acknowledgement; callers that need one wait for a separately committed applied position or receive explicit pending/stalled state.
 
 Consumer recovery may use a compatible accepted snapshot. Once trim overtakes a consumer, restore or fail with `recovery_required`. Consumers do not automatically pin history. All-event processing uses infinite retention; an explicitly admitted bounded source lease protects a finite catch-up range, not an indefinite delivery guarantee.
 
