@@ -51,6 +51,8 @@ These are the current plan. Changes require rationale, affected contract updates
 | D17 | Maintenance-mode backup and physical graph GC initially | Prove coherent roots before online optimization |
 | D18 | SSE JSON/base64 follow; raw GET for exact bytes | Simple inspectable transport |
 | D19 | Retained retry receipts last 24 hours by default; none for live publication | Explicit bounded idempotency |
+| D20 | Default-limit KV PUT values cap at 720 KiB and every canonical event must fit its stream's record limit | Base64/envelope cannot violate the 1 MiB record budget |
+| D21 | Superseded production frontend assets stay available for seven days, quota-charged, then versioned URLs expire | Old tabs get a bounded coherent asset window without indefinite roots |
 
 ## Validation gates
 
@@ -64,7 +66,7 @@ These are the current plan. Changes require rationale, affected contract updates
 | G-LIMITS | Load, restore, slow-client and admission measurements | Capacity guidance |
 | G-FORMAT / G-CDC / G-PROLLY | Canonical fixtures, bounded chunking, real-library map/sequence tests | Persistent object format adoption |
 | G-GRAPH / G-OBJECT-AUTH | Reachability/lease races, link and root-scoped access tests | Collection and public objects |
-| G-APP / G-SHARE | Browser isolation/deployments, safe redemption and atomic usage accounting | Hosted apps and sharing |
+| G-APP / G-SHARE | Browser isolation/deployments, previous-release retention/GC and quota, safe redemption and atomic usage accounting | Hosted apps and sharing |
 | G-FUNCTIONS / G-FUNCTION-TX / G-FUNCTION-AUTH / G-FUNCTION-RECOVERY | Isolation, host command contracts, authority and replay/effect tests | Untrusted execution and its profiles |
 | G-RTC / G-MEDIA / G-CRDT | Protocol interoperability, lifecycle/limits and recovery fixtures | P2P, recording and Automerge integrations |
 

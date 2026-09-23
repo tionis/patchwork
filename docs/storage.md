@@ -104,7 +104,7 @@ Typed object nodes declare direct required edges once. Snapshot roots traverse t
 
 Startup reconciles deleting entries, temporary files, conservative orphan grace periods and expired jobs/leases. A block is never removed merely because an in-memory cache is empty. A crash may leak storage until reconciliation; it may not lose an acknowledged root.
 
-Roots include references, retained record/metadata links, snapshots, explicitly retained app/function artifacts and checkpoints, pins and admitted work leases. Zero-retention publication creates no permanent root. A consumer merely observing bytes does not retain them automatically. Optional commit history follows explicit history retention, distinct from required content edges.
+Roots include references, retained record/metadata links, snapshots, app/function artifacts retained by active deployments or the bounded superseded-frontend window, checkpoints, pins and admitted work leases. App promotion reserves the previous frontend's protection before channel CAS; expiry removes that logical availability even if physical GC has not yet run. Zero-retention publication creates no permanent root. A consumer merely observing bytes does not retain them automatically. Optional commit history follows explicit history retention, distinct from required content edges.
 
 ## Durable work and external effects
 

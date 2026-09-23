@@ -28,7 +28,7 @@ Retained record positions start at 0 and increase by one per committed record. P
 
 Positions are stream-local. A cursor consists of both stream ID and position. Do not compare positions across streams. Failed and dropped writes do not allocate positions. Revisions are separate checked counters; revision zero is valid.
 
-Zero-retention streams have no durable record cursor. They expose a live epoch and process-local increasing sequence for gap detection only. Restart changes epoch; replay is unavailable. Stream configuration and metadata are durable even for zero-retention streams.
+Zero-retention streams have no durable record cursor. They expose a live epoch and process-local increasing sequence for gap detection only. Restart changes epoch; replay is unavailable. Stream configuration and metadata are durable even for zero-retention streams. They may run stateless ingress filters/validators and live delivery, but cannot attach durable KV, replay consumers, snapshot producers or recovery requirements, or publish position-bound snapshots.
 
 Retention modes are `infinite`, `bounded`, and `none`. Mode switching between `none` and retained modes is deferred. Bounded retention may constrain age, logical retained bytes, or both. Snapshot and pinned-blob bytes are separately accounted; bounded log retention cannot guarantee bounded total disk usage.
 

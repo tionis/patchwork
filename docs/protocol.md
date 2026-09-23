@@ -105,7 +105,7 @@ Config shape:
 }
 ```
 
-Retention mode is `infinite`, `bounded`, or `none`; bounded requires at least one positive bound. Attachments are managed separately but changes advance the stream config revision for GC concurrency control. A descriptor for mode `none` omits head/tail. Pipeline entries select a pinned built-in or approved function deployment, config and permitted `on_error` mapping. Recovery requirements specify format/config plus server producer or external acceptance policy; changes advance the stream config revision.
+Retention mode is `infinite`, `bounded`, or `none`; bounded requires at least one positive bound. Attachments are managed separately but changes advance the stream config revision for GC concurrency control. A descriptor for mode `none` omits head/tail. Mode `none` permits stateless ingress filters/validators and live subscribers, but rejects durable KV, replay consumers, snapshot producers, snapshot publication and recovery requirements: none has a durable position or replay suffix. Reject incompatible create/configuration requests, including create-on-append templates, rather than silently ignoring attachments. Pipeline entries select a pinned built-in or approved function deployment, config and permitted `on_error` mapping. Recovery requirements specify format/config plus server producer or external acceptance policy; changes advance the stream config revision.
 
 ## Raw append and retries
 
@@ -177,11 +177,11 @@ External snapshot publication is privileged: the server cannot verify arbitrary 
 
 ## KV wire contract
 
-Key is a single base64url-without-padding path component encoding 1–1024 UTF-8 bytes; values are opaque bytes with content type, maximum 1 MiB. GET returns bytes, ETag derived from the key revision, and `Patchwork-Applied-Position`. A missing key is 404. Listing returns keys, revisions, and pagination; it does not imply access to backing record history.
+Key is a single base64url-without-padding path component encoding 1–1024 UTF-8 bytes; values are opaque bytes with a content type of at most 256 printable ASCII bytes. The proposed maximum value for a stream with the default 1 MiB record limit is 720 KiB; the exact accepted maximum is also constrained by the size of the fully serialized canonical KV event under that stream's configured record limit. An oversize PUT returns 413 without appending. GET returns bytes, ETag derived from the key revision, and `Patchwork-Applied-Position`. A missing key is 404. Listing returns keys, revisions, and pagination; it does not imply access to backing record history.
 
 PUT supports `If-Match` for existing value revision or `If-None-Match: *` for create-if-absent. DELETE supports optional `If-Match`. Conditions are checked against authoritative materialization in the same transaction that accepts the event. Failed conditions return 412 with no appended event. Unconditional DELETE of a missing key returns 204 without appending. Successful PUT returns 200 or 201 and `{revision, position, applied_position}`; DELETE returns 204 with revision/position headers when an event was appended. A matching KV read sees at least that committed position when success is returned; later writes may already have changed the value. Generic append still promises only generic append semantics.
 
-Raw append to a KV-enabled stream must use the canonical KV event format in `06-extensions.md`. Arbitrary bytes fail mandatory validation. KV adapter writes require `kv.write` and use a server-internal scoped append operation; they do not grant the caller raw `record.append`. KV mutations accept the shared `Idempotency-Key` contract, scoped to stream/attachment, lineage and operation. A matching currently authorized receipt returns before reevaluating the original condition, even if the key has since changed. Without a key or after expiry, conditions reevaluate and may fail after an unobserved success.
+Raw append to a KV-enabled stream must use the [canonical KV event format](processing.md). Arbitrary bytes fail mandatory validation. KV adapter writes require `kv.write` and use a server-internal scoped append operation; they do not grant the caller raw `record.append`. KV mutations accept the shared `Idempotency-Key` contract, scoped to stream/attachment, lineage and operation. A matching currently authorized receipt returns before reevaluating the original condition, even if the key has since changed. Without a key or after expiry, conditions reevaluate and may fail after an unobserved success.
 
 ## Provisional resource limits
 

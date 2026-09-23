@@ -22,7 +22,7 @@ Execution failure is distinct from intentional rejection/drop. Default is reject
 
 One transactional `patchwork/kv/v1` materializer per stream establishes authoritative values and revisions. Its matching snapshot producer is an independent attachment. An unbypassable final validator ensures every generic/adapter append is a canonical KV operation. Adapter-request key, operation and condition must survive filters unchanged; explicitly approved value transforms are reflected in returned semantics.
 
-Canonical event is bounded UTF-8 JSON with no unknown fields:
+Canonical event is bounded UTF-8 JSON with no unknown fields. For a default 1 MiB record limit, a PUT value is provisionally capped at 720 KiB (737,280 bytes): base64 then consumes 983,040 bytes, leaving room for the bounded key, content type, condition and JSON envelope. Content type is at most 256 printable ASCII bytes. The complete serialized event must also fit the stream's configured record limit, which may be smaller; reject an oversize adapter PUT or generic append before commit. Freeze exact encoding and boundary fixtures with M3-02; a value limit never bypasses the serialized-record check:
 
 ```json
 {"version":1,"op":"put","key":"theme","value_base64":"ZGFyaw==","content_type":"text/plain","condition":{"kind":"absent"}}
@@ -32,7 +32,7 @@ Delete contains key and optional condition, not value/content type. Conditions a
 
 In the append transaction validate conditions, apply the operation and advance state/checkpoint. Generic append shares this path; conditional writes never decide against stale state. Replay applies accepted operations without re-deciding admission conditions against an unrelated cache.
 
-Initially enable KV only on an empty stream or a compatible snapshot plus valid suffix, otherwise return conflict. A future online installation can build a shadow materialization and switch under a fence; it must never skip incompatible events.
+Initially enable KV only on an empty retained stream or a compatible snapshot plus valid suffix, otherwise return conflict. Mode `none` has no durable positions and cannot host KV or a KV snapshot producer. A future online installation can build a shadow materialization and switch under a fence; it must never skip incompatible events.
 
 ## KV snapshot format
 

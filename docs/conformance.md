@@ -35,6 +35,7 @@ Each test records initial state, actions, expected HTTP/status/events, and durab
 | P19 | Raw append while config changes during filter execution | Reevaluate or conflict; stale pipeline never commits |
 | P20 | Read page budget below next record size | Return that single valid record; pagination advances |
 | P21 | Matching retry after pipeline configuration changes | Current auth/signature still checked; original receipt returned without rerunning filters |
+| P22 | Create or create-on-append mode-none stream with durable KV, replay consumer, snapshot producer or recovery requirement; then attempt attachment/config change or external snapshot publication | Every incompatible request is rejected atomically; no stream, attachment or snapshot left behind; stateless filter/validator and live subscription remain usable |
 
 ## Filters, consumers, and KV
 
@@ -55,6 +56,7 @@ Each test records initial state, actions, expected HTTP/status/events, and durab
 | E13 | Delete/recreate key then retry old revision | Old condition fails; no ABA |
 | E14 | Rebuild a materializer | No external HTTP requests or command execution |
 | E15 | Retry committed conditional KV write with same key/digest after state changes | Current auth required; receipt returned before conditions reexecute; changed input conflicts |
+| E16 | PUT 720 KiB value with maximum key/content type/condition on default stream; repeat at configured lower record limit and one byte above either limit; try equivalent raw events | Accepted serialized events fit record limit; over-limit adapter PUT returns 413 and raw append is rejected; no position allocated or state changed on rejection |
 
 ## Snapshots and GC
 
