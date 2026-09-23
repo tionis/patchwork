@@ -1,0 +1,5 @@
+// Prototype only. Request facts use one exact action/resource per evaluation.
+// Default policy trust includes authority and authorizer, NOT attenuation blocks.
+allow if principal($p), credential($c), credential_valid($c),
+    operation($a), resource("stream", $r),
+    current_right($p, $a, "stream", $r), issued_right($c, $a, "stream", $r);

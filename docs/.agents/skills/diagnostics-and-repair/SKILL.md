@@ -1,0 +1,88 @@
+---
+name: diagnostics-and-repair
+description: Diagnose vault health, broken links, parser diagnostics, suspicious state, synchronization pauses or conflicts, and repairable problems. Use when the user asks why something is broken, wants a health check, sees diagnostics, or needs safe repair steps before editing notes.
+version: 27
+tools:
+  - doctor
+  - cache_verify
+  - repair
+  - search
+  - graph
+  - help
+metadata:
+  vulcan:
+    managed: true
+require_confirmation: false
+---
+
+# Diagnostics and Repair
+
+## When to Use This Skill
+
+Use this skill for investigation before mutation: broken links, malformed frontmatter, stale cache,
+diagnostics, orphaned assets, search mismatches, and unexpected graph/query results.
+
+## Recommended Flow
+
+1. Run a read-only diagnostic command first: `doctor`, `cache verify`, `search --explain`, or graph diagnostics.
+2. Classify the problem as source-note content, derived cache/index state, config/permission state, or unsupported syntax.
+3. Use dry-run repair/fix modes when available.
+4. Only patch source notes after identifying the smallest concrete fix.
+5. For Git-backed device sync, run `vulcan sync doctor [<wiki>]` before mutation, then `vulcan sync status` for the proposed finite cycle. Doctor distinguishes unavailable Git, unsupported layout, unreadable or divergent refs, offline remotes, active locks, retained journals, missing ignore rules, filter/LFS requirements, cache drift, and target-platform incompatibilities. A registered wiki uses its recorded platform profile even when doctor runs on another host. Case-fold, canonical-Unicode, and Windows-reserved-name errors mean the tree cannot be represented safely; executable-bit, link-file symlink, and long-path   warnings require target-device review. A paused status identifies in-progress Git state or
+  unexpected HEAD movement; a conflicted result preserves both candidate commits and local bytes for review.
+6. For missing background updates, run `vulcan daemon status`. It authenticates a live loopback capability request and reports the runtime address, PID, uptime, and registrations; a stale runtime record is reported as stopped. Review `vulcan daemon install --dry-run` and refresh the native service after moving or upgrading the executable. Restart with `vulcan daemon start --detach` only after confirming no service is live. `vulcan daemon stop`, Ctrl-C, and graceful service-manager termination queue a final retained `shutdown` sync for every active Git-backed wiki, wait up to 30 seconds, and cooperatively cancel unfinished work before stopping; paused and non-Git registrations remain excluded. A detected suspend gap queues a `resume` sync after wake. A forced kill, abrupt power loss, offline remote, or OS termination without a grace period cannot guarantee publication. Direct `vulcan sync run` remains a valid diagnostic and recovery path without the daemon.
+   Realtime wake-up is optional: a missing, malformed, permission-denied, or unavailable advertised
+   endpoint produces a redacted daemon diagnostic and falls back to startup/periodic polling. Check
+   only the exact `refs/vulcan/notifications` remote ref and never print `notification.json` or its
+   complete subscribe URL while collecting diagnostics; the logged origin and fingerprint are
+   sufficient to correlate an endpoint safely.
+7. For unattended-resolution problems, run `vulcan --output json daemon conflict-status`. A missing
+   first pass requires checking daemon status, non-secret daemon config, the provider-key
+   environment, and whether configuration was reloaded. `waiting for provider error backoff` is a
+   durable five-minute delay; use `error` and `retry_after_unix_ms` to repair the cause and determine
+   when to retry rather than restarting repeatedly. `no pending conflict groups met the
+   high-confidence policy` means the unresolved groups require normal review, not that state is
+   lost. If the error says a proposal was retained, preserve its ID and preview explicit
+   `sync resolve --approve-proposal <proposal-id> --dry-run` or
+   `sync reject <conflict-id> <proposal-id> --dry-run`.
+8. Inspect `state.recovered_from` and `state.retained` in JSON sync output. The retained phase and captured object IDs distinguish an offline/cancelled cycle from an uncaptured failure. Recovery journals are authoritative device-local operational state outside `.vulcan/cache.db`; do not remove them as a cache repair.
+9. `vulcan sync doctor` reports whether a stable device identity already exists but never creates one. Missing identity before the first mutating sync is informational; malformed or unsupported identity state is an error requiring preservation and review.
+10. Treat `state.apply-marker` as an interrupted worktree application, not cache damage. Preserve the private-Git-directory marker and device-local journal, avoid manual ref cleanup, and rerun sync so current bytes are recaptured and the accepted revision is verified before the marker is cleared.
+11. A mutating sync applies the same target-platform preflight as doctor. If a local tree is incompatible, its bytes and object ID are already captured and the journal remains at `captured`; no remote query occurred. If a fetched or merged tree is incompatible, Vulcan leaves the worktree and remote live ref unchanged. Fix or rename the reported paths on a platform that can represent them, then rerun sync rather than bypassing the profile.
+12. In detached Git-loss reports, `possibly_lost_hidden_ref_namespaces` is the complete version-2 local recovery inventory plus legacy development roots. The materialized vault can be recaptured, but unpushed candidates, old epochs, conflicts, checkpoints, proposals, or recovery objects that existed only in the deleted private Git directory cannot be reconstructed. `refs.namespace_version` identifies the ref contract used by ordinary sync reports.
+13. If `git.filters` is an error, inspect the typed `required_filters` entries. Every declared driver needs either `process_configured: true` or both `clean_configured` and `smudge_configured`; an LFS driver also needs `executable_available: true`. Install/configure the same round-trip driver used by ordinary Git before retrying. Sync deliberately stops before capture and remote access rather than committing unfiltered bytes.
+14. For a manually installed portable binary, use `vulcan self-update check` before `vulcan self-update apply --dry-run`. Signature verification and newer-version checks are safety boundaries; do not add `--allow-unsigned` or `--allow-downgrade` unless the user explicitly accepts that narrower trust or rollback decision. Post-bootstrap builds normally verify stable metadata with the stable-only `stable-2026-09` identity; older binaries need one manually checksummed archive/package installation to acquire that trust and must not treat an unsigned override as the ongoing stable path. The rolling development stream additionally requires `--channel main` and verifies the independent `main-2026-09` identity. An unsigned descriptor from a newly completed build normally means the separate hosted signing workflow has not finished or failed, so inspect that workflow and retry after repair; no workstation daemon or timer is part of the release path. Never run `self-update` for an APT, Homebrew, WinGet, or other package-managed installation; use its package manager, then refresh and restart the daemon service if needed.
+15. For a portable installation that should update unattended, preview `vulcan self-update schedule install --at 03:00 --notify-on-failure --dry-run`, then install it and inspect the retained configuration with `vulcan self-update schedule show`. Linux uses a user timer, macOS a LaunchAgent, and Windows a current-user scheduled task; Android/Termux uses the approximate `--android-period-hours` interval because JobScheduler does not promise an exact wall-clock time. The stable channel remains the default; `--channel main` is an explicit rolling-stream choice, and unattended schedules reject `--allow-unsigned`. The scheduled `self-update run` cycle verifies and downloads before stopping a daemon, rejects unresponsive runtime state, requests the ordinary final-sync shutdown, and restores the installed daemon service or detached process after replacement. Use `vulcan self-update schedule uninstall --dry-run` before removing only the scheduler projection.
+
+## Guardrails
+
+- Do not "fix" diagnostics by deleting content unless the user explicitly wants deletion.
+- Parser unsupported-syntax diagnostics are not always data loss; preserve source where possible.
+- Cache/index repair should not edit notes.
+- For bulk repairs, inspect changed paths and commit separately from unrelated edits.
+- Do not weaken update signature or version policy to make a failed update check pass. Confirm the
+  installation owner, selected channel, target, current version, and configured project key first.
+- Do not install Vulcan's unattended self-update schedule over a package-managed binary. Use the
+  package manager's supported timer or automatic-upgrade mechanism so ownership remains singular.
+- Do not clear staged state, rewrite Vulcan-owned refs, or pick a conflict side merely to
+  make synchronization continue. Staged bytes sync as ordinary worktree state while the index
+  is left untouched.
+- Do not remove `vulcan-sync/apply.json` as a repair shortcut. It is durable evidence that mutation began and verification may not have completed.
+- For a sync conflict, retain the immutable conflict ID and inspect its base/local/remote revisions and path records. The original commits remain Git-reachable and file artifacts live in device-local sync state, so cache repair and note cleanup must never delete them.
+- Multiple unresolved conflict IDs can be legitimate when their unfinished path sets are independent. Treat supersession metadata as authoritative; do not infer that the newest ID invalidates older pending groups.
+- Start conflict investigation with `vulcan sync conflicts`, then use `vulcan sync conflicts <id>` to inspect per-side object IDs, modes, hashes, byte counts, and artifact locations. This read-only command is safe before deciding how to resolve the conflict.
+- List-level paths are a bounded preview. If `paths_complete` is false, use detail pagination before drawing conclusions about affected files.
+- A `formatting_candidate` classification can help prioritize a formatter storm, but it is not proof of semantic equivalence and never changes the required review action.
+- When the record is large, add `--path-offset <n> --path-limit <1-256>` and follow the explicit `next_offset`; use global progress totals to distinguish pending, in-flight, applied, and rebase-required groups. When `groups_complete` is false, group detail is scoped to the returned page. Do not diagnose absent paths from a single page.
+- Path pages are bounded by both record count and serialized bytes. A path-count, page-size, or diagnostics-limit error means immutable evidence could not be safely represented; preserve the Git refs and address the pathological metadata instead of enlarging state files manually.
+- If the user explicitly selects `base`, `local`, or `remote`, run `vulcan sync resolve <id> --side <side> --dry-run` first. Large conflicts can be narrowed to complete `group_id` values with repeatable `--group`; never split a structural group or exceed 128 groups in one batch. A stale worktree, changed preserved ref, active Git operation, or changed selected-group input is a safety stop—not a reason to reset files or refs. The mutating form is appropriate only after reviewing the lossy path-level choice.
+- `needs_rebase` is recoverable batch state, not a reason to edit state files. Rerun the same reviewed group selection: Vulcan replans unpublished work only when selected inputs are unchanged, or applies a published batch through a verified accepted descendant.
+- If the user instead supplies reviewed replacement files, require one `--file '<conflict-path>=<source-file>'` for every conflicted path and run with `--dry-run` first. Missing, duplicate, unrelated, oversized, malformed, or ineligible files must remain unresolved; do not work around those diagnostics by choosing an arbitrary preserved side.
+- For a reviewed unified patch, run `vulcan sync resolve <id> --patch <patch-file> --dry-run` first. Patch diagnostics are safety stops when it does not apply to the preserved local candidate, covers only part of the conflict, touches unrelated paths, deletes a conflict file, or uses unsupported rename/copy records.
+- For interactive resolution, run `vulcan sync resolve <id> --editor --dry-run` before launching the mutating form. The editor works on private temporary marker files, not vault files; an unchanged file or remaining `VULCAN-CONFLICT-<id>` token is an incomplete resolution and must fail without publishing.
+
+## Example Moves
+
+- Explain why a wikilink is unresolved and propose the safest rename/move/link fix.
+- Distinguish malformed frontmatter from a cache migration issue.
+- Run doctor, apply a targeted repair, then re-run diagnostics to verify.

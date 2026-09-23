@@ -1,0 +1,210 @@
+//! Synchronous, internal-only storage for infinite-retention streams.
+//! A mutable connection serializes calls; there is no HTTP write admission yet.
+use std::{path::Path, time::Duration};
+
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+
+use crate::{
+    Error, Result,
+    model::{Position, ReadPage, Record, Stream, StreamId, StreamName},
+};
+
+pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
+const APPLICATION_ID: i64 = 0x50574348;
+const SCHEMA_VERSION: i64 = 1;
+
+#[cfg(test)]
+mod tests;
+
+pub struct Store {
+    connection: Connection,
+}
+
+impl Store {
+    /// Opens only the new format file; never opens/migrates legacy patchwork.db.
+    pub fn open(data_dir: &Path) -> Result<Self> {
+        std::fs::create_dir_all(data_dir)?;
+        let mut connection = Connection::open(data_dir.join("patchwork-v1.sqlite3"))?;
+        connection.busy_timeout(Duration::from_secs(2))?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        // Check ownership BEFORE changing journal mode or applying migrations.
+        Self::check_format(&connection)?;
+        let mode: String = connection.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+        if mode != "wal" {
+            return Err(Error::DatabaseFormat);
+        }
+        connection.pragma_update(None, "synchronous", "FULL")?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
+        Self::check_format(&tx)?;
+        let version: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if version == 0 {
+            tx.execute_batch(include_str!("../migrations/0001_streams.sql"))?;
+            tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        tx.commit()?;
+        let store = Self { connection };
+        store.check_ready()?;
+        Ok(store)
+    }
+
+    fn check_format(connection: &Connection) -> Result<()> {
+        let app: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
+        let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        let tables: i64 = connection.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+            [],
+            |r| r.get(0),
+        )?;
+        if !((app == 0 && version == 0 && tables == 0)
+            || (app == APPLICATION_ID && version == SCHEMA_VERSION))
+        {
+            return Err(Error::DatabaseFormat);
+        }
+        Ok(())
+    }
+
+    pub fn check_ready(&self) -> Result<()> {
+        self.connection
+            .query_row("SELECT count(*) FROM streams WHERE 0", [], |_| Ok(()))?;
+        Ok(())
+    }
+
+    pub fn create_stream(&mut self, name: &StreamName) -> Result<Stream> {
+        let id = StreamId::random();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM streams WHERE name=?1)",
+            [name.as_str()],
+            |r| r.get(0),
+        )?;
+        if exists {
+            return Err(Error::Conflict);
+        }
+        tx.execute(
+            "INSERT INTO streams(id,name) VALUES (?1,?2)",
+            params![id.as_str(), name.as_str()],
+        )?;
+        tx.commit()?;
+        Ok(Stream {
+            id,
+            name: name.clone(),
+            head: Position::ZERO,
+            tail: Position::ZERO,
+        })
+    }
+
+    pub fn stream(&self, id: &StreamId) -> Result<Stream> {
+        let (name, head, tail): (String, i64, i64) = self
+            .connection
+            .query_row(
+                "SELECT name,head,tail FROM streams WHERE id=?1",
+                [id.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        Ok(Stream {
+            id: id.clone(),
+            name: name.parse()?,
+            head: Position::new(head)?,
+            tail: Position::new(tail)?,
+        })
+    }
+
+    pub fn append(
+        &mut self,
+        id: &StreamId,
+        payload: &[u8],
+        content_type: &str,
+    ) -> Result<Position> {
+        if payload.len() > MAX_RECORD_BYTES {
+            return Err(Error::TooLarge);
+        }
+        if content_type.is_empty()
+            || content_type.len() > 255
+            || !content_type.bytes().all(|c| (32..=126).contains(&c))
+        {
+            return Err(Error::Invalid("content type"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tail: i64 = tx
+            .query_row("SELECT tail FROM streams WHERE id=?1", [id.as_str()], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        let position = Position::new(tail)?;
+        let next = position.next()?;
+        tx.execute("INSERT INTO records(stream_id,position,payload,content_type,accepted_at_ms) VALUES (?1,?2,?3,?4,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+            params![id.as_str(), position.get(), payload, content_type])?;
+        tx.execute(
+            "UPDATE streams SET tail=?2 WHERE id=?1",
+            params![id.as_str(), next.get()],
+        )?;
+        tx.commit()?;
+        Ok(position)
+    }
+
+    /// Bounded snapshot read; a record exceeding the byte budget is returned alone.
+    pub fn read(
+        &mut self,
+        id: &StreamId,
+        from: Position,
+        limit: usize,
+        max_bytes: usize,
+    ) -> Result<ReadPage> {
+        if !(1..=1000).contains(&limit) || !(1..=16 * 1024 * 1024).contains(&max_bytes) {
+            return Err(Error::Invalid("read budget"));
+        }
+        let tx = self.connection.transaction()?;
+        let (head, tail): (i64, i64) = tx
+            .query_row(
+                "SELECT head,tail FROM streams WHERE id=?1",
+                [id.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        let (head, tail) = (Position::new(head)?, Position::new(tail)?);
+        if from < head {
+            return Err(Error::HistoryLost);
+        }
+        if from > tail {
+            return Err(Error::PositionAhead);
+        }
+        let mut statement = tx.prepare("SELECT position,payload,content_type,accepted_at_ms FROM records WHERE stream_id=?1 AND position>=?2 ORDER BY position LIMIT ?3")?;
+        let mut rows = statement.query(params![id.as_str(), from.get(), limit as i64])?;
+        let mut records = Vec::new();
+        let mut bytes = 0;
+        let mut next_position = from;
+        while let Some(row) = rows.next()? {
+            let payload: Vec<u8> = row.get(1)?;
+            if !records.is_empty() && bytes + payload.len() > max_bytes {
+                break;
+            }
+            let position = Position::new(row.get(0)?)?;
+            if position != next_position {
+                return Err(Error::DatabaseFormat);
+            }
+            next_position = position.next()?;
+            bytes += payload.len();
+            records.push(Record {
+                position,
+                payload,
+                content_type: row.get(2)?,
+                accepted_at_ms: row.get(3)?,
+            });
+        }
+        Ok(ReadPage {
+            head,
+            tail,
+            next_position,
+            records,
+        })
+    }
+}

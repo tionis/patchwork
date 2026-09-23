@@ -1,0 +1,92 @@
+---
+name: configuration-and-permissions
+description: Configure Vulcan safely, manage device-local wiki registrations and groups, inspect settings, manage permission profiles, and understand trust boundaries. Use when the user asks about registered vaults, config, permissions, profiles, access control, sandboxing, trust, setup, or why a command/tool is denied.
+version: 22
+tools:
+  - config_show
+  - config_get
+  - config_set
+  - config_list
+  - trust
+  - help
+metadata:
+  vulcan:
+    managed: true
+require_confirmation: false
+---
+
+# Configuration and Permissions
+
+## When to Use This Skill
+
+Use this skill when a task changes Vulcan settings, explains effective configuration, adjusts
+permission profiles, or diagnoses permission and trust failures.
+
+## Recommended Flow
+
+1. Inspect before editing: `vulcan config show`, `vulcan config get <key>`, or `vulcan config list`.
+2. Prefer dedicated config subcommands over manual TOML edits.
+3. Use `--target local` for machine-specific secrets, paths, or credentials.
+4. Use permission profiles to narrow assistant/MCP authority instead of relying on prompt text.
+5. Check trust separately from permissions when JS, plugins, or skill command tools fail to run.
+6. Preview Obsidian migration with `vulcan config import <source> --preview` or `vulcan config import --all --preview`. Importers apply only settings actually present in the source; unsupported values are reported as skipped without blocking valid sibling settings. Review skipped and lossy mappings before applying. Folder-note structure is shared repository state, so its importer rejects a local target. TaskNotes import also converts a recognized generated mdbase 0.2 collection/type pair to 0.3 and disables `enableMdbaseSpec` in TaskNotes while preserving all other plugin settings; confirm those control-file changes in the preview before applying.
+7. Use `vulcan vault clone/add/list/show/set/remove` for device-local wiki setup and registration. Registration is optional; `add`, `set`, and `remove` do not initialize, synchronize, or delete the materialized vault, while `clone` explicitly creates a new Git worktree before registering it. `vulcan vault recover-git` is the narrow repair path for a registered missing detached Git directory and preserves the existing materialized vault before fetching.
+8. Use `vulcan sync pause/resume [<wiki>]` for the registration's device-local automatic-sync switch; omission resolves the currently selected registered vault.
+9. Keep `sync.merge_policy` and `sync.tree_validation` in shared `.vulcan/config.toml`. Set `sync.merge_automation` only in device-local config, for example `vulcan config set sync.merge_automation require_review --target local`; the local ceiling can require review but cannot select a different merge tree. Agent proposal auto-acceptance requires `vulcan config set sync.agent_auto_accept true --target local` plus either an explicit `sync propose --auto-accept` invocation or explicit inclusion in the daemon's device-local conflict-worker allowlist. It defaults off, and the local config file is excluded from Git snapshots and worktree-equivalence checks. `sync.tree_validation.max_deleted_paths` and `max_deleted_percent` are conjunctive ceilings: an automatically resolved merge is preserved for review only when it exceeds both.
+10. Use `vulcan daemon config show` for process-owned settings. Preview `set-bind`, `set-agent resolution|semantic --base-url <url> --model <model> [--api-key-env <name>]`, `set-conflict-worker --wiki <id> ...`, or the corresponding clear commands with `--dry-run` before applying them. Restart the daemon after changing provider or worker configuration; startup reads any named credential from the inherited environment or the protected device-local `daemon.env`, with inherited values taking precedence, and capabilities advertise only providers that were constructed successfully. The conflict worker requires the resolution provider and at least one explicit wiki, and its status is device-local under `daemon conflict-status`.
+11. Use `vulcan daemon companion --output json` for non-secret local-client connection metadata. `--reveal-token` is an explicit bearer-authority transfer and its output belongs only in device-local client storage, never shared configuration or synchronized plugin data.
+12. The reference Obsidian companion requires Obsidian 1.11.4+ and stores the bearer token through native `SecretStorage`; its ordinary plugin data contains only allowlisted non-secret endpoint/wiki/trigger preferences. Keep the daemon loopback-only and use the registration's permission profile as the authority boundary.
+13. Preview companion installation with `vulcan daemon companion install [<wiki>] --dry-run`, then apply after checking the registered vault and managed files. First install seeds only the non-secret endpoint/wiki preferences; upgrades preserve `data.json`, and pairing still requires the explicit token handoff into Obsidian `SecretStorage`.
+14. For interactive Templater creation-rule setup, use `vulcan config edit`: its structured folder and regex rule editors can add/remove rows, and folder fields suggest current vault directories without rejecting manually entered paths.
+15. Realtime sync notification setup has no device-local import command or daemon setting. The
+    daemon discovers `notification.json` from the repository's exact
+    `refs/vulcan/notifications` ref. The registration's effective profile must allow Git and
+    network access to the advertised endpoint origin before the daemon connects.
+16. Operational sync alerts are a separate daemon-owned concern. Warning/error logs are always on.
+    Preview `vulcan daemon config set-notifications --desktop true --dry-run`, apply it, and restart
+    the daemon to opt into native desktop delivery. This setting contains no credential and a
+    desktop delivery failure never changes the retained sync result. Enabling it reconciles the
+    current retained terminal job into the durable alert ledger once; successful delivery prevents
+    repeat alerts on later restarts.
+17. Add remote alerts with `daemon config set-notification-webhook <name> --url <url>
+    --format json|ntfy [--token-env <name>] --dry-run`, or an absolute shell-free local bridge with
+    `set-notification-command <name> --program <path> [--arg <literal>]... --dry-run`. Restart after
+    applying configuration and inspect the secret-minimal queue with `daemon alert-status`. Remove
+    either kind with `daemon config remove-notification-sink <name> --dry-run`.
+
+## Guardrails
+
+- Do not put private credentials in shared `.vulcan/config.toml`; use local config or environment variables.
+- Never put a provider key in `daemon.toml` or a CLI argument. `daemon config set-agent --api-key-env` accepts the environment-variable name only. For an installed Linux/macOS service, use a mode-`0600` `$XDG_CONFIG_HOME/vulcan/daemon.env` containing literal `NAME=value` records when ordinary environment inheritance is unavailable; never put this file in a vault.
+- Notification webhooks follow the same credential rule: store only `--token-env <name>` in
+  `daemon.toml`. URLs must use HTTPS (loopback HTTP is accepted for local bridges) and cannot carry
+  credentials, query strings, or fragments. Do not use a secret-as-topic URL; use an authenticated
+  endpoint. Each webhook delivery must pass the affected wiki profile's network policy. Command
+  adapters require execute permission, use an absolute executable and literal argument vector,
+  receive the bounded event on stdin, and never invoke a shell. Do not place credentials in adapter
+  arguments.
+- Never copy a revealed companion token into vault content, `.obsidian/plugins/*/data.json`, logs, shell history, or source control.
+- Treat the complete advertised notification subscribe URL as a repository-scoped read capability.
+  It may exist only in the dedicated Git advertisement, not in ordinary vault content, CLI
+  arguments, logs, or device registration state. Pipe it to
+  `sync advertise --subscribe-url-file -`; on Unix, a protected regular file with no symlinked
+  path component is also accepted. Other platforms must use stdin. Configure the separate
+  publish-only webhook URL directly in the forge.
+- Keep assistant-facing profiles narrow. Add only the read/write/network/execute capabilities required by the workflow.
+- A skill command can narrow authority with `permission_profile`; it cannot widen the caller's profile.
+- Trust is an execution gate, not a permission profile. A trusted vault can still be denied by a profile.
+- Importing folder-note settings configures the convention; it does not auto-detect or move existing folder notes. Use `vulcan refactor folder-notes --dry-run` for a layout conversion.
+- `vulcan sync status` and `vulcan sync run` both inspect repository and remote state and therefore require the selected profile's Git permission; `--dry-run` prevents mutation but does not bypass that permission boundary.
+- MCP's read-only `sync` tool pack additionally requires full-vault read access. Repository-wide status, doctor, plans, and conflict records can contain paths outside a partial read allowlist, so Vulcan hides the whole pack instead of returning a misleading or leaky partially filtered safety report.
+- Preview clone and registration mutations with `vulcan vault clone ... --dry-run`, `vault add ... --dry-run`, `vault set ... --dry-run`, or `vault remove ... --dry-run`. Clone dry-run does not contact the remote or create destinations. Removing a registration must never be treated as permission to delete its worktree or Git directory.
+- Preview automatic-sync changes with `vulcan sync pause/resume ... --dry-run`. This state is device-local and does not alter repository policy or prevent an explicit manual sync.
+
+## Example Moves
+
+- Explain why an MCP tool is hidden under `--permissions readonly`.
+- Add a local web search backend key without changing shared vault config.
+- Preview and import a shared folder-note convention, then separately plan any required layout conversion.
+- Configure Templater folder or regex creation rules interactively, selecting an existing vault folder when appropriate or entering a planned path manually.
+- Create a profile for a daily wiki agent with notes/tasks/search access but no shell or git mutation.
+- Register personal and work wikis in separate local groups, then inspect their availability with `vulcan vault list`.
+- Clone an Obsidian-visible Android worktree with a Termux-private `--git-dir` and `--platform android-shared`, then confirm the recorded paths with `vulcan vault show <id>`.

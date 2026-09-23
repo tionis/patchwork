@@ -1,0 +1,48 @@
+# AGENTS.md for Vulcan Vaults
+
+Use Vulcan as the primary automation surface for this vault.
+
+Core conventions:
+
+- Prefer `vulcan --output json ...` for all tool-driven workflows.
+- Use `--dry-run` before bulk or destructive mutations.
+- Note names can be ambiguous; prefer vault-relative paths when precision matters.
+- `note patch` fails on multiple matches by design. Treat that as a safety guard, not a bug, and narrow the edit with `--section`, `--heading`, `--block-ref`, or `--lines`.
+
+Useful command groups:
+
+- Notes: `note outline`, `note get`, `note create`, `note set`, `note append`, `note patch`
+- Querying: `search`, `query`, `ls`, `backlinks`, `links`, `graph ...`
+- Refactors: `refactor rename-alias`, `rename-heading`, `rename-property`, `merge-tags`, `move`
+- Web and git: `web search`, `web fetch`, `git status`, `git diff`, `git log`, `git commit`
+- Periodic notes: `daily ...`, `periodic weekly`, `periodic monthly`, `periodic ...`
+
+Retrieval routing:
+
+- Daily/journal request: `daily latest`, `daily show`, or MCP `daily`; “latest” means newest existing, not today.
+- Known note/path/title: `note get` / MCP `note_get`.
+- Metadata, property, or path selection: `query`.
+- Subject/content discovery: `search`.
+- Prefer domain operations, then exact reads, then structured query, then full-text or semantic search.
+- MCP query and daily-list pages are bounded; follow `page.next_offset` rather than requesting an unbounded result.
+- MCP startup packs stay pinned for the session. Treat adaptive `tool_packs` changes as optional because the host must refresh callable schemas.
+
+Documentation workflow:
+
+- Read `.agents/skills/*/SKILL.md` for task-specific usage patterns.
+- Use `vulcan skill list` to discover bundled and vault-defined skills, and `vulcan skill get <name>` to load one on demand.
+- Use `link-curation` when reviewing ranked link suggestions, inferred graph edges, or orphan-note bridge candidates.
+- Use `vulcan tool list` for exposed callable skill commands.
+- Use `vulcan help <topic>` for integrated documentation.
+- Use `vulcan help assistant-integration` for the external-runtime contract and `vulcan agent print-config --runtime <name>` for wrapper snippets.
+- Use `vulcan describe --format openai-tools` or `--format mcp` to export machine-readable tool schemas.
+- Run `vulcan agent install` after upgrading Vulcan. Skills marked with `metadata.vulcan.managed: true` refresh automatically; same-name unmarked skills are preserved.
+- Remove `metadata.vulcan.managed` before customizing a bundled skill to opt out of refreshes. Use `vulcan agent install --reset <skill>` to restore and re-enroll one bundled skill deliberately.
+
+Common pitfalls:
+
+- Search is for note text. Query is for structured metadata.
+- Skills teach workflows and can declare callable commands. Tools are the exposed command registry. Plugins react to events.
+- Search JSON hits include `section_id` and `line_spans`; use them to follow a search hit with `note get` or `note patch` instead of reopening the full note.
+- Property typing is lenient and may need validation through `doctor`.
+- Some runtime-oriented JS APIs are still rolling out; prefer stable CLI commands when available.
