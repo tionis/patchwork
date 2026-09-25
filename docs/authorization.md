@@ -4,27 +4,42 @@ The same policy model governs streams, objects, references, snapshots, app bindi
 
 ## Status
 
-Requirements: an expressive permission language and client-side attenuation. Biscuit for both token restrictions and server authorization is the preferred prototype, not yet an unconditional dependency choice. Most users will mint scoped tokens from the server rather than attenuate tokens manually.
+Requirements: scoped permissions and client-side offline attenuation (C10). Biscuit is the preferred **token format** for identity and attenuation (C11); it is not the server's policy language. Most users mint scoped tokens from the server rather than attenuate tokens manually.
 
-Biscuit combines facts/checks with application allow/deny policies and tracks block provenance. Default authorizer trust does not let arbitrary attenuation-block facts grant rights; policy order is significant. The prototype must retain those guarantees. [Authorization policies](https://doc.biscuitsec.org/getting-started/authorization-policies), [specification](https://doc.biscuitsec.org/reference/specifications).
+Biscuit combines facts/checks with authorizer policies and tracks block provenance. Default authorizer trust does not let attenuation-block facts grant rights; the prototype must retain that guarantee. [Authorization policies](https://doc.biscuitsec.org/getting-started/authorization-policies), [specification](https://doc.biscuitsec.org/reference/specifications).
 
 ## Authority model
 
 Use one model for normal API tokens, CLI/browser sessions, and hook grants:
 
-**effective authority = current server authorization ∩ immutable issuance scope ∩ all attenuation checks ∩ credential validity.**
+**effective authority = current server grants ∩ immutable issuance scope ∩ all attenuation checks ∩ credential validity.**
 
-Use principal identity plus a stable server credential ID in the signed authority block. Store the issuance ceiling, owner, expiry, and revocation state in the server database. Token checks encode restrictions using the same authorizer vocabulary. This intentionally uses online server state; offline verification by other services is not a v1 goal. Attenuation can still be performed offline by clients.
+The four terms are evaluated by two mechanisms:
+
+| Term | Evaluated by | Source |
+| --- | --- | --- |
+| Current server grants | Typed Rust grant model | Principal/service grants in SQLite, current revision |
+| Issuance scope | Same typed grant model | Frozen ceiling stored with the credential record |
+| Credential validity | Rust | Principal enabled; credential unexpired and unrevoked; issuer key accepted; instance matches |
+| Attenuation checks | Biscuit authorizer | Checks appended to the token by holders, evaluated against server-supplied request facts |
+
+A request is allowed only when all four pass. This intentionally uses online server state; offline verification by other services is not a v1 goal. Attenuation can still be performed offline by clients.
 
 ACL additions must not widen old scoped credentials beyond their issuance ceiling. ACL removal must remove access even from previously minted tokens. Session credentials may explicitly have a broader ceiling, with a short expiry, when that is intended. Avoid introducing a parallel perpetual-capability mode initially.
 
+## Grant model (v1)
+
+A grant is `(subject, action set, resource selector)`. The subject is a principal or a service/share grant. The selector is an exact stable resource ID of a named kind, or a canonical name prefix with component-boundary matching (`foo/` matches `foo/bar`, never `foobar`). Grants are allow-only; access is removed by deleting grants, disabling principals or revoking credentials. Evaluation is plain Rust over typed rows: no user-authored rules, no Datalog on the server-policy side, and no fact pruning to prove correct.
+
+Explicit prohibitions (deny rules) and administrator-authored policy rules are deferred. If added later they must be evaluated before permits and come with a reference model and golden vectors.
+
 ## Trust origins and evaluation
 
-Only verified issuer authority blocks establish principal/credential identity. Only server-generated facts establish current resource/action, time, canonical name, current grants, resource ownership, and credential validity. Attenuation blocks may add checks, but facts they assert cannot impersonate those trusted origins.
+Only verified issuer authority blocks establish principal/credential identity. Only the server supplies request facts: operation, resource identity, canonical name, time and instance. Attenuation blocks may add checks against those facts, but facts they assert cannot impersonate trusted origins.
 
-Build authorizers with typed library APIs rather than string-interpolated Datalog. Keep reserved fact names and origin scopes in a versioned registry. No `trust previous/all blocks` shortcut in grant rules. Third-party blocks/discharge-like workflows are deferred.
+Build Biscuit authorizers with typed library APIs rather than string-interpolated Datalog. Keep reserved fact names and origin scopes in a versioned registry. No `trust previous/all blocks` shortcut. Third-party blocks/discharge-like workflows are deferred.
 
-Proposed vocabulary:
+Request-fact vocabulary for attenuation checks:
 
 | Fact | Trusted origin | Purpose |
 | --- | --- | --- |
@@ -33,21 +48,16 @@ Proposed vocabulary:
 | `instance(id)` | Server plus issuer binding | Prevent cross-instance replay |
 | `operation(action)` | Server | One exact operation under evaluation |
 | `resource(kind,id)` | Server | Stable resource identity |
-| `resource_name(name)` | Server | Canonical name for allowed prefix constraints |
+| `resource_name(name)` | Server | Canonical name for prefix checks |
 | `time(timestamp)` | Server | Current time |
-| `credential_valid(id)` | Server | Enabled, unexpired, unrevoked |
-| `current_right(principal,action,kind,id)` | Server | Current policy-derived right |
-| `issued_right(credential,action,kind,id)` | Server | Frozen issuance ceiling |
 
-This is a vocabulary proposal, not verified Biscuit source syntax. The prototype must provide compilable policy files and golden vectors before integration. Policies must require matching values across principal, credential, operation, and resource—not independent existential facts that accidentally combine unrelated rights.
+This is a vocabulary proposal, not verified Biscuit source syntax; the prototype provides compilable examples and golden vectors. Each evaluation covers exactly one operation on one resource, so a check cannot be satisfied by facts about an unrelated resource. Multi-resource operations authorize item by item.
 
-Load only relevant server facts, but prove that pruning preserves policy decisions. Arbitrary rules can depend on relations beyond the direct resource; a query planner that omits those relations is a correctness bug. Start with an explicit bounded supported server fact model and fetch its closure. Custom administrative rules are validated against that model.
-
-Default deny. Explicit server prohibitions must be evaluated before permits or compiled into mandatory checks. Do not assume a policy engine automatically implements deny-overrides. Time/fact/iteration limits fail closed with safe error categories and metrics.
+Default deny. Budget limits (token bytes, blocks, facts, iterations, time) fail closed with safe error categories and metrics.
 
 ## Permission boundaries
 
-Distinct actions include `stream.create/list/inspect/delete/watch`, `stream.config.read/write`, `metadata.read/write`, `record.append/read/subscribe`, `snapshot.list/read/create/publish/accept/delete`, `object.create/read/link/pin`, `ref.create/list/read/publish/delete`, `lease.create/renew/release`, `job.read/cancel`, `function.invoke`, `attachment.read/write`, `consumer.rebuild`, `kv.read/write`, `hook.manage`, `credential.mint/revoke`, and administrative policy/principal operations. `snapshot.accept` is scoped to a recovery requirement and distinct from publication; configuring trusted producers requires config-write authority. Redirect route/binding administration is a separate platform grant; `ref.publish`, `ref.read` or control of a matching name cannot expose a public route. See [client-produced snapshots](external-snapshots.md); these actions are not implemented APIs.
+Distinct actions include `stream.create/list/inspect/delete/watch`, `stream.config.read/write`, `metadata.read/write`, `record.append/read/subscribe`, `snapshot.list/read/create/publish/accept/delete`, `object.create/read/link/pin`, `ref.create/list/read/publish/delete`, `lease.create/renew/release`, `job.read/cancel`, `function.invoke`, `attachment.read/write`, `consumer.rebuild/skip`, `kv.read/write`, `hook.manage`, `credential.mint/revoke`, and administrative policy/principal operations. `snapshot.accept` is scoped to a recovery requirement and distinct from publication; configuring trusted producers requires config-write authority. Redirect route administration is a separate platform grant ([later integrations](later-integrations.md#redirect-serving-bindings-g-redirect-r-09)). See [client-produced snapshots](external-snapshots.md); these actions are not implemented APIs.
 
 Snapshot `read` grants payload/dependency access through that authorized snapshot context; `list` grants descriptor access only. Reading a descriptor does not authorize a bare object lookup. Verify every permitted reference path and current resource policy; global existence never grants access. An owner-scoped upload lease permits access only under its current authenticated owner policy. Root-scoped grants cover required content descendants, not optional history or unrelated roots. Client-provided root context is verified, not trusted.
 
@@ -55,7 +65,7 @@ Derived-view read never implies raw-history read. Watch access never implies met
 
 Exact ID scopes survive neither deletion/recreation nor reassignment. Prefix scopes intentionally apply to future resources matching the authorized canonical prefix; make that distinction visible in token creation UI. Prefix creation defaults do not grant prefix authority.
 
-Reference namespace checks use the canonical name with component-boundary prefixes and the stable ID/current policy at admission and CAS commit. Prefix listing filters each item and reauthorizes each page; a cursor or guessed name grants neither descriptor visibility nor target bytes. Public redirect service has a separately approved domain/path binding and destination policy. It may reveal only the approved URL by redirect, not a private object descriptor, sibling names or a broader root; binding disablement and revocation fence new admissions. Never forward caller credentials to the destination.
+Reference namespace checks use the canonical name with component-boundary prefixes and the stable ID/current policy at admission and CAS commit. Prefix listing filters each item and reauthorizes each page; a cursor or guessed name grants neither descriptor visibility nor target bytes.
 
 ## App, share and service admission
 
@@ -98,7 +108,7 @@ Hook provider secrets and optional opaque URL grants are independently revocable
 Produce a small Rust executable/test crate that uses the selected maintained library version and records its version/license. It must:
 
 1. Verify SSH challenge exchange and issue an identity/session token.
-2. Evaluate exact and prefix rights with current server facts and issuance ceilings.
+2. Combine the typed Rust grant decision (current grants ∩ issuance ceiling, exact and prefix selectors) with Biscuit attenuation checks; show that no token content can change the grant decision.
 3. Attenuate locally by action/resource/expiry and prove no widening with adversarial block facts.
 4. Enforce token expiry, credential revocation, policy changes, and session-only minting.
 5. Authorize multi-resource operations item-by-item; prefix watches need universal selector authority.

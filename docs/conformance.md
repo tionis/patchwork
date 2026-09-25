@@ -2,7 +2,7 @@
 
 This suite covers core protocol, processing, recovery and authority. [Object cases](object-conformance.md), [function cases](function-conformance.md), [client snapshot cases](external-snapshots.md) and [app cases](reference-apps.md) cover their specialized contracts. All use the same typed object, command and recovery model.
 
-This is a test specification, not a claim that tests have run. Implement fixtures and executable tests alongside the server. Invariant IDs refer to [architecture](architecture.md).
+Implement fixtures and executable tests alongside the server. Invariant IDs refer to [architecture](architecture.md).
 
 ## Harness
 
@@ -36,6 +36,7 @@ Each test records initial state, actions, expected HTTP/status/events, and durab
 | P20 | Read page budget below next record size | Return that single valid record; pagination advances |
 | P21 | Matching retry after pipeline configuration changes | Current auth/signature still checked; original receipt returned without rerunning filters |
 | P22 | Create or create-on-append mode-none stream with durable KV, replay consumer, snapshot producer or recovery requirement; then attempt attachment/config change or external snapshot publication | Every incompatible request is rejected atomically; no stream, attachment or snapshot left behind; stateless filter/validator and live subscription remain usable |
+| P23 | Append with idempotency key; session expires; re-authenticate as the same principal with a new token and retry; then retry as a different principal | Same principal gets the saved receipt and no second record; different principal gets an independent receipt scope |
 
 ## Filters, consumers, and KV
 
@@ -58,10 +59,9 @@ Each test records initial state, actions, expected HTTP/status/events, and durab
 | E15 | Retry committed conditional KV write with same key/digest after state changes | Current auth required; receipt returned before conditions reexecute; changed input conflicts |
 | E16 | PUT 720 KiB value with maximum key/content type/condition on default stream; repeat at configured lower record limit and one byte above either limit; try equivalent raw events | Accepted serialized events fit record limit; over-limit adapter PUT returns 413 and raw append is rejected; no position allocated or state changed on rejection |
 | E17 | Automerge change is retained before async peer application; missing dependency or crash stalls consumer | Append receipt proves durability only; sync-level incorporation acknowledgement waits for validated applied position, otherwise pending/stalled/retry is explicit |
-| E18 | Two offline cr-sqlite peers edit/delete concurrently, reconnect, duplicate changes and cross resource IDs | Pinned-library merge converges; accepted envelope and CRR site/db versions remain distinct from stream positions; replay/dedup and whole-resource isolation hold |
-| E19 | Hard-kill after main record commit, during sidecar apply and after sidecar commit before status propagation | Reopen/replay yields exactly one derived effect per accepted position; sidecar state and applied position never diverge; no false incorporation acknowledgement |
-| E20 | Snapshot complete CRR database at P, trim, discard sidecar, restore backup and reconnect an old peer | Schema/site/merge metadata, tombstones and applied position survive; accepted snapshot plus protected suffix rebuilds independently or recovery fails visibly; no unsafe trim |
-| E21 | Malicious SQL/schema/extension path, forged site/owner identity, unsupported uniqueness/foreign-key invariant, schema migration or oversized sync batch | No user SQL or core extension loading; identity comes from Patchwork admission, not CRR fields; schema/invariant failure is explicit; migration and native failure cannot corrupt authoritative data; work is bounded |
+| E22 | Async consumer stalls on a poison record; skip with wrong position, without `consumer.skip`, then correctly; rebuild | Wrong position 409 and missing permission 403 change nothing; correct skip advances exactly one position with audit record; rebuild reproduces the skip without re-deciding |
+
+E18–E21 (cr-sqlite) moved with that deferred integration to [later integrations](later-integrations.md#deferred-cr-sqlite-cases).
 
 ## Snapshots and GC
 
@@ -85,6 +85,7 @@ Each test records initial state, actions, expected HTTP/status/events, and durab
 | G16 | Long-stalled adapter and disk pressure | Writes rejected visibly before unsafe loss |
 | G17 | Expired GC lease / crashed worker | No stale job can publish/trim after lease invalidation |
 | G18 | Stream deleted during snapshot job | Job cannot publish into deleted/recreated resource |
+| G22 | Bounded stream with external requirement whose producer goes offline; lag crosses half then full budget under each configured action | Warning at half budget; `block_writes` rejects appends with `recovery_coverage_exceeded` and no trim beyond coverage; `suspend_requirement` needs prior config authority, records the lost guarantee and restore reports it; instance disk pressure still rejects writes |
 
 ## SQLite layout and cross-component lifetime cases
 
@@ -100,7 +101,7 @@ Each test records initial state, actions, expected HTTP/status/events, and durab
 | --- | --- | --- |
 | B01 | Kill during temp upload | No visible half-blob; stale temp cleanup |
 | B02 | Kill after file durability before catalog entry | Orphan cleanup; no dangling durable reference |
-| B03 | Link a root whose child is reachable only through a shared subtree during collection | Maintenance admission serializes outcome; indirect reachability preserved, or new link fails/retries |
+| B03 | Link a root whose child is reachable only through a shared subtree during collection | Write barrier stamps the reused closure; indirect reachability preserved, or the link fails with a retryable conflict until the cycle ends |
 | B04 | Upload an object sharing a block marked `deleting` | Wait/retry/refinalize; never success to disappearing block |
 | B05 | Expire upload lease with no other graph roots | Unreachable closure becomes eligible for collection |
 | B06 | Zero-retention event references blob | Publication does not create permanent root |
@@ -128,7 +129,7 @@ Each test records initial state, actions, expected HTTP/status/events, and durab
 | A13 | SSE queue exceeds byte or count bound | Bounded memory; lag closure; replay or explicit loss |
 | A14 | Facts/iterations/token bytes/blocks exceed budget | Bounded fail-closed result, service remains responsive |
 | A15 | Forged hook signature with matching delivery ID | Rejected before dedup/append success can be replayed |
-| A16 | Permissive policy precedes explicit deny in supplied config | Validation/compiler enforces documented deny semantics |
+| A16 | Administrative policy contains an unsupported rule form, deny rule or Datalog; grant rows compared against reference model | Unsupported policy rejected at write; typed grant decisions match the reference model for sampled exact/prefix requests |
 | A17 | Policy revision changes while mutation prepares | Commit recheck prevents stale authorized write |
 | A18 | Token body/signature/secret in error and logs | Redaction tests detect no secret leakage |
 

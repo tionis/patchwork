@@ -35,19 +35,23 @@ Retained append success means processing and durable commit completed, not that 
 
 ## Delivery scope
 
-The initial service release includes Rust/single-node storage; retained and zero-retention streams; replay/follow/watch; metadata CAS; chunked byte objects, maps, directories and references; server/client snapshots and safe retention; scoped authentication/authorization; built-in filters, KV and one verified webhook provider; CLI; an operational UI; backup/restore and measured limits.
+Work ships in stages so a usable service exists before the riskiest format decisions. The [roadmap](roadmap.md#release-stages) maps tasks to stages.
 
-The application-platform iteration adds hosted app deployments and scoped browser sessions, share redemption/accounting, and the gated Functions subsystem. Reference apps validate those capabilities incrementally. Built-ins do not depend on selecting a guest runtime. Exact release scheduling of platform tasks is not a runtime guarantee.
+1. **Streams release.** Rust/single-node storage; authenticated retained and zero-retention streams; replay/follow/watch; metadata/config CAS; built-in pipeline; transactional KV; one verified webhook provider; creation templates; scoped SSH-based authentication; CLI; DB backup/restore; measured limits. Retention is infinite, or bounded on streams without recovery requirements. No object engine is needed.
+2. **Objects and recovery release.** Byte objects with a fixed-chunk profile, references, pins, leases and online graph GC; server and client snapshots; recovery requirements and safe trim; KV snapshots; operational UI; backup with block closure.
+3. **Structured objects.** CDC byte profile, ordered maps, directories, diff and compose, adopted as additional profiles after their gates.
 
-Later gated integrations include Automerge, P2P file transfer, WebRTC media/recording, optional commit history and client-assisted block transfer. These reuse core storage and job machinery. TURN/media transport is a separate protocol integration because stream replay is not a media transport.
+The application-platform iteration adds hosted app deployments and scoped browser sessions, share redemption/accounting, and the gated Functions subsystem. Reference apps validate those capabilities incrementally. Built-ins do not depend on selecting a guest runtime.
 
-Deferred: clustering/replication, generic cross-stream transactions, arbitrary native servers, additional CRDT engines, filesystem mounts, automatic merge/proof APIs, fine-grained directory ACLs, online backups/GC until measured and proven, and protocol compatibility layers. Compatibility must not constrain the core design. No existing deployment is migrated automatically.
+Later, frozen integrations: Automerge, P2P file transfer, WebRTC media/recording, optional commit history, client-assisted block transfer and redirect-serving bindings ([later integrations](later-integrations.md)). Do not extend their specifications until the objects-and-recovery release ships. They reuse core storage and job machinery; TURN/media transport is a separate protocol integration because stream replay is not a media transport.
+
+Deferred: clustering/replication, generic cross-stream transactions, arbitrary native servers, additional CRDT engines (including cr-sqlite), filesystem mounts, automatic merge/proof APIs, fine-grained directory ACLs, administrator-authored policy rules, and protocol compatibility layers. Compatibility must not constrain the core design. No existing deployment is migrated automatically.
 
 ## Success criteria
 
 1. Curl producers and CLI readers work without SDK envelopes.
 2. A retained acknowledgement survives tested abrupt-process restart.
-3. KV and client-owned state restore from accepted snapshots plus retained suffixes.
+3. KV and client-owned state restore from accepted snapshots plus retained suffixes (objects-and-recovery release).
 4. Watch-only credentials cannot retrieve records, metadata or object bytes.
 5. Alternate routes cannot bypass pipelines, authority or commit fences.
 6. Revocation stops new work and bounds active delivery termination.

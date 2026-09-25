@@ -22,7 +22,7 @@ Execution failure is distinct from intentional rejection/drop. Default is reject
 
 One transactional `patchwork/kv/v1` materializer per stream establishes authoritative values and revisions. Its matching snapshot producer is an independent attachment. An unbypassable final validator ensures every generic/adapter append is a canonical KV operation. Adapter-request key, operation and condition must survive filters unchanged; explicitly approved value transforms are reflected in returned semantics.
 
-Canonical event is bounded UTF-8 JSON with no unknown fields. For a default 1 MiB record limit, a PUT value is provisionally capped at 720 KiB (737,280 bytes): base64 then consumes 983,040 bytes, leaving room for the bounded key, content type, condition and JSON envelope. Content type is at most 256 printable ASCII bytes. The complete serialized event must also fit the stream's configured record limit, which may be smaller; reject an oversize adapter PUT or generic append before commit. Freeze exact encoding and boundary fixtures with M3-02; a value limit never bypasses the serialized-record check:
+Canonical event is bounded UTF-8 JSON with no unknown fields. For a default 1 MiB record limit, a PUT value is provisionally capped at 720 KiB (737,280 bytes): base64 then consumes 983,040 bytes, leaving room for the bounded key, content type, condition and JSON envelope. Content type is 1–255 printable ASCII bytes, matching the record limit. The complete serialized event must also fit the stream's configured record limit, which may be smaller; reject an oversize adapter PUT or generic append before commit. Freeze exact encoding and boundary fixtures with M3-02; a value limit never bypasses the serialized-record check:
 
 ```json
 {"version":1,"op":"put","key":"theme","value_base64":"ZGFyaw==","content_type":"text/plain","condition":{"kind":"absent"}}
@@ -36,23 +36,28 @@ Initially enable KV only on an empty retained stream or a compatible snapshot pl
 
 ## KV snapshot format
 
-Use a versioned snapshot descriptor and ordered-map object over the shared tree store. The descriptor binds stream, type, boundary P and semantic config. Keys are exact UTF-8 bytes. Each value encodes either live bytes/content type/last revision or a tombstone/last revision. Large values use typed byte-object references so reachability is explicit. Key ordering, entry encoding and format profile are frozen with O-01/M3-03 fixtures.
+The descriptor binds stream, type, boundary P and semantic config. Every KV snapshot format encodes, per key in exact UTF-8 byte order, either live bytes/content type/last revision or a tombstone/last revision. Restore preserves values, key revisions and tombstones.
 
-Reject duplicate/out-of-order keys, revisions >= P, wrong stream/type/config, malformed entries and unavailable dependencies. A generic map is not a KV snapshot until validated against this format. Restore preserves values, key revisions and tombstones.
+Two formats are planned, so KV recovery does not wait on the ordered-map engine (G-PROLLY):
 
-The producer derives state from a compatible seed plus `[Q,P)` using leased immutable map edits or bounded disposable scratch indexing. Scratch state is not a second authoritative database or a source of live-state truth. Batch updates share subtrees; checkpoint/rebuild correctness does not depend on a mutable library branch. No separate mandatory export format is required for recovery.
+| Type | Payload | Available |
+| --- | --- | --- |
+| `patchwork/kv-snapshot/v1` | One `bytes/v1` object (fixed-chunk profile) holding sorted, length-prefixed canonical entries | Objects-and-recovery release (M3-03) |
+| `patchwork/kv-map-snapshot/v1` | `map/v1` ordered-map root; large values as typed byte-object references | After O-04 adopts the map engine; adds structural sharing between snapshots |
 
-## Optional CRDT-backed consumers (later prototypes)
+The byte-stream format is produced and restored by a single streaming pass. It shares no structure between snapshots, so each snapshot costs its full logical size; measure that before relying on frequent snapshots of large KV state. Entry encoding and fixtures are frozen with M3-03; the map format with O-04.
 
-Automerge and cr-sqlite are scoped integrations over retained streams, objects and accepted snapshots, not new Patchwork data primitives or built-in KV replacements. Neither is available in the bootstrap. A durable record receipt proves accepted bytes, not completion by an asynchronous CRDT consumer; expose its applied position, pending/stalled state and a separately defined incorporation acknowledgement. Mode `none` cannot host either integration.
+Reject duplicate/out-of-order keys, revisions >= P, wrong stream/type/config, malformed entries and unavailable dependencies. A generic byte object or map is not a KV snapshot until validated against its format.
+
+The producer derives state from a compatible seed plus `[Q,P)` using a streaming merge, leased immutable map edits or bounded disposable scratch indexing. Scratch state is not a second authoritative database or a source of live-state truth. No separate mandatory export format is required for recovery.
+
+## Optional CRDT-backed consumers (later)
+
+Automerge is a scoped later integration over retained streams, objects and accepted snapshots, not a new Patchwork data primitive or built-in KV replacement. A durable record receipt proves accepted bytes, not completion by an asynchronous CRDT consumer; expose its applied position, pending/stalled state and a separately defined incorporation acknowledgement. Mode `none` cannot host it.
 
 The [Automerge document contract](reference-apps.md) owns its peer protocol and causal snapshot rules. The server may validate and retain document changes, but must not treat session sync frames as immutable changes or a rendered JSON projection as a recoverable snapshot. An encrypted client-only document remains opaque and uses external snapshot acceptance.
 
-A later cr-sqlite prototype may materialize one approved, resource-scoped CRR schema in a trusted **derived** SQLite database. Patchwork's main SQLite database remains the sole mutable authority for stream records, policy, accepted snapshot descriptors and roots; the derived database can be discarded and rebuilt. Do not load the extension into core database connections, enable user-selected extension loading, accept arbitrary SQL/schema changes or expose its tables as a general collection API. Pin the extension, SQLite compatibility, schema and query surface; decide process isolation and sidecar layout from fault/scale tests. Initial sync is whole-resource, not arbitrary row-filtered multi-tenant replication. Resource grants, membership and quotas remain outside the CRR. A CRR site ID or row owner field is data, never authentication; Patchwork binds every accepted change to an authenticated principal and resource scope and validates permitted tables/columns.
-
-CRR site IDs, database versions and merge metadata are not Patchwork stream positions. Upstream `crsql_changes` exposes current merge state plus metadata rather than a complete event history; a replayable record envelope and deduplication rules must be proven with the pinned library, including deletes, concurrent/offline edits and schema changes. Apply each accepted record and advance the derived applied position in **one sidecar transaction**, making retries after a crash idempotent. A lag marker copied into the main database is observational, never the sole recovery checkpoint. Do not claim atomic commit across the main WAL database and a sidecar; acknowledge incorporation only after the sidecar commit.
-
-A compatible accepted snapshot at boundary P must reconstruct the complete CRR state, schema, site/merge metadata and applied position, not only visible rows. Protect a contiguous suffix from P until an independently restored sidecar reaches the required boundary; otherwise restoration fails visibly and trim stalls. The sidecar is excluded from authoritative backup only when the backup retains a usable accepted anchor plus suffix. Library migrations, peer catch-up after trim, non-primary uniqueness/foreign-key assumptions, resource budgets and native-extension isolation remain G-CRSQL gates. [cr-sqlite changes](https://vlcn.io/docs/cr-sqlite/api-methods/crsql_changes), [constraints](https://vlcn.io/docs/cr-sqlite/constraints), [migrations](https://vlcn.io/docs/cr-sqlite/migrations), [SQLite multi-file WAL atomicity](https://www.sqlite.org/lang_attach.html).
+A cr-sqlite derived consumer is deferred (F-05); its constraints are preserved in [later integrations](later-integrations.md#cr-sqlite-derived-consumer-g-crsql-deferred-under-f-05).
 
 ## Forge webhook ingress
 

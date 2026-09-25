@@ -14,17 +14,19 @@ Inspect pinned dependency source/APIs, licenses and executable behavior at adopt
 
 ## Delivery sequence
 
+Milestones group related tasks; [release stages](roadmap.md#release-stages) decide what ships together.
+
 | Milestone | Deliverable / exit evidence |
 | --- | --- |
-| M0 | Repository safety, Rust foundation, Biscuit/SSH prototypes and authorization budgets |
+| M0 | Repository safety, Rust foundation, typed grant model, Biscuit attenuation/SSH prototypes and authorization budgets |
 | M1 | Authorized retained streams, config/metadata/lifecycle, common pipeline, idempotency and hard-kill evidence |
-| M2 + O | Shared bytes/maps/directories/refs, leases, typed server/client snapshots and safe retention/collection |
-| M3 | Transactional KV, independent snapshot restore, signed webhook and creation templates |
-| M4 | Follow/live/watch, scoped CLI and operational UI |
-| M5 | Backup/restore, runbook, measured limits, complete protocol/fault conformance |
+| M3 | Built-in pipeline, transactional KV, signed webhook and creation templates (KV snapshots in stage 2) |
+| M4 | Follow/live/watch and scoped CLI (operational UI in stage 2) |
+| O + M2 | Fixed-profile byte objects, refs, leases, online GC, server/client snapshots and safe retention; CDC/maps/directories in stage 3 |
+| M5 | Online backup/restore, runbook, measured limits, conformance per release stage |
 | R + S | Hosted apps and approved Functions over the same primitives; reference fixtures before broad integration |
 
-Dependencies, not numerical order, govern work: the pipeline precedes public append, and object/authorization gates precede publication. Media/CRDT integrations do not block validation of Quotes or hosted shares.
+Dependencies, not numerical order, govern work: the pipeline precedes public append, and object/authorization gates precede publication. Stage 1 (streams) needs no object engine. Media/CRDT integrations do not block validation of Quotes or hosted shares.
 
 ## Required deliverables
 

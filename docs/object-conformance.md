@@ -1,6 +1,6 @@
 # Object system conformance plan
 
-All cases below are **specified, not implemented or run**. They supplement the P/A/B/E/G cases in [core conformance](conformance.md). Use isolated directories, deterministic fixture profiles and fault injection. See [unified design](unified-design.md) for the proposed semantics; O-01 defines logical fixtures; O-02 freezes byte encodings with real-library evidence before persistent-format implementation.
+These cases supplement the P/A/B/E/G cases in [core conformance](conformance.md). Use isolated directories, deterministic fixture profiles and fault injection. See [unified design](unified-design.md) for the proposed semantics; O-01 defines logical fixtures; O-02 freezes the descriptor scheme and fixed-chunk byte profile; O-10 adds CDC/map profiles with real-library evidence.
 
 | ID | Scenario | Required result |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ All cases below are **specified, not implemented or run**. They supplement the P
 | OBJ-15 | Lost publication response and same/different idempotency input | One committed publication for matching retry; conflict for changed request; current authorization still required |
 | OBJ-16 | Guess root/chunk hash, cross-principal reuse, unauthorized diff/transfer | No bytes/link authority or global existence response; permitted root context/session required |
 | OBJ-17 | Revoke credential during read/transfer/job; reuse old cursor or GC pin | Delivery/admission stops within existing bound; pin/cursor does not preserve permission |
-| OBJ-18 | GC with shared roots, leases, in-flight readers and an attempted publication | All required content retained; maintenance admissions gated; expired unrooted content eventually reclaimed |
+| OBJ-18 | GC with shared roots, leases, in-flight readers and an attempted publication | All required content retained; writes continue during the cycle and the barrier stamps reused nodes; expired unrooted content eventually reclaimed |
 | OBJ-19 | Kill/ENOSPC at block finalization, catalog/root publication and physical deletion | Previously acknowledged roots complete after restart; no dangling published dependencies; orphan cleanup safe |
 | OBJ-20 | Snapshot tree at P, mixed recovery requirements, trim, restart and rebuild | Existing G01–G18 invariants hold; root does not substitute for position/provenance; revisions/tombstones preserved |
 | OBJ-21 | Transfer malformed/missing blocks, cancelled session and resume | Root invisible until validated/durable; partial content leased; root-scoped resume without unauthorized probes |
@@ -29,8 +29,8 @@ All cases below are **specified, not implemented or run**. They supplement the P
 | OBJ-23 | Huge batch, pathological tree, chunk flood, compressed expansion and slow client | Work/bytes/depth/memory quotas fail closed; no runaway recursion, allocation or unbounded transaction |
 | OBJ-24 | Library/profile upgrade and old-object read/export | Declared compatibility path tested; unsupported format rejected; no silent root reinterpretation |
 | OBJ-25 | Hierarchical ref names with absent parents, boundary prefix, invalid/colliding names, deletion/recreation and page churn | Unique canonical names; no implicit parent/create; `foo/` excludes `foobar`; stable ID changes on recreation; bounded page order/cursors without hidden item leakage |
-| OBJ-26 | Concurrent CAS, fixed target-kind mismatch, failed link/pipeline, old-root reader and maintenance GC | One winner; no dangling new root; current closure retained; replaced root survives only other owner or admitted lease; no stale-grant resurrection |
+| OBJ-26 | Concurrent CAS, fixed target-kind mismatch, failed link/pipeline, old-root reader and a concurrent GC cycle | One winner; no dangling new root; current closure retained; replaced root survives only other owner or admitted lease; no stale-grant resurrection |
 | OBJ-27 | Public redirect GET/HEAD with private sibling, route disable/expiry, hostile URL forms and reused name | Only approved bound descriptor yields 302/Location; exact-ID binding does not follow name reuse; prefix binding needs explicit approval; no descriptor/sibling leak or URL supplied by request; invalid policy and stale binding fail closed |
 | OBJ-28 | Redirect target update, cached client, appended query, Authorization/Cookie, POST, high-rate hits and accounting fault | No forwarded credentials/query/body or server fetch; conservative temporary caching contract; abuse/usage limits enforced; no promise to revoke already cached redirects |
 
-The O-02 spike measures OBJ-01/03–08 subsets with real libraries; it does not complete public protocol, authorization, crash or GC cases. Keep measured results separate from planned cases and distinguish graceful reopen, hard process kill and filesystem/power-loss evidence.
+The O-10 spike measures OBJ-01/03–08 subsets with real libraries; it does not complete public protocol, authorization, crash or GC cases. Keep measured results separate from planned cases and distinguish graceful reopen, hard process kill and filesystem/power-loss evidence.

@@ -1,6 +1,6 @@
 # Implementation status
 
-Verified bootstrap: 2026-09-23, Linux x86_64, Rust/Cargo 1.98.1. **Bootstrap complete; M0/M1 remain partial.** Start with [design index](index.md), [roadmap](roadmap.md) and [development commands](development.md).
+Verified bootstrap: 2026-09-23 (design revised 2026-09-25), Linux x86_64, Rust/Cargo 1.98.1. **Bootstrap complete; M0/M1 remain partial.** Start with [design index](index.md), [roadmap](roadmap.md) and [development commands](development.md).
 
 ## Available behavior
 
@@ -14,7 +14,7 @@ All public data/auth/admin APIs, objects/references, snapshots/GC, pipelines, KV
 
 Implementation choices: one repository-root Rust package; exact toolchain/lockfile; explicit data directory and `patchwork-v1.sqlite3` with application ID `0x50574348` and schema version 1; foreign/future DB refusal; canonical UUID IDs; checked counters; 1 MiB records and bounded pages; local HTTP-only health CLI. [Dependency decisions](dependency-decisions.md) records APIs, licenses and prototype findings.
 
-The design uses three data primitives (objects, references, streams), one authoritative SQLite transaction domain, one object graph and one job/lease lifecycle. Directory/app/snapshot formats compose these. Hierarchical named references are SQLite-indexed typed-root pointers with CAS and root retention, not a second mutable KV engine. A short-link route is a separately gated binding over a typed redirect descriptor, not a URL-valued reference or server proxy. Multi-key app changes use map batch + ref CAS; commands append at most one record. Server and external recovery requirements share trim safety. The operational UI and hosted apps use one browser session implementation with separate origin, audience and grant ceilings; a fresh SSH handoff is required for operational mint provenance. Exact format, runtime and integration choices remain gates, not implemented features.
+The design uses three data primitives (objects, references, streams), one authoritative SQLite transaction domain, one object graph and one job/lease lifecycle. Directory/app/snapshot formats compose these. Hierarchical named references are SQLite-indexed typed-root pointers with CAS and root retention, not a second mutable KV engine. Multi-key app changes use map batch + ref CAS; commands append at most one record. Server and external recovery requirements share trim safety and per-requirement lag budgets. Server authorization is a typed allow-only grant model; Biscuit carries identity and attenuation only. GC and backup are designed to run online. Work is staged: streams, then objects and recovery, then structured objects; later integrations are frozen. The operational UI and hosted apps use one browser session implementation with separate origin, audience and grant ceilings; a fresh SSH handoff is required for operational mint provenance. Exact format, runtime and integration choices remain gates, not implemented features.
 
 ## Executed bootstrap verification
 
@@ -40,4 +40,4 @@ Run `vulcan --vault docs --output json doctor --fail-on-issues` from the reposit
 
 ## Next work and safety
 
-**Next task: O-01**, logical object contracts and candidate fixture vectors, followed by O-02 real-library evaluation and final encoding freeze. Independent authorization work is M0-05; Functions begins with S-01 core-command/host fixtures. G-AUTH/G-SSH, format/graph, sandbox, crash and capacity gates remain open.
+**Next task: M1-04** (stream lifecycle, config/metadata CAS, logical segments), on the stage-1 streams path in the [roadmap](roadmap.md#release-stages). M0-05 (typed grant model plus Biscuit attenuation) and M0-06 (SSHSIG) proceed in parallel. Object work (O-01) starts in stage 2. G-AUTH/G-SSH, format/graph, sandbox, crash and capacity gates remain open.

@@ -1,8 +1,8 @@
 # Patchwork system design
 
-Revision 2026-09-23. Patchwork is a single-node backend for scripts and applications, built from immutable objects, revisioned references and ordered streams. Shared authorization, processing, retention and execution services make those primitives safe to compose.
+Revision 2026-09-25. Patchwork is a single-node backend for scripts and applications, built from immutable objects, revisioned references and ordered streams. Shared authorization, processing, retention and execution services make those primitives safe to compose.
 
-This is the implementation plan, not a claim that the service is complete. [Implementation status](implementation-status.md) records what actually runs; [development](development.md) contains commands. Schemas and signatures are logical contracts until frozen by their format/API gates.
+This is the implementation plan, not a claim that the service is complete. [Implementation status](implementation-status.md) records what actually runs; [development](development.md) contains commands. Schemas and signatures are logical contracts until frozen by their format/API gates. **Every conformance case in this wiki is specified, not executed, unless implementation status records it as run**; individual documents do not repeat this.
 
 ## Reading order and document ownership
 
@@ -12,9 +12,9 @@ This is the implementation plan, not a claim that the service is complete. [Impl
 4. [Storage](storage.md): transactions, object graph, recovery and collection; [client-produced snapshots](external-snapshots.md) defines external production and encrypted-state trust.
 5. [Authorization](authorization.md): identity, delegation, trusted facts and revocation.
 6. [Processing](processing.md) and [Functions](functions-design.md): built-ins and scoped sandbox execution.
-7. [Applications](reference-apps.md): hosting, sessions and end-to-end usage contracts.
+7. [Applications](reference-apps.md): hosting, sessions and end-to-end usage contracts; [later integrations](later-integrations.md) holds frozen and deferred integration contracts (redirect bindings, cr-sqlite).
 8. [Acceptance plan](conformance.md), [object cases](object-conformance.md) and [function cases](function-conformance.md): required evidence.
-9. [Decisions and gates](decisions.md), [implementation workflow](implementation-guide.md) and [roadmap](roadmap.md): stable requirements, unresolved choices and verifiable tasks.
+9. [Decisions and gates](decisions.md), [implementation workflow](implementation-guide.md) and [roadmap](roadmap.md): stable requirements, unresolved choices, release stages and verifiable tasks.
 
 Each subject has one owning specification; other documents link to it rather than define a competing contract. Correct inconsistencies in documents and affected tests before implementation. There is no separate combined design copy.
 
@@ -25,7 +25,8 @@ The [storage contract](storage.md) includes a cross-component data-lifetime tabl
 - **Requirement:** stable product or safety property, listed as C01–C19 and I01–I12.
 - **Default:** selected implementation policy that may change with documented rationale and matching tests.
 - **Gate:** evidence needed before choosing a format/library or enabling a capability.
-- **Deferred:** outside the initial service release; no placeholder success responses.
+- **Frozen:** specified for a later stage; do not extend until the objects-and-recovery release ships.
+- **Deferred:** outside the planned releases; no placeholder success responses.
 
 Unresolved gates are explicit implementation work, not alternative architectures silently available to production. Runtime availability and verification results belong in implementation status.
 

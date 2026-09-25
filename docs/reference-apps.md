@@ -1,6 +1,6 @@
 # Reference apps and platform acceptance scenarios
 
-Design revision 2026-09-23. These application contracts exercise the [system primitives](unified-design.md): expiring file shares/P2P, chat/media, Automerge todos and quotes, plus release, album and intake scenarios. They are specifications, not available apps. Per-user storage quotas and per-share usage limits are separate. Numeric limits, browser compatibility and integration versions require measured gates.
+Design revision 2026-09-25. These application contracts exercise the [system primitives](unified-design.md): expiring file shares/P2P, chat/media, Automerge todos and quotes, plus release, album and intake scenarios. Per-user storage quotas and per-share usage limits are separate. Numeric limits, browser compatibility and integration versions require measured gates.
 
 ## Shared Apps contract to exercise
 
@@ -29,7 +29,7 @@ Domain bindings verify ownership before routing/TLS activation; exact Host/SNI d
 | Photo album | Originals, derivative roots, manifests and processing jobs | Upload progress | Scoped workers, bounded expensive processing and explicit roots |
 | Intake form | Private submissions stream and owner materialization | Rate limiting | Submit-only guest permission without list/read access |
 
-A short-link app creates a typed immutable HTTPS redirect descriptor, then publishes its root under a named reference with revision CAS. An approved domain/path binding serves GET/HEAD redirects without exposing general reference or object APIs; route administration is separate from ref publication. Expiry, hit/egress limits and public visibility are binding/ledger policy rather than magic reference fields. A destination update preserves the link name but may not invalidate a redirect already cached by a browser; use temporary responses and conservative caching by default. If arbitrary external destinations are allowed, use an isolated untrusted origin and pass G-REDIRECT abuse, URL validation, and credential-leak fixtures. This app introduces no generic URL-valued reference or server-side proxy.
+A short-link app publishes typed redirect descriptors under named references and serves them through a separately approved route binding; the contract lives in [later integrations](later-integrations.md#redirect-serving-bindings-g-redirect-r-09) and is frozen.
 
 ## 1. Expiring file sharing
 
@@ -145,7 +145,7 @@ Bindings: collection create, quote commands, bounded queries, watch hints, publi
 
 ## Proposed acceptance cases
 
-All cases are **specified only**. Use non-admin users and malicious/old clients, isolated storage, fake clocks and failure injection; verify server behavior rather than just UI hiding. Relate object tests to OBJ-01–OBJ-24 and base tests to the A/P/B/E/G cases in [core conformance](conformance.md).
+Use non-admin users and malicious/old clients, isolated storage, fake clocks and failure injection; verify server behavior rather than just UI hiding. Relate object tests to OBJ-01–OBJ-24 and base tests to the A/P/B/E/G cases in [core conformance](conformance.md).
 
 | ID | Scenario | Acceptance |
 | --- | --- | --- |

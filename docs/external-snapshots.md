@@ -34,7 +34,7 @@ For a proposed new head H, each requirement needs a currently accepted compatibl
 
 The trim transaction rechecks requirement set/config, current acceptance policy, lifecycle, anchor roots and source/output protection, then atomically updates head and record roots. A policy change cannot silently invalidate the last usable anchor after history was removed: require a compatible replacement or explicit authorized removal of that recovery guarantee. Revoking an uploader does not erase already committed data or automatically invalidate a previously accepted anchor; policy determines future acceptance.
 
-An offline external producer stalls trimming beyond its accepted boundary. Report the blocking requirement; under disk pressure reject writes rather than bypass safety. Removing a requirement needs config authority and explicit acknowledgment of the lost guarantee. With no configured recovery requirements, ordinary retention can trim without a snapshot, under the same source-lease and lifecycle checks. Protect selected anchors and dependencies from deletion; acceptance alone does not imply unlimited retention of every historical snapshot.
+An offline external producer stalls trimming beyond its accepted boundary. Its [coverage lag budget](storage.md#recovery-requirement-lag-budgets) reports it and then applies the configured action (by default, blocking writes to that stream); under instance disk pressure reject writes rather than bypass safety. Removing a requirement needs config authority and explicit acknowledgment of the lost guarantee. With no configured recovery requirements, ordinary retention can trim without a snapshot, under the same source-lease and lifecycle checks. Protect selected anchors and dependencies from deletion; acceptance alone does not imply unlimited retention of every historical snapshot.
 
 ## Client-side encryption
 
@@ -42,7 +42,7 @@ Patchwork stores ciphertext and does not need decryption keys. It can check ciph
 
 Dependencies hidden in encrypted manifests must also be declared in an authorized server-visible dependency envelope, or packaged in a self-contained opaque object with no hidden external dependencies. Declared roots, sizes, timing and dependency edges leak metadata; encrypted payloads do not hide them. Deduplication applies to identical ciphertext only; randomized encryption generally reduces reuse. Do not introduce convergent encryption or server decryption merely to preserve deduplication. Clients authenticate the encrypted state and its binding to stream/type/boundary according to their chosen format; a server acceptance flag is not cryptographic proof of plaintext correctness.
 
-## Acceptance cases (specified, not executed)
+## Acceptance cases
 
 | ID | Scenario | Required result |
 | --- | --- | --- |
@@ -51,10 +51,10 @@ Dependencies hidden in encrypted manifests must also be declared in an authorize
 | SNAP-03 | Encrypted local reconstruction, upload, download and client restore | Byte-exact ciphertext; client verifies state/boundary; server has no plaintext/key requirement |
 | SNAP-04 | Missing incremental dependency, unauthorized link or hidden reference | Declared missing/unauthorized closure rejected; opaque completeness remains explicit trusted assertion; declared closure survives GC |
 | SNAP-05 | Lease expiry, stream deletion/recreation, config change or revocation races | Stale publication/acceptance/trim fails; no dangling root or false completeness claim |
-| SNAP-06 | Mixed server/external requirements, different anchor boundaries, offline producer | Every requirement protected; no trim beyond external coverage; visible stall and safe disk-pressure failure |
+| SNAP-06 | Mixed server/external requirements, different anchor boundaries, offline producer | Every requirement protected; no trim beyond external coverage; visible stall, lag-budget action (G22) and safe disk-pressure failure |
 | SNAP-07 | Historical snapshot below head or missing suffix | Publication not confused with recoverability; restore reports unavailable history rather than fabricating state |
 | SNAP-08 | Crash/lost response between upload, publication, acceptance and trim | Each committed phase recoverable; scoped retries do not duplicate publication; head and roots remain consistent |
 | SNAP-09 | Delete last anchor, change trusted publisher/policy or revoke uploader | Protected anchor retained; unsafe policy transition rejected; committed data not erased by credential revocation |
 | SNAP-10 | Wrong key/epoch, forged boundary binding or valid signature over incorrect state | Client integrity failures explicit; signature alone never advertised as semantic validation |
 
-The shared source/object leases, receipts and jobs are reused; no client-specific upload store or collector is needed. M2-06 must provide executable fixtures for these cases. Format/auth/graph/durability gates remain open; no client snapshot, encryption or crash tests have run.
+The shared source/object leases, receipts and jobs are reused; no client-specific upload store or collector is needed. M2-06 provides executable fixtures for these cases.

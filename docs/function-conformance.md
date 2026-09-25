@@ -1,6 +1,6 @@
 # Function conformance plan
 
-All **FN-01–FN-24 are specified, not executed**. They validate [Functions design](functions-design.md) using real selected runtimes and non-admin identities, isolated data, deterministic fixtures, controlled external test receivers and fault injection. Test the host/broker as well as the guest engine. Existing P/A/E/G and OBJ cases still apply.
+FN-01–FN-24 validate [Functions design](functions-design.md) using real selected runtimes and non-admin identities, isolated data, deterministic fixtures, controlled external test receivers and fault injection. Test the host/broker as well as the guest engine. Existing P/A/E/G and OBJ cases still apply.
 
 | ID | Scenario | Required result |
 | --- | --- | --- |

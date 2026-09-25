@@ -22,7 +22,7 @@ These are schema responsibilities, not ready migrations. Use checked IDs/counter
 | Recovery requirements/acceptances | Stream-scoped format/config; producer/trust policy revision; selected accepted anchors and approving identity |
 | Attachments/checkpoints | Stream-scoped implementation/config; materialized state; next input position; worker generation |
 | KV/index state | Scoped keys/values and mutation/tombstone revisions; namespace revision for coarse predicate tracking |
-| Receipts | Stable resource/lineage/operation/key; canonical input digest; pinned execution identity; saved result and expiry |
+| Receipts | Stable resource/principal (or delegated grant)/operation/key; canonical input digest; pinned execution identity; saved result and expiry |
 | Jobs | Kind; owner/capability scope; pinned inputs/config; state, retries, generation, progress/output roots and safe error |
 | Principals/credentials/grants | Current and issued rights, ownership, expiry, revocation and revisions |
 | Platform config | Creation rules, hooks, app bindings/domains, approved function installations and secret references |
@@ -30,7 +30,7 @@ These are schema responsibilities, not ready migrations. Use checked IDs/counter
 
 Use the same root/lease machinery for uploads, readers, snapshots, app assets, transfers and jobs. Source-range protection additionally blocks logical trim. A lease protects lifetime, not authority. Keep typed purpose-specific constraints; shared machinery does not imply arbitrary public access to internal tables.
 
-Reference names live in the authoritative SQLite catalog, with a uniqueness constraint and an index supporting exact lookup and bounded prefix scans. Do not make an immutable prolly map another mutable reference authority. A reference CAS changes its current root, revision, root ownership and optional publication record in one transaction; deleting it releases only that owner's root. Namespace quotas and listing cost need G-LIMITS evidence. Redirect descriptors are ordinary typed objects: URL bytes carry no graph edge or server-fetch obligation. Public route bindings, destination policy and usage accounting are separate host-owned platform state, not fields trusted from the descriptor or inferred from a reference name.
+Reference names live in the authoritative SQLite catalog, with a uniqueness constraint and an index supporting exact lookup and bounded prefix scans. Do not make an immutable prolly map another mutable reference authority. A reference CAS changes its current root, revision, root ownership and optional publication record in one transaction; deleting it releases only that owner's root. Namespace quotas and listing cost need G-LIMITS evidence. Redirect descriptors and their route bindings are specified in [later integrations](later-integrations.md#redirect-serving-bindings-g-redirect-r-09).
 
 Persist positions/revisions as nonnegative signed 64-bit integers with checked increments. Tail may reach `i64::MAX`; the last appendable position is `i64::MAX - 1`. Never order records by wall-clock time.
 
@@ -80,11 +80,23 @@ Let current head be H and proposed cutoff P, with `H <= P <= tail`. A recovery r
 2. For every requirement select an accepted compatible anchor Q with `P <= Q <= tail`, or, for a server-managed producer lacking such an anchor, plan an advance to P. To advance, choose a seed at q <= P with complete protected `[q,P)`; without a seed require genesis history. A seed below head with a gap is unusable. External requirements lacking coverage stall or lower the cutoff; the server cannot compute encrypted state on their behalf.
 3. Run each necessary server producer outside the transaction over exactly `[q,P)`. Inputs are the compatible seed and pinned semantic config, not an unverified live materialization. Bound work and finalize output objects/dependencies under leases.
 4. In one short SQLite transaction recheck head, lifecycle, complete requirement/policy set, acceptance and worker generations, source/output leases and durable root closure. Each requirement must have a usable accepted anchor at or beyond P with contiguous retained suffix to current tail. Insert new snapshots/acceptances/roots, remove record roots and rows `<P`, advance head to P and update summaries atomically. Any failed check leaves the old head intact.
-5. Release job protection. Unreachable blocks become physical-collection candidates; collection is a separate maintenance operation, not required for logical trim success.
+5. Release job protection. Unreachable blocks become physical-collection candidates; collection is a separate background operation, not required for logical trim success.
 
 Bound each cutoff step so transactions remain short. Existing anchors need not be regenerated just to trim to an earlier position. A consumer restoring an anchor at Q > head starts replay at Q; it must not replay earlier retained records into that state.
 
 With no recovery requirements, ordinary retention can trim under the same lifecycle/revision/source-lease checks. Attaching a requirement after history disappeared requires a compatible accepted seed plus available suffix, or explicit failure. Never treat missing history as empty state.
+
+### Recovery requirement lag budgets
+
+An offline external producer or stalled server producer must not silently turn into instance-wide disk exhaustion. Each recovery requirement on a stream with bounded retention declares a **coverage lag budget**: the maximum records, logical bytes and/or age between its newest accepted anchor and tail. The default budget is twice the stream's retention bounds; numeric defaults are confirmed at G-LIMITS.
+
+- Past half the budget, health and stream status report the lagging requirement and its producer.
+- Past the full budget, the requirement's configured action applies:
+  - `block_writes` (default): the stream rejects new appends with a typed `recovery_coverage_exceeded` problem until coverage catches up. This confines the failure to one stream instead of letting it exhaust shared disk.
+  - `suspend_requirement`: a pre-authorized, explicit loss of the guarantee. The requirement is marked suspended, stops constraining trim, and records the approving config revision; restore through it reports `recovery_guarantee_suspended` until a newly accepted anchor restores coverage and the requirement is re-enabled.
+- Choosing `suspend_requirement` needs the same config-write authority and acknowledgement as removing the requirement. Instance-wide disk pressure still rejects writes regardless of any budget.
+
+Streams with infinite retention never trim, so lag budgets there only drive reporting.
 
 ## Snapshot compatibility and lifetime
 
@@ -101,8 +113,14 @@ Typed object nodes declare direct required edges once. Snapshot roots traverse t
 1. Stream bounded uploads through the canonical chunker into server-generated temporary paths on the block-store filesystem. Reserve quota; verify cryptographic hashes, sizes and typed structure.
 2. Synchronize each block, install atomically at its internal hash-derived location and synchronize directories as required by the platform.
 3. Register durable blocks/edges and upload/job protection before publishing a descriptor/root. Full required closure must be validated and protected. Interrupted work may leave conservative orphans, never a successful dangling root.
-4. Initial graph GC enters maintenance: pause/drain graph mutations and new root/lease acquisition, preserve admitted reader protection, mark from durable roots and live leases, then sweep only unreachable blocks. Do not treat “no direct root” as “unreachable”: a child can be required through many shared parents.
-5. Mark candidates deleting, unlink/synchronize, then remove catalog entries. Interrupted deletion is reconciled on restart. Reupload/link cannot succeed against a path scheduled for deletion; maintenance admission serializes it. Online GC requires its own proven barrier/epoch protocol.
+4. Graph collection is an online, epoch-fenced mark/sweep (D17); writes, publication and ingestion continue:
+   - **Start:** in one short transaction advance the GC epoch to E and capture the root set: every durable root owner and unexpired lease.
+   - **Mark:** traverse validated edges from the captured roots in bounded batches. Edges are immutable, so each batch is a short read. Do not treat “no direct root” as “unreachable”: a child can be required through many shared parents.
+   - **Barrier:** from E onward, every transaction that registers a block/edge, reuses an existing block by deduplication, creates an edge to an existing node, or acquires a root/lease on an existing node stamps that node `touched_epoch = E`. If the node is not already marked in this cycle, the stamp covers its whole closure, or the operation fails with a retryable conflict until the cycle ends.
+   - **Sweep candidates:** blocks that are unmarked after mark completes and have `touched_epoch < E`.
+5. For each candidate, one transaction rechecks that it is still unmarked and untouched and marks it `deleting`. Then unlink and synchronize, then remove catalog entries. Deduplication that finds a `deleting` block writes a fresh copy instead of reusing it. Interrupted deletion is reconciled on restart.
+
+The G-GRAPH proof obligation: every block reachable from any root or lease at any instant of the cycle is marked or stamped before sweep. Establish it with model-based race tests (OBJ-18, B03, B04). Until then, physical collection stays disabled (storage may leak; nothing required is lost). An operator-invoked maintenance-mode collector that pauses graph mutations is an acceptable interim tool, not the default.
 
 Startup reconciles deleting entries, temporary files, conservative orphan grace periods and expired jobs/leases. A block is never removed merely because an in-memory cache is empty. A crash may leak storage until reconciliation; it may not lose an acknowledged root.
 
@@ -120,4 +138,4 @@ Deletion tombstones identity, removes the live name, fences workers and closes s
 
 Migrations run under exclusive startup coordination before readiness. Refuse foreign/newer schemas and silent downgrades. Back up before destructive upgrades; no automatic conversion of another deployment.
 
-Initial backup enters maintenance, drains mutations/jobs, stops collection, uses SQLite's supported backup mechanism and copies the complete required block closure, retained history, config and necessary key material into a checksummed manifest. Keep mutations paused until complete. Restore into a fresh directory; verify closure, positions, revisions, checkpoints and revocations before traffic. Never copy only the main DB file while an active WAL may hold commits. Secret backups require operator-controlled access. Backups complement, not replace, snapshot retention.
+Backup is online (D17). It holds the backup lock, which excludes GC sweeps but not writes, and takes a consistent database copy with SQLite's online backup API or `VACUUM INTO`. It then copies the complete block closure of every root and lease recorded in that copy, plus config and necessary key material, into a checksummed manifest. Blocks are immutable and only the sweep deletes them, so the copy stays coherent while writes continue; blocks created after the database copy are simply not included. Before objects exist (streams release), backup is the database copy alone. Restore into a fresh directory; verify closure, positions, revisions, checkpoints and revocations before traffic. Never copy only the main DB file while an active WAL may hold commits. Secret backups require operator-controlled access. Backups complement, not replace, snapshot retention.
