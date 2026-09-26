@@ -1,4 +1,5 @@
 //! Internal bootstrap storage API. Not an authorized application API.
+pub mod auth;
 pub mod cli;
 pub mod config;
 pub mod error;
