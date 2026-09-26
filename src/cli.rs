@@ -84,6 +84,8 @@ pub enum Command {
         from: String,
         #[arg(long, default_value_t = 100)]
         limit: usize,
+        #[arg(long, default_value_t = 4 * 1024 * 1024)]
+        max_bytes: usize,
     },
     /// Write one record as exact bytes to stdout.
     Get {
@@ -230,7 +232,12 @@ pub enum StreamCommand {
 }
 #[derive(Subcommand)]
 pub enum TokenCommand {
-    List,
+    List {
+        #[arg(long)]
+        after: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
     Whoami,
     Inspect,
     Attenuate {
@@ -263,7 +270,12 @@ pub use commands::run;
 
 #[derive(Subcommand)]
 pub enum PrincipalCommand {
-    List,
+    List {
+        #[arg(long)]
+        after: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
     Create {
         #[arg(long)]
         file: std::path::PathBuf,

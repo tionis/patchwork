@@ -123,11 +123,9 @@ pub async fn run(command: Command) -> Result<()> {
                     command,
                 },
         } => match command {
-            PrincipalCommand::List => {
-                print_json(
-                    request(&connection, reqwest::Method::GET, "admin/principals", None).await?,
-                )
-                .await?
+            PrincipalCommand::List { after, limit } => {
+                let path = admin_page("admin/principals", after.as_deref(), limit)?;
+                print_json(request(&connection, reqwest::Method::GET, &path, None).await?).await?
             }
             PrincipalCommand::Create { file } => {
                 print_json(
@@ -473,6 +471,7 @@ pub async fn run(command: Command) -> Result<()> {
             stream_id,
             from,
             limit,
+            max_bytes,
         } => {
             stream_id.parse::<StreamId>()?;
             from.parse::<Position>()?;
@@ -480,7 +479,7 @@ pub async fn run(command: Command) -> Result<()> {
                 request(
                     &connection,
                     reqwest::Method::GET,
-                    &format!("streams/{stream_id}/records?from={from}&limit={limit}"),
+                    &format!("streams/{stream_id}/records?from={from}&limit={limit}&max_bytes={max_bytes}"),
                     None,
                 )
                 .await?,
@@ -510,11 +509,9 @@ pub async fn run(command: Command) -> Result<()> {
             connection,
             command,
         } => match command {
-            TokenCommand::List => {
-                print_json(
-                    request(&connection, reqwest::Method::GET, "auth/credentials", None).await?,
-                )
-                .await?
+            TokenCommand::List { after, limit } => {
+                let path = admin_page("auth/credentials", after.as_deref(), limit)?;
+                print_json(request(&connection, reqwest::Method::GET, &path, None).await?).await?
             }
             TokenCommand::Whoami => {
                 print_json(request(&connection, reqwest::Method::GET, "auth/whoami", None).await?)
@@ -740,4 +737,17 @@ async fn subscription(
         }
     }
     Ok(())
+}
+
+fn admin_page(path: &str, after: Option<&str>, limit: usize) -> Result<String> {
+    if !(1..=1000).contains(&limit) {
+        return Err(Error::Invalid("page limit"));
+    }
+    if let Some(after) = after {
+        uuid::Uuid::parse_str(after).map_err(|_| Error::Invalid("page cursor"))?;
+    }
+    Ok(format!(
+        "{path}?after={}&limit={limit}",
+        after.unwrap_or("")
+    ))
 }

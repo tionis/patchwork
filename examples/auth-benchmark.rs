@@ -35,12 +35,17 @@ fn main() {
             for n in (0..facts).step_by(blocks) {
                 builder = builder.fact(fact("bench", &[int(n as i64)])).unwrap();
             }
-            let mut token = builder.build(&root).unwrap();
+            let mut token = builder
+                .code("check if bench($n), $n >= 0;")
+                .unwrap()
+                .build(&root)
+                .unwrap();
             for b in 1..blocks {
                 let mut block = BlockBuilder::new();
                 for n in (b..facts).step_by(blocks) {
                     block = block.fact(fact("bench", &[int(n as i64)])).unwrap();
                 }
+                let block = block.code("check if bench($n), $n >= 0;").unwrap();
                 token = token.append(block).unwrap();
             }
             let encoded = token.to_base64().unwrap();
