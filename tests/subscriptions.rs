@@ -248,3 +248,69 @@ async fn explicit_watch_is_all_or_nothing_and_listing_rechecks_items() {
     assert_eq!(page["items"].as_array().unwrap().len(), 1);
     assert_eq!(page["items"][0]["id"], a.id.as_str());
 }
+
+#[tokio::test]
+async fn follow_resume_history_loss_and_shutdown_are_explicit() {
+    let (_dir, mut store, admin) = fixture();
+    let st = store
+        .create_stream_with(
+            &"events/resume".parse().unwrap(),
+            &StreamConfig {
+                retention: Retention::Bounded {
+                    max_age_seconds: None,
+                    max_bytes: Some(1),
+                },
+                ..Default::default()
+            },
+            &Default::default(),
+        )
+        .unwrap();
+    store
+        .append_authorized(&admin, &st.id, b"a", "text/plain", None)
+        .unwrap();
+    store
+        .append_authorized(&admin, &st.id, b"b", "text/plain", None)
+        .unwrap();
+    let service = DataService::new(store);
+    let app = router(service.clone());
+    let path = format!("/streams/{}/follow", st.id.as_str());
+    assert_eq!(
+        call(&app, "GET", &format!("{path}?from=0"), &admin, vec![])
+            .await
+            .status(),
+        StatusCode::GONE
+    );
+    let resume = |uri: String, cursor: String| {
+        Request::builder()
+            .uri(uri)
+            .header("authorization", format!("Bearer {admin}"))
+            .header("last-event-id", cursor)
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        app.clone()
+            .oneshot(resume(
+                format!("{path}?from=2"),
+                format!("{}:1", st.id.as_str())
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let response = app
+        .oneshot(resume(path, format!("{}:1", st.id.as_str())))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut events = response.into_body().into_data_stream();
+    assert!(chunk(&mut events).await.contains("ready"));
+    let record = chunk(&mut events).await;
+    assert!(record.contains(&format!("id: {}:2", st.id.as_str())));
+    assert!(record.contains("\"data_base64\":\"Yg==\""));
+    assert!(record.contains("\"accepted_at\":\"20"));
+    service.shutdown();
+    assert!(chunk(&mut events).await.contains("unavailable"));
+    assert!(events.next().await.is_none());
+}

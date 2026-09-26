@@ -56,6 +56,11 @@ impl VerifiedToken {
             .set_limits(limits())
             .build(&token)
             .map_err(|_| Error::Unauthorized)?;
+        // The evaluator limit constrains derivation. Also cap initial facts,
+        // including authority/ambient facts, before any query or checks run.
+        if authorizer.fact_count() > limits().max_facts as usize {
+            return Err(Error::Unauthorized);
+        }
         let (principal, credential, instance): (String, String, String) = authorizer.query_exactly_one(
             "identity($p, $c, $i) <- principal($p), credential($c), issued_instance($i) trusting authority"
         ).map_err(|_| Error::Unauthorized)?;
@@ -98,6 +103,9 @@ impl VerifiedToken {
             .map_err(|_| Error::Unauthorized)?
             .build(&self.token)
             .map_err(|_| Error::Unauthorized)?;
+        if authorizer.fact_count() > limits().max_facts as usize {
+            return Err(Error::Forbidden);
+        }
         authorizer.authorize().map_err(|_| Error::Forbidden)?;
         Ok(())
     }

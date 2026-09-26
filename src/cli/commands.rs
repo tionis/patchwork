@@ -101,6 +101,17 @@ async fn print_json(response: reqwest::Response) -> Result<()> {
 }
 pub async fn run(command: Command) -> Result<()> {
     match command {
+        Command::Admin {
+            command:
+                AdminCommand::Recover {
+                    data_dir,
+                    ssh_public_key,
+                },
+        } => {
+            let key = bounded_file(&ssh_public_key, 16384)?;
+            let result = Store::open(&data_dir)?.recover_administrator(&key)?;
+            println!("{result}");
+        }
         Command::Health { url } => {
             super::check_health(&url).await?;
             println!("healthy");

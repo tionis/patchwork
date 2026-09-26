@@ -261,3 +261,47 @@ fn typed_offline_attenuation_enforces_every_constraint_and_parent() {
     );
     assert!(token::attenuate(&parent, false, None, Some("events"), None).is_err());
 }
+
+#[test]
+fn malformed_and_mutated_token_corpus_fails_closed_without_panics() {
+    use base64::{Engine, engine::general_purpose::URL_SAFE};
+    use rand::{RngCore, SeedableRng};
+    let root = KeyPair::new();
+    let valid = token::issue(&root, "alice", "credential", "instance").unwrap();
+    let bytes = URL_SAFE.decode(&valid).unwrap();
+    let mut random = rand::rngs::StdRng::seed_from_u64(0x5041544348574f52);
+    for size in 0..512 {
+        let mut malformed = vec![0; size];
+        random.fill_bytes(&mut malformed);
+        assert!(VerifiedToken::parse(&URL_SAFE.encode(&malformed), root.public()).is_err());
+    }
+    // Mutating serialized signatures/fields can occasionally preserve unknown
+    // protobuf fields. Any accepted token must retain its authority identity.
+    for offset in 0..bytes.len() {
+        let mut mutated = bytes.clone();
+        mutated[offset] ^= 0x80;
+        if let Ok(token) = VerifiedToken::parse(&URL_SAFE.encode(&mutated), root.public()) {
+            assert_eq!(token.principal, "alice");
+            assert_eq!(token.credential, "credential");
+            assert_eq!(token.instance, "instance");
+        }
+    }
+}
+
+#[test]
+fn initial_facts_are_bounded_even_without_datalog_derivation() {
+    use biscuit_auth::builder::{fact, int};
+    let root = KeyPair::new();
+    let parent = Biscuit::from_base64(
+        token::issue(&root, "alice", "credential", "instance").unwrap(),
+        root.public(),
+    )
+    .unwrap();
+    let mut block = BlockBuilder::new();
+    for n in 0..1000 {
+        block = block.fact(fact("unrelated", &[int(n)])).unwrap();
+    }
+    let excessive = parent.append(block).unwrap().to_base64().unwrap();
+    assert!(excessive.len() < token::MAX_TOKEN_BYTES);
+    assert!(VerifiedToken::parse(&excessive, root.public()).is_err());
+}

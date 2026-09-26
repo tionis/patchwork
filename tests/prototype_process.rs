@@ -264,7 +264,7 @@ fn bootstrap_login_binary_stream_scoped_credentials_and_hard_restart() {
     server.0.kill().unwrap();
     server.0.wait().unwrap();
     drop(server);
-    let _server = start(path, &address, &url);
+    let mut restarted = start(path, &address, &url);
     let retried: Value = serde_json::from_slice(
         &ok(
             &[
@@ -446,5 +446,71 @@ fn bootstrap_login_binary_stream_scoped_credentials_and_hard_restart() {
         )
         .status
         .success()
+    );
+    let _follow = Server(
+        Command::new(env!("CARGO_BIN_EXE_patchwork"))
+            .args([
+                "follow",
+                "--url",
+                &url,
+                "--token-file",
+                session.to_str().unwrap(),
+                id,
+                "--from",
+                "1",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &restarted.0.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let deadline = Instant::now() + Duration::from_secs(7);
+    while restarted.0.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "shutdown hung with active follow"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let recovered: Value = serde_json::from_slice(
+        &ok(
+            &[
+                "admin",
+                "recover",
+                "--data-dir",
+                path,
+                "--ssh-public-key",
+                public.to_str().unwrap(),
+            ],
+            None,
+        )
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(recovered["action"], "administrator_restored");
+    let _recovered_server = start(path, &address, &url);
+    assert_eq!(
+        ok(
+            &[
+                "get",
+                "--url",
+                &url,
+                "--token-file",
+                session.to_str().unwrap(),
+                id,
+                "0"
+            ],
+            None
+        )
+        .stdout,
+        bytes
     );
 }

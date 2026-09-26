@@ -193,8 +193,37 @@ impl Store {
         self.instance_command(bearer,Action::CredentialList,|s,principal|{
             let mut stmt=s.connection.prepare("SELECT id,ceiling,kind,expires_at,revoked FROM credentials WHERE principal_id=?1 AND id>?2 ORDER BY id LIMIT ?3")?;
             let mut rows=stmt.query(params![principal,after,limit as i64])?;let mut result=Vec::new();
-            while let Some(row)=rows.next()?{let ceiling:String=row.get(1)?;result.push(serde_json::json!({"id":row.get::<_,String>(0)?,"grants":serde_json::from_str::<serde_json::Value>(&ceiling).map_err(|_|Error::DatabaseFormat)?,"kind":row.get::<_,String>(2)?,"expires_at":row.get::<_,i64>(3)?,"revoked":row.get::<_,bool>(4)?}));}
+            while let Some(row)=rows.next()?{let ceiling:String=row.get(1)?;result.push(serde_json::json!({"id":row.get::<_,String>(0)?,"grants":serde_json::from_str::<serde_json::Value>(&ceiling).map_err(|_|Error::DatabaseFormat)?,"kind":row.get::<_,String>(2)?,"expires_at":super::ingress::timestamp(row.get::<_,i64>(3)?)?,"revoked":row.get::<_,bool>(4)?}));}
             Ok(result)
+        })
+    }
+}
+
+impl Store {
+    /// Explicit filesystem-authorized recovery, never exposed over HTTP.
+    /// Restores access for this key while preserving existing credentials.
+    pub fn recover_administrator(&mut self, public_key: &str) -> Result<serde_json::Value> {
+        let key = ssh::public_key(public_key)?
+            .to_openssh()
+            .map_err(|_| Error::Invalid("SSH key"))?;
+        self.atomic(|s| {
+            let identity = s.identity()?;
+            let grants = vec![
+                Grant { actions: Action::ALL.to_vec(), selector: auth::Selector::Prefix(String::new()) },
+                Grant { actions: vec![Action::AdminRead, Action::AdminWrite, Action::CredentialMint, Action::CredentialList, Action::CredentialRevoke], selector: auth::Selector::Instance(identity.instance.clone()) },
+            ];
+            let existing: Option<(String, i64)> = s.connection.query_row("SELECT id,revision FROM principals WHERE ssh_key=?1", [&key], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+            let principal = if let Some((id, revision)) = existing {
+                let revision = Revision::new(revision)?.next()?;
+                s.connection.execute("UPDATE principals SET enabled=1,can_mint=1,grants=?2,revision=?3 WHERE id=?1", params![id,json(&grants)?,revision.get()])?;
+                id
+            } else {
+                let id = uuid::Uuid::new_v4().to_string();
+                s.connection.execute("INSERT INTO principals(id,ssh_key,enabled,can_mint,grants) VALUES (?1,?2,1,1,?3)", params![id,key,json(&grants)?])?;
+                id
+            };
+            s.connection.execute("INSERT INTO auth_audit(actor,action,resource,accepted_at) VALUES ('local-operator','admin.recover',?1,?2)", params![principal,now()?])?;
+            Ok(serde_json::json!({"principal_id":principal,"instance_id":identity.instance,"action":"administrator_restored"}))
         })
     }
 }

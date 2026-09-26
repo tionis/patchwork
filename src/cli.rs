@@ -169,6 +169,13 @@ pub enum AdminCommand {
         #[arg(long, requires = "file")]
         revision: Option<String>,
     },
+    /// Restore local administrator access for an Ed25519 key.
+    Recover {
+        #[arg(long)]
+        data_dir: std::path::PathBuf,
+        #[arg(long)]
+        ssh_public_key: std::path::PathBuf,
+    },
     Bootstrap {
         #[arg(long)]
         data_dir: std::path::PathBuf,

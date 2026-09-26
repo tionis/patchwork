@@ -1,5 +1,6 @@
 //! Authenticated prototype routes. A bounded blocking boundary keeps SQLite and
 //! cryptographic work off Tokio workers; no unbounded writer task queue.
+mod admission;
 mod subscriptions;
 use crate::{
     Error, Result,
@@ -26,6 +27,8 @@ pub struct DataService {
     store: Arc<Mutex<Store>>,
     admission: Arc<Semaphore>,
     requests: Arc<Semaphore>,
+    login_admission: Arc<Mutex<admission::LoginAdmission>>,
+    stopping: Arc<std::sync::atomic::AtomicBool>,
     hub: Arc<Mutex<subscriptions::Hub>>,
     subscriptions: Arc<Semaphore>,
 }
@@ -35,6 +38,8 @@ impl DataService {
             store: Arc::new(Mutex::new(store)),
             admission: Arc::new(Semaphore::new(32)),
             requests: Arc::new(Semaphore::new(64)),
+            login_admission: Arc::new(Mutex::new(admission::LoginAdmission::new())),
+            stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             hub: Arc::new(Mutex::new(subscriptions::Hub::new())),
             subscriptions: Arc::new(Semaphore::new(128)),
         };
@@ -66,10 +71,17 @@ impl DataService {
         });
         service
     }
+    pub fn shutdown(&self) {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
     async fn run<T: Send + 'static>(
         &self,
         operation: impl FnOnce(&mut Store) -> Result<T> + Send + 'static,
     ) -> std::result::Result<T, ApiError> {
+        if self.stopping.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(ApiError(Error::Busy));
+        }
         let permit = self
             .admission
             .clone()
@@ -134,6 +146,22 @@ async fn admit_request(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    if request.uri().path().ends_with("/auth/challenges")
+        || request.uri().path().ends_with("/auth/exchange")
+    {
+        let peer = request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|info| info.0.ip())
+            .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED.into());
+        let allowed = service
+            .login_admission
+            .lock()
+            .is_ok_and(|mut limiter| limiter.admit(peer, std::time::Instant::now()));
+        if !allowed {
+            return (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "60")]).into_response();
+        }
+    }
     let Ok(_permit) = service.requests.try_acquire() else {
         return ApiError(Error::Busy).into_response();
     };
@@ -485,7 +513,19 @@ async fn read(
 ) -> std::result::Result<impl IntoResponse, ApiError> {
     let token = bearer(&headers)?;
     let from: Position = input.from.parse()?;
-    Ok(Json(s.run(move|s|{let st=stream(s,&token,&id)?;let page=s.authorized(&token,Action::RecordRead,Some(&st.id),&st.name,|s|s.read(&st.id,from,input.limit,input.max_bytes))?;Ok(json!({"stream_id":id,"head":page.head.to_string(),"tail":page.tail.to_string(),"next_position":page.next_position.to_string(),"records":page.records.into_iter().map(|r|json!({"position":r.position.to_string(),"data_base64":STANDARD.encode(r.payload),"object_refs":[],"content_type":r.content_type,"accepted_at":crate::wire::timestamp_ms(r.accepted_at_ms).unwrap_or_default()})).collect::<Vec<_>>()}))}).await?))
+    let page = s.run(move |s| {
+        let st = stream(s, &token, &id)?;
+        let page = s.authorized(&token, Action::RecordRead, Some(&st.id), &st.name,
+            |s| s.read(&st.id, from, input.limit, input.max_bytes))?;
+        let records = page.records.into_iter().map(record_json).collect::<Result<Vec<_>>>()?;
+        Ok(json!({"stream_id":id,"head":page.head.to_string(),"tail":page.tail.to_string(),"next_position":page.next_position.to_string(),"records":records}))
+    }).await?;
+    Ok(Json(page))
+}
+fn record_json(record: crate::model::Record) -> Result<Value> {
+    Ok(
+        json!({"position":record.position.to_string(),"data_base64":STANDARD.encode(record.payload),"object_refs":[],"content_type":record.content_type,"accepted_at":crate::wire::timestamp_ms(record.accepted_at_ms)?}),
+    )
 }
 async fn raw(
     State(s): State<DataService>,
@@ -522,6 +562,8 @@ async fn normalize_response(response: Response) -> Response {
         let code = match status {
             StatusCode::PAYLOAD_TOO_LARGE => "too_large",
             StatusCode::UNPROCESSABLE_ENTITY => "invalid_request",
+            StatusCode::TOO_MANY_REQUESTS => "rate_limited",
+            StatusCode::REQUEST_TIMEOUT => "request_timeout",
             _ => "request_failed",
         };
         let mut result=(status,Json(json!({"type":"about:blank","title":code,"status":status.as_u16(),"code":code,"request_id":uuid::Uuid::new_v4().to_string()}))).into_response();
@@ -529,6 +571,11 @@ async fn normalize_response(response: Response) -> Response {
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("application/problem+json"),
         );
+        if let Some(retry) = response.headers().get(header::RETRY_AFTER) {
+            result
+                .headers_mut()
+                .insert(header::RETRY_AFTER, retry.clone());
+        }
         result
     } else {
         response

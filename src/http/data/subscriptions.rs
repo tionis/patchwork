@@ -165,7 +165,15 @@ pub(super) async fn follow(
                     Ok(page) => {
                         if let Some(record) = page.records.into_iter().next() {
                             state.cursor = page.next_position;
-                            let ev=event("record",json!({"position":record.position.to_string(),"data_base64":STANDARD.encode(record.payload),"object_refs":[],"content_type":record.content_type,"accepted_at":crate::wire::timestamp_ms(record.accepted_at_ms).unwrap_or_default()})).id(format!("{}:{}",state.id,state.cursor));
+                            let value = match record_json(record) {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    state.closed = true;
+                                    return Some((Ok(failure(ApiError(error))), state));
+                                }
+                            };
+                            let ev =
+                                event("record", value).id(format!("{}:{}", state.id, state.cursor));
                             return Some((Ok(ev), state));
                         }
                     }

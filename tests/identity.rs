@@ -606,3 +606,45 @@ fn concurrent_authenticated_retries_allocate_once_and_expired_keys_are_reusable(
     assert_eq!(next.position.as_deref(), Some("1"));
     assert_eq!(next.deduplicated, Some(false));
 }
+
+#[test]
+fn local_recovery_restores_access_without_widening_old_credential_ceilings() {
+    let (dir, mut store, key) = fixture();
+    let old = login(&mut store, &key);
+    let reader = store
+        .mint(
+            &old,
+            &[Grant {
+                actions: vec![Action::RecordRead],
+                selector: Selector::Prefix("events/".into()),
+            }],
+            600,
+        )
+        .unwrap();
+    let result = store
+        .recover_administrator(&key.public_key().to_openssh().unwrap())
+        .unwrap();
+    assert_eq!(result["action"], "administrator_restored");
+    assert!(store.authenticate(&old).is_ok());
+    assert!(store.policy(&reader.token).is_err());
+    let fresh = login(&mut store, &key);
+    assert!(store.policy(&fresh).is_ok());
+    assert_eq!(store.principals(&fresh, "", 10).unwrap().len(), 1);
+    let db = rusqlite::Connection::open(dir.path().join("patchwork-v1.sqlite3")).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM auth_audit WHERE action='admin.recover'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    db.execute("UPDATE principals SET enabled=0", []).unwrap();
+    assert!(store.authenticate(&old).is_err());
+    store
+        .recover_administrator(&key.public_key().to_openssh().unwrap())
+        .unwrap();
+    let restored = login(&mut store, &key);
+    assert!(store.policy(&restored).is_ok());
+}
