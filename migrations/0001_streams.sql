@@ -36,3 +36,31 @@ CREATE TABLE records (
 
 CREATE TRIGGER records_immutable BEFORE UPDATE ON records
 BEGIN SELECT RAISE(ABORT, 'records are immutable'); END;
+
+CREATE TABLE instance (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    id TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    issuer_key BLOB NOT NULL
+) STRICT;
+CREATE TABLE principals (
+    id TEXT PRIMARY KEY,
+    ssh_key TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+    can_mint INTEGER NOT NULL CHECK(can_mint IN (0,1)),
+    grants TEXT NOT NULL
+) STRICT;
+CREATE TABLE credentials (
+    id TEXT PRIMARY KEY,
+    principal_id TEXT NOT NULL REFERENCES principals(id),
+    ceiling TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('ssh_session','api')),
+    expires_at INTEGER NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1))
+) STRICT;
+CREATE TABLE challenges (
+    id TEXT PRIMARY KEY,
+    ssh_key TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+) STRICT;

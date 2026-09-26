@@ -18,8 +18,12 @@ pub const SEGMENT_TARGET_RECORDS: i64 = 10_000;
 const APPLICATION_ID: i64 = 0x50574348;
 const SCHEMA_VERSION: i64 = 1;
 
+mod identity;
 #[cfg(test)]
 mod tests;
+mod transaction;
+pub use identity::{Challenge, CredentialReceipt};
+use transaction::WriteTransaction;
 
 pub struct Store {
     connection: Connection,
@@ -89,9 +93,7 @@ impl Store {
         config.validate()?;
         let encoded = serde_json::to_string(config).map_err(|_| Error::Invalid("stream config"))?;
         let id = StreamId::random();
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = WriteTransaction::begin(&mut self.connection)?;
         let exists: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM streams WHERE name=?1 AND deleted=0)",
             [name.as_str()],
@@ -189,9 +191,7 @@ impl Store {
     ) -> Result<Revision> {
         config.validate()?;
         let encoded = serde_json::to_string(config).map_err(|_| Error::Invalid("stream config"))?;
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = WriteTransaction::begin(&mut self.connection)?;
         let (revision, previous): (i64, String) = tx
             .query_row(
                 "SELECT config_revision,config FROM streams WHERE id=?1 AND deleted=0",
@@ -223,9 +223,7 @@ impl Store {
         expected: Revision,
         metadata: &Metadata,
     ) -> Result<Revision> {
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = WriteTransaction::begin(&mut self.connection)?;
         let revision: i64 = tx
             .query_row(
                 "SELECT metadata_revision FROM streams WHERE id=?1 AND deleted=0",
@@ -249,9 +247,7 @@ impl Store {
     /// Logical deletion releases the name. Reclamation is separate; the old ID
     /// remains a tombstone and cannot be used to access a recreated resource.
     pub fn delete_stream(&mut self, id: &StreamId, expected_config: Revision) -> Result<()> {
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = WriteTransaction::begin(&mut self.connection)?;
         let revision: i64 = tx
             .query_row(
                 "SELECT config_revision FROM streams WHERE id=?1 AND deleted=0",
@@ -282,7 +278,7 @@ impl Store {
         if !(1..=1000).contains(&limit) {
             return Err(Error::Invalid("segment page limit"));
         }
-        let tx = self.connection.transaction()?;
+        let tx = self.connection.savepoint()?;
         let exists: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM streams WHERE id=?1 AND deleted=0)",
             [id.as_str()],
@@ -324,9 +320,7 @@ impl Store {
         {
             return Err(Error::Invalid("content type"));
         }
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = WriteTransaction::begin(&mut self.connection)?;
         let (tail, encoded): (i64, String) = tx
             .query_row(
                 "SELECT tail,config FROM streams WHERE id=?1 AND deleted=0",
@@ -391,7 +385,7 @@ impl Store {
         if !(1..=1000).contains(&limit) || !(1..=16 * 1024 * 1024).contains(&max_bytes) {
             return Err(Error::Invalid("read budget"));
         }
-        let tx = self.connection.transaction()?;
+        let tx = self.connection.savepoint()?;
         let (head, tail, encoded): (i64, i64, String) = tx
             .query_row(
                 "SELECT head,tail,config FROM streams WHERE id=?1 AND deleted=0",
