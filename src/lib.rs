@@ -1,4 +1,5 @@
-//! Internal bootstrap storage API. Not an authorized application API.
+//! Internal storage primitives and the authenticated loopback prototype.
+//! Raw Store methods are trusted internals; HTTP uses the authorized boundary.
 pub mod auth;
 pub mod cli;
 pub mod config;

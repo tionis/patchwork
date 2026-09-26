@@ -1,15 +1,23 @@
 # Patchwork
 
-Patchwork is a Rust, single-node backend for ordered streams, immutable objects, and revisioned references. The service is at bootstrap stage: its server currently exposes health endpoints, while retained stream storage is available only through an internal API. The broader design is specified, not yet implemented.
+Patchwork is a Rust, single-node backend for ordered streams, immutable objects, and revisioned references. An **authenticated loopback stream prototype** is runnable: SSH login, scoped credentials, stream creation, binary append/read, replay, config/metadata CAS, and persisted revocation. Objects and the broader platform remain planned.
 
-Start with the [design wiki](docs/index.md), [implementation status](docs/implementation-status.md), [roadmap](docs/roadmap.md), and [developer guide](docs/development.md).
+Run the isolated demo from the repository root:
 
-From the repository root:
+```sh
+./scripts/prototype-demo.sh
+```
+
+It builds the binaries, uses temporary keys/data, verifies a binary round trip and read-only access, then stops its server. Requires Rust 1.98.1, a C toolchain, OpenSSH and Python 3. For an interactive server, follow the [prototype runbook](docs/development.md#authenticated-loopback-prototype). Data routes require local bootstrap and `--data-api`; the default server is health-only. Recreate older development databases after schema changes.
+
+See the [OpenAPI 3.1 contract](openapi.json), [implementation status](docs/implementation-status.md), [roadmap](docs/roadmap.md), and [design wiki](docs/index.md). This prototype is not the complete stage-1 release: idempotency, pipelines/KV, subscriptions, backup, public deployment and release-gate evidence remain pending.
 
 ```sh
 cargo build --locked --all-targets
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 vulcan --vault docs --output json doctor --fail-on-issues
 ```
 
-The Rust crate, migrations, and tests live at the repository root. The wiki is initialized with Vulcan; its vault instructions and bundled agent skills are in `docs/AGENTS.md` and `docs/.agents/skills/`.
+The crate, migrations and tests live at the repository root. The wiki uses Vulcan; its instructions are in `docs/AGENTS.md`.

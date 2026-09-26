@@ -32,7 +32,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("health request failed")]
     HealthRequest(#[source] reqwest::Error),
-    #[error("server health endpoint returned {0}")]
+    #[error("server returned HTTP {0}")]
     Unhealthy(reqwest::StatusCode),
     #[error("invalid tracing filter")]
     TracingFilter,
