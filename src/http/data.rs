@@ -56,7 +56,16 @@ pub fn router(service: DataService) -> Router {
     Router::new()
         .route("/auth/challenges", post(challenge))
         .route("/auth/exchange", post(exchange))
-        .route("/credentials", post(mint))
+        .route("/credentials", post(mint).get(credentials_get))
+        .route("/auth/credentials", post(mint).get(credentials_get))
+        .route("/auth/whoami", get(whoami))
+        .route("/auth/credentials/{id}", axum::routing::delete(revoke))
+        .route(
+            "/admin/principals",
+            get(principals_get).post(principals_post),
+        )
+        .route("/admin/principals/{id}", axum::routing::put(principals_put))
+        .route("/admin/policy", get(policy_get).put(policy_put))
         .route("/credentials/{id}", axum::routing::delete(revoke))
         .route("/streams", post(create))
         .route("/streams/resolve", get(resolve))
@@ -477,4 +486,123 @@ async fn normalize_response(response: Response) -> Response {
         header::HeaderValue::from_static("no-store"),
     );
     response
+}
+
+#[derive(Deserialize)]
+struct AdminPage {
+    #[serde(default)]
+    after: String,
+    #[serde(default = "page_limit")]
+    limit: usize,
+}
+async fn whoami(
+    State(s): State<DataService>,
+    headers: HeaderMap,
+) -> std::result::Result<impl IntoResponse, ApiError> {
+    let token = bearer(&headers)?;
+    Ok(Json(s.run(move |s| s.whoami(&token)).await?))
+}
+async fn principals_get(
+    State(s): State<DataService>,
+    headers: HeaderMap,
+    Query(page): Query<AdminPage>,
+) -> std::result::Result<impl IntoResponse, ApiError> {
+    let token = bearer(&headers)?;
+    let items = s
+        .run(move |s| s.principals(&token, &page.after, page.limit))
+        .await?;
+    let next = if items.len() == page.limit {
+        items.last().map(|p| p.id.clone())
+    } else {
+        None
+    };
+    Ok(Json(json!({"items":items,"next_cursor":next})))
+}
+async fn principals_post(
+    State(s): State<DataService>,
+    headers: HeaderMap,
+    Json(input): Json<crate::store::PrincipalInput>,
+) -> std::result::Result<impl IntoResponse, ApiError> {
+    let token = bearer(&headers)?;
+    let p = s
+        .run(move |s| s.put_principal(&token, None, None, &input))
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        [(
+            header::ETAG,
+            format!("\"principal:{}:{}\"", p.id, p.revision),
+        )],
+        Json(p),
+    ))
+}
+fn control_revision(headers: &HeaderMap, kind: &str) -> Result<Revision> {
+    let value = headers
+        .get(header::IF_MATCH)
+        .ok_or(Error::Invalid("If-Match required"))?
+        .to_str()
+        .map_err(|_| Error::Invalid("If-Match"))?;
+    value
+        .strip_prefix(&format!("\"{kind}:"))
+        .and_then(|v| v.strip_suffix('"'))
+        .ok_or(Error::RevisionMismatch)?
+        .parse()
+}
+async fn principals_put(
+    State(s): State<DataService>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(input): Json<crate::store::PrincipalInput>,
+) -> std::result::Result<impl IntoResponse, ApiError> {
+    let token = bearer(&headers)?;
+    let expected = control_revision(&headers, &format!("principal:{id}"))?;
+    let p = s
+        .run(move |s| s.put_principal(&token, Some(&id), Some(expected), &input))
+        .await?;
+    Ok((
+        [(
+            header::ETAG,
+            format!("\"principal:{}:{}\"", p.id, p.revision),
+        )],
+        Json(p),
+    ))
+}
+async fn policy_get(
+    State(s): State<DataService>,
+    headers: HeaderMap,
+) -> std::result::Result<impl IntoResponse, ApiError> {
+    let token = bearer(&headers)?;
+    let (rev, value) = s.run(move |s| s.policy(&token)).await?;
+    Ok(([(header::ETAG, format!("\"policy:{rev}\""))], Json(value)))
+}
+async fn policy_put(
+    State(s): State<DataService>,
+    headers: HeaderMap,
+    Json(input): Json<crate::store::AuthPolicy>,
+) -> std::result::Result<impl IntoResponse, ApiError> {
+    let token = bearer(&headers)?;
+    let rev = control_revision(&headers, "policy")?;
+    let rev = s
+        .run(move |s| s.replace_policy(&token, rev, &input))
+        .await?;
+    Ok((
+        [(header::ETAG, format!("\"policy:{rev}\""))],
+        StatusCode::NO_CONTENT,
+    ))
+}
+async fn credentials_get(
+    State(s): State<DataService>,
+    headers: HeaderMap,
+    Query(page): Query<AdminPage>,
+) -> std::result::Result<impl IntoResponse, ApiError> {
+    let token = bearer(&headers)?;
+    let items = s
+        .run(move |s| s.credentials(&token, &page.after, page.limit))
+        .await?;
+    let next = if items.len() == page.limit {
+        items.last().and_then(|v| v.get("id")).cloned()
+    } else {
+        None
+    };
+    Ok(Json(json!({"items":items,"next_cursor":next})))
 }

@@ -18,7 +18,9 @@ pub const SEGMENT_TARGET_RECORDS: i64 = 10_000;
 const APPLICATION_ID: i64 = 0x50574348;
 const SCHEMA_VERSION: i64 = 1;
 
+mod administration;
 mod identity;
+pub use administration::{AuthPolicy, PrincipalDescriptor, PrincipalInput};
 #[cfg(test)]
 mod tests;
 mod transaction;

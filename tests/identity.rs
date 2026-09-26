@@ -201,3 +201,96 @@ fn failed_challenge_attempts_are_bounded_and_exact_scopes_do_not_follow_names() 
             .is_err()
     );
 }
+
+#[test]
+fn administration_cas_and_old_issuance_ceilings_fence_policy_expansion() {
+    let (dir, mut store, admin_key) = fixture();
+    let admin = login(&mut store, &admin_key);
+    let path = dir.path().join("second-key");
+    assert!(
+        Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let key = ssh_key::PrivateKey::from_openssh(std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut input = patchwork::store::PrincipalInput {
+        ssh_public_key: key.public_key().to_openssh().unwrap(),
+        enabled: true,
+        can_mint: false,
+        grants: vec![Grant {
+            actions: vec![Action::RecordRead],
+            selector: Selector::Prefix("events/".into()),
+        }],
+    };
+    let principal = store.put_principal(&admin, None, None, &input).unwrap();
+    let user = login(&mut store, &key);
+    let name = "events/admin-test".parse().unwrap();
+    let stream = store.create_stream(&name).unwrap();
+    input.grants[0].actions.push(Action::RecordAppend);
+    store
+        .put_principal(
+            &admin,
+            Some(&principal.id),
+            Some(patchwork::model::Revision::ZERO),
+            &input,
+        )
+        .unwrap();
+    assert!(matches!(
+        store.put_principal(
+            &admin,
+            Some(&principal.id),
+            Some(patchwork::model::Revision::ZERO),
+            &input
+        ),
+        Err(Error::RevisionMismatch)
+    ));
+    assert!(
+        store
+            .authorized(&user, Action::RecordAppend, Some(&stream.id), &name, |s| s
+                .append(&stream.id, b"no", "text/plain"))
+            .is_err()
+    );
+    let fresh = login(&mut store, &key);
+    store
+        .authorized(&fresh, Action::RecordAppend, Some(&stream.id), &name, |s| {
+            s.append(&stream.id, b"yes", "text/plain")
+        })
+        .unwrap();
+    assert!(store.principals(&user, "", 100).is_err());
+    input.enabled = false;
+    store
+        .put_principal(
+            &admin,
+            Some(&principal.id),
+            Some(patchwork::model::Revision::new(1).unwrap()),
+            &input,
+        )
+        .unwrap();
+    assert!(
+        store
+            .authorized(&fresh, Action::RecordRead, Some(&stream.id), &name, |s| s
+                .read(&stream.id, Position::ZERO, 1, 1))
+            .is_err()
+    );
+    let (revision, _) = store.policy(&admin).unwrap();
+    store
+        .replace_policy(
+            &admin,
+            revision,
+            &patchwork::store::AuthPolicy {
+                max_api_lifetime_seconds: 60,
+            },
+        )
+        .unwrap();
+    assert!(store.mint(&admin, &[], 61).is_err());
+    assert!(
+        store
+            .credentials(&admin, "", 100)
+            .unwrap()
+            .iter()
+            .all(|v| v.get("token").is_none())
+    );
+}

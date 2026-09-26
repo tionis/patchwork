@@ -48,7 +48,8 @@ CREATE TABLE principals (
     ssh_key TEXT NOT NULL UNIQUE,
     enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
     can_mint INTEGER NOT NULL CHECK(can_mint IN (0,1)),
-    grants TEXT NOT NULL
+    grants TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0)
 ) STRICT;
 CREATE TABLE credentials (
     id TEXT PRIMARY KEY,
@@ -64,4 +65,18 @@ CREATE TABLE challenges (
     payload TEXT NOT NULL,
     expires_at INTEGER NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 5)
+) STRICT;
+
+CREATE TABLE auth_policy (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
+    max_api_lifetime_seconds INTEGER NOT NULL CHECK(max_api_lifetime_seconds BETWEEN 1 AND 86400)
+) STRICT;
+INSERT INTO auth_policy(singleton,max_api_lifetime_seconds) VALUES (1,86400);
+CREATE TABLE auth_audit (
+    sequence INTEGER PRIMARY KEY,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL
 ) STRICT;

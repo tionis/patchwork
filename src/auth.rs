@@ -8,6 +8,22 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Action {
+    #[serde(rename = "stream.list")]
+    StreamList,
+    #[serde(rename = "stream.watch")]
+    StreamWatch,
+    #[serde(rename = "record.subscribe")]
+    RecordSubscribe,
+    #[serde(rename = "admin.read")]
+    AdminRead,
+    #[serde(rename = "admin.write")]
+    AdminWrite,
+    #[serde(rename = "credential.mint")]
+    CredentialMint,
+    #[serde(rename = "credential.list")]
+    CredentialList,
+    #[serde(rename = "credential.revoke")]
+    CredentialRevoke,
     #[serde(rename = "stream.create")]
     StreamCreate,
     #[serde(rename = "stream.inspect")]
@@ -29,7 +45,15 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 17] = [
+        Self::StreamList,
+        Self::StreamWatch,
+        Self::RecordSubscribe,
+        Self::AdminRead,
+        Self::AdminWrite,
+        Self::CredentialMint,
+        Self::CredentialList,
+        Self::CredentialRevoke,
         Self::StreamCreate,
         Self::StreamInspect,
         Self::StreamDelete,
@@ -42,6 +66,14 @@ impl Action {
     ];
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::StreamList => "stream.list",
+            Self::StreamWatch => "stream.watch",
+            Self::RecordSubscribe => "record.subscribe",
+            Self::AdminRead => "admin.read",
+            Self::AdminWrite => "admin.write",
+            Self::CredentialMint => "credential.mint",
+            Self::CredentialList => "credential.list",
+            Self::CredentialRevoke => "credential.revoke",
             Self::StreamCreate => "stream.create",
             Self::StreamInspect => "stream.inspect",
             Self::StreamDelete => "stream.delete",
@@ -59,12 +91,16 @@ impl Action {
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum Selector {
     Stream(String),
+    Instance(String),
     /// Empty means all canonical names; nonempty prefixes end at a slash.
     Prefix(String),
 }
 impl Selector {
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::Instance(id) => {
+                uuid::Uuid::parse_str(id).map_err(|_| Error::Invalid("instance ID"))?;
+            }
             Self::Stream(id) => {
                 id.parse::<StreamId>()?;
             }
@@ -80,6 +116,7 @@ impl Selector {
     }
     fn matches(&self, id: Option<&StreamId>, name: &StreamName) -> bool {
         match self {
+            Self::Instance(_) => false,
             Self::Stream(expected) => id.is_some_and(|id| id.as_str() == expected),
             Self::Prefix(prefix) => name.as_str().starts_with(prefix),
         }
@@ -87,7 +124,7 @@ impl Selector {
     /// Prove containment over all possible resources, not just existing rows.
     fn contains(&self, child: &Self) -> bool {
         match (self, child) {
-            (Self::Stream(a), Self::Stream(b)) => a == b,
+            (Self::Stream(a), Self::Stream(b)) | (Self::Instance(a), Self::Instance(b)) => a == b,
             (Self::Prefix(a), Self::Prefix(b)) => b.starts_with(a),
             _ => false,
         }
@@ -156,3 +193,18 @@ pub fn permits_delegation(current: &[Grant], ceiling: &[Grant], requested: &[Gra
 
 pub mod ssh;
 pub mod token;
+
+pub fn permits_instance(
+    current: &[Grant],
+    ceiling: &[Grant],
+    action: Action,
+    instance: &str,
+) -> bool {
+    let matches = |grants: &[Grant]| {
+        grants.iter().any(|g| {
+            g.actions.contains(&action)
+                && matches!(&g.selector, Selector::Instance(id) if id == instance)
+        })
+    };
+    matches(current) && matches(ceiling)
+}

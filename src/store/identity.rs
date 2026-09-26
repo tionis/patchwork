@@ -27,7 +27,7 @@ pub struct CredentialReceipt {
     pub token: String,
     pub expires_at: i64,
 }
-fn now() -> Result<i64> {
+pub(super) fn now() -> Result<i64> {
     i64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -36,19 +36,19 @@ fn now() -> Result<i64> {
     )
     .map_err(|_| Error::Exhausted)
 }
-fn json<T: Serialize>(value: &T) -> Result<String> {
+pub(super) fn json<T: Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(|_| Error::Invalid("JSON"))
 }
-struct Rights {
-    current: Vec<Grant>,
-    ceiling: Vec<Grant>,
-    kind: String,
-    can_mint: bool,
+pub(super) struct Rights {
+    pub(super) current: Vec<Grant>,
+    pub(super) ceiling: Vec<Grant>,
+    pub(super) kind: String,
+    pub(super) can_mint: bool,
 }
-struct Identity {
-    instance: String,
-    origin: String,
-    root: KeyPair,
+pub(super) struct Identity {
+    pub(super) instance: String,
+    pub(super) origin: String,
+    pub(super) root: KeyPair,
 }
 impl Store {
     /// Local filesystem-authorized, one-time bootstrap. Never an HTTP endpoint.
@@ -72,10 +72,23 @@ impl Store {
         {
             return Err(Error::Invalid("HTTPS origin required"));
         }
-        let grants = json(&vec![Grant {
-            actions: Action::ALL.to_vec(),
-            selector: Selector::Prefix(String::new()),
-        }])?;
+        let instance_id = uuid::Uuid::new_v4().to_string();
+        let grants = json(&vec![
+            Grant {
+                actions: Action::ALL.to_vec(),
+                selector: Selector::Prefix(String::new()),
+            },
+            Grant {
+                actions: vec![
+                    Action::AdminRead,
+                    Action::AdminWrite,
+                    Action::CredentialMint,
+                    Action::CredentialList,
+                    Action::CredentialRevoke,
+                ],
+                selector: Selector::Instance(instance_id.clone()),
+            },
+        ])?;
         let root = KeyPair::new();
         self.atomic(|store| {
             if store
@@ -89,19 +102,19 @@ impl Store {
             store.connection.execute(
                 "INSERT INTO instance VALUES (1,?1,?2,?3)",
                 params![
-                    uuid::Uuid::new_v4().to_string(),
+                    instance_id,
                     url.origin().ascii_serialization(),
                     root.private().to_bytes().as_slice()
                 ],
             )?;
             store.connection.execute(
-                "INSERT INTO principals VALUES (?1,?2,1,1,?3)",
+                "INSERT INTO principals(id,ssh_key,enabled,can_mint,grants) VALUES (?1,?2,1,1,?3)",
                 params![uuid::Uuid::new_v4().to_string(), key, grants],
             )?;
             Ok(())
         })
     }
-    fn identity(&self) -> Result<Identity> {
+    pub(super) fn identity(&self) -> Result<Identity> {
         let (id, origin, bytes): (String, String, Vec<u8>) = self
             .connection
             .query_row(
@@ -230,7 +243,7 @@ impl Store {
             expires_at: expires,
         })
     }
-    fn rights(&self, verified: &VerifiedToken) -> Result<Rights> {
+    pub(super) fn rights(&self, verified: &VerifiedToken) -> Result<Rights> {
         let (current,ceiling,kind,expires,mint): (String,String,String,i64,bool) = self.connection.query_row(
             "SELECT p.grants,c.ceiling,c.kind,c.expires_at,p.can_mint FROM credentials c JOIN principals p ON p.id=c.principal_id WHERE c.id=?1 AND p.id=?2 AND p.enabled=1 AND c.revoked=0",
             params![verified.credential, verified.principal], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?.ok_or(Error::Unauthorized)?;
@@ -289,7 +302,12 @@ impl Store {
             command(store)
         })
     }
-    fn can_delegate(&self, current: &[Grant], ceiling: &[Grant], grants: &[Grant]) -> Result<bool> {
+    pub(super) fn can_delegate(
+        &self,
+        current: &[Grant],
+        ceiling: &[Grant],
+        grants: &[Grant],
+    ) -> Result<bool> {
         for grant in grants {
             if let Selector::Stream(id) = &grant.selector {
                 let stream = self.stream(&id.parse()?)?;
@@ -336,9 +354,23 @@ impl Store {
             } = store.rights(&verified)?;
             if kind != "ssh_session"
                 || !can_mint
+                || !auth::permits_instance(
+                    &current,
+                    &ceiling,
+                    Action::CredentialMint,
+                    &identity.instance,
+                )
                 || !store.can_delegate(&current, &ceiling, grants)?
             {
                 return Err(Error::Forbidden);
+            }
+            let max_lifetime: i64 = store.connection.query_row(
+                "SELECT max_api_lifetime_seconds FROM auth_policy WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )?;
+            if lifetime_seconds > max_lifetime {
+                return Err(Error::Invalid("credential lifetime"));
             }
             store.issue_credential(
                 &identity,
@@ -364,13 +396,29 @@ impl Store {
             SystemTime::now(),
         )?;
         self.atomic(|store| {
-            let Rights { kind, can_mint, .. } = store.rights(&verified)?;
-            if kind != "ssh_session" || !can_mint {
+            let Rights {
+                current, ceiling, ..
+            } = store.rights(&verified)?;
+            if !auth::permits_instance(
+                &current,
+                &ceiling,
+                Action::CredentialRevoke,
+                &identity.instance,
+            ) {
                 return Err(Error::Forbidden);
             }
             if store.connection.execute(
-                "UPDATE credentials SET revoked=1 WHERE id=?1 AND principal_id=?2",
-                params![credential_id, verified.principal],
+                "UPDATE credentials SET revoked=1 WHERE id=?1 AND (principal_id=?2 OR ?3)",
+                params![
+                    credential_id,
+                    verified.principal,
+                    auth::permits_instance(
+                        &current,
+                        &ceiling,
+                        Action::AdminWrite,
+                        &identity.instance
+                    )
+                ],
             )? != 1
             {
                 return Err(Error::NotFound);
