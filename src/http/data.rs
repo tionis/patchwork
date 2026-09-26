@@ -1,5 +1,6 @@
 //! Authenticated prototype routes. A bounded blocking boundary keeps SQLite and
 //! cryptographic work off Tokio workers; no unbounded writer task queue.
+mod subscriptions;
 use crate::{
     Error, Result,
     auth::{Action, Grant},
@@ -24,12 +25,16 @@ use tokio::sync::Semaphore;
 pub struct DataService {
     store: Arc<Mutex<Store>>,
     admission: Arc<Semaphore>,
+    hub: Arc<Mutex<subscriptions::Hub>>,
+    subscriptions: Arc<Semaphore>,
 }
 impl DataService {
     pub fn new(store: Store) -> Self {
         let service = Self {
             store: Arc::new(Mutex::new(store)),
             admission: Arc::new(Semaphore::new(32)),
+            hub: Arc::new(Mutex::new(subscriptions::Hub::new())),
+            subscriptions: Arc::new(Semaphore::new(128)),
         };
         let weak = Arc::downgrade(&service.store);
         let admission = Arc::downgrade(&service.admission);
@@ -94,8 +99,16 @@ pub fn router(service: DataService) -> Router {
         .route("/admin/principals/{id}", axum::routing::put(principals_put))
         .route("/admin/policy", get(policy_get).put(policy_put))
         .route("/credentials/{id}", axum::routing::delete(revoke))
-        .route("/streams", post(create))
+        .route("/streams", post(create).get(streams_list))
+        .route("/streams/{id}/follow", get(subscriptions::follow))
+        .route("/streams/{id}/live", get(subscriptions::live))
+        .route("/watch", post(subscriptions::watch))
         .route("/streams/resolve", get(resolve))
+        .route("/streams/append", post(subscriptions::append_named))
+        .route(
+            "/admin/creation-rules",
+            get(creation_rules_get).put(creation_rules_put),
+        )
         .route("/streams/{id}", get(inspect).delete(delete))
         .route("/streams/{id}/config", get(config_get).put(config_put))
         .route(
@@ -241,7 +254,7 @@ async fn revoke(
 struct CreateInput {
     name: String,
     #[serde(default)]
-    config: StreamConfig,
+    config: Option<StreamConfig>,
     #[serde(default = "empty_metadata")]
     metadata: Value,
 }
@@ -256,18 +269,11 @@ async fn create(
     let token = bearer(&headers)?;
     let name: StreamName = input.name.parse()?;
     let metadata: Metadata = input.metadata.to_string().parse()?;
-    Ok((
-        StatusCode::CREATED,
-        Json(
-            s.run(move |s| {
-                s.authorized(&token, Action::StreamCreate, None, &name, |s| {
-                    s.create_stream_with(&name, &input.config, &metadata)
-                })
-                .map(descriptor)
-            })
-            .await?,
-        ),
-    ))
+    let stream = s
+        .run(move |s| s.create_authorized(&token, &name, input.config.as_ref(), &metadata))
+        .await?;
+    s.hint(stream.id.as_str(), stream.name.as_str(), "created");
+    Ok((StatusCode::CREATED, Json(descriptor(stream))))
 }
 #[derive(Deserialize)]
 struct ResolveInput {
@@ -317,13 +323,16 @@ async fn delete(
     let token = bearer(&headers)?;
     let id: StreamId = id.parse()?;
     let revision = expected(&headers, &id, "config")?;
-    s.run(move |s| {
-        let st = stream(s, &token, id.as_str())?;
-        s.authorized(&token, Action::StreamDelete, Some(&id), &st.name, |s| {
-            s.delete_stream(&id, revision)
+    let st = s
+        .run(move |s| {
+            let st = stream(s, &token, id.as_str())?;
+            s.authorized(&token, Action::StreamDelete, Some(&id), &st.name, |s| {
+                s.delete_stream(&id, revision)
+            })?;
+            Ok(st)
         })
-    })
-    .await?;
+        .await?;
+    s.hint(st.id.as_str(), st.name.as_str(), "deleted");
     Ok(StatusCode::NO_CONTENT)
 }
 async fn config_get(
@@ -352,15 +361,16 @@ async fn config_put(
     let token = bearer(&headers)?;
     let id: StreamId = id.parse()?;
     let rev = expected(&headers, &id, "config")?;
-    let tag = s
+    let (st, tag) = s
         .run(move |s| {
             let st = stream(s, &token, id.as_str())?;
-            s.authorized(&token, Action::ConfigWrite, Some(&id), &st.name, |s| {
+            let rev = s.authorized(&token, Action::ConfigWrite, Some(&id), &st.name, |s| {
                 s.replace_config(&id, rev, &config)
-                    .map(|r| etag(&id, "config", r))
-            })
+            })?;
+            Ok((st, etag(&id, "config", rev)))
         })
         .await?;
+    s.hint(st.id.as_str(), st.name.as_str(), "config");
     Ok(([(header::ETAG, tag)], StatusCode::NO_CONTENT))
 }
 async fn metadata_get(
@@ -405,15 +415,16 @@ async fn metadata_put(
     let id: StreamId = id.parse()?;
     let rev = expected(&headers, &id, "metadata")?;
     let metadata: Metadata = input.value.to_string().parse()?;
-    let tag = s
+    let (st, tag) = s
         .run(move |s| {
             let st = stream(s, &token, id.as_str())?;
-            s.authorized(&token, Action::MetadataWrite, Some(&id), &st.name, |s| {
+            let rev = s.authorized(&token, Action::MetadataWrite, Some(&id), &st.name, |s| {
                 s.replace_metadata(&id, rev, &metadata)
-                    .map(|r| etag(&id, "metadata", r))
-            })
+            })?;
+            Ok((st, etag(&id, "metadata", rev)))
         })
         .await?;
+    s.hint(st.id.as_str(), st.name.as_str(), "metadata");
     Ok(([(header::ETAG, tag)], StatusCode::NO_CONTENT))
 }
 async fn append(
@@ -421,33 +432,8 @@ async fn append(
     Path(id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
-) -> std::result::Result<impl IntoResponse, ApiError> {
-    let token = bearer(&headers)?;
-    let id: StreamId = id.parse()?;
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .map(|v| v.to_str())
-        .transpose()
-        .map_err(|_| Error::Invalid("content type"))?
-        .unwrap_or("application/octet-stream")
-        .to_owned();
-    if headers.contains_key("patchwork-object-refs") {
-        return Err(Error::Invalid("object links unavailable").into());
-    }
-    let key = headers
-        .get("idempotency-key")
-        .map(|v| v.to_str().map(str::to_owned))
-        .transpose()
-        .map_err(|_| Error::Invalid("idempotency key"))?;
-    let receipt = s
-        .run(move |s| s.append_authorized(&token, &id, &body, &content_type, key.as_deref()))
-        .await?;
-    let status = if receipt.deduplicated == Some(true) || receipt.outcome == "dropped" {
-        StatusCode::OK
-    } else {
-        StatusCode::CREATED
-    };
-    Ok((status, Json(receipt)))
+) -> std::result::Result<Response, ApiError> {
+    subscriptions::publish(s, id, headers, body).await
 }
 #[derive(Deserialize)]
 struct ReadInput {
@@ -647,4 +633,90 @@ async fn credentials_get(
         None
     };
     Ok(Json(json!({"items":items,"next_cursor":next})))
+}
+
+#[derive(Deserialize)]
+struct StreamListQuery {
+    #[serde(default)]
+    prefix: String,
+    cursor: Option<String>,
+    #[serde(default = "page_limit")]
+    limit: usize,
+}
+#[derive(serde::Serialize, Deserialize)]
+struct StreamCursor {
+    principal: String,
+    prefix: String,
+    after: String,
+}
+async fn streams_list(
+    State(s): State<DataService>,
+    headers: HeaderMap,
+    Query(query): Query<StreamListQuery>,
+) -> std::result::Result<impl IntoResponse, ApiError> {
+    let token = bearer(&headers)?;
+    let cursor = query
+        .cursor
+        .map(|c| {
+            if c.len() > 4096 {
+                return Err(Error::Invalid("cursor"));
+            }
+            let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(c)
+                .map_err(|_| Error::Invalid("cursor"))?;
+            serde_json::from_slice::<StreamCursor>(&bytes).map_err(|_| Error::Invalid("cursor"))
+        })
+        .transpose()?;
+    let (items, next) = s
+        .run(move |s| {
+            let principal = s.principal_id(&token)?;
+            let after = if let Some(cursor) = cursor {
+                if cursor.principal != principal || cursor.prefix != query.prefix {
+                    return Err(Error::Invalid("cursor binding"));
+                }
+                cursor.after
+            } else {
+                String::new()
+            };
+            let (items, next) = s.list_streams(&token, &query.prefix, &after, query.limit)?;
+            let next = next.map(|after| {
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+                    serde_json::to_vec(&StreamCursor {
+                        principal,
+                        prefix: query.prefix,
+                        after,
+                    })
+                    .expect("cursor serialization"),
+                )
+            });
+            Ok((items, next))
+        })
+        .await?;
+    Ok(Json(
+        json!({"items":items.into_iter().map(descriptor).collect::<Vec<_>>(),"next_cursor":next}),
+    ))
+}
+
+async fn creation_rules_get(
+    State(s): State<DataService>,
+    headers: HeaderMap,
+) -> std::result::Result<impl IntoResponse, ApiError> {
+    let token = bearer(&headers)?;
+    let (r, v) = s.run(move |s| s.creation_rules(&token)).await?;
+    Ok(([(header::ETAG, format!("\"creation-rules:{r}\""))], Json(v)))
+}
+async fn creation_rules_put(
+    State(s): State<DataService>,
+    headers: HeaderMap,
+    Json(input): Json<crate::store::CreationRules>,
+) -> std::result::Result<impl IntoResponse, ApiError> {
+    let token = bearer(&headers)?;
+    let r = control_revision(&headers, "creation-rules")?;
+    let r = s
+        .run(move |s| s.replace_creation_rules(&token, r, &input))
+        .await?;
+    Ok((
+        [(header::ETAG, format!("\"creation-rules:{r}\""))],
+        StatusCode::NO_CONTENT,
+    ))
 }

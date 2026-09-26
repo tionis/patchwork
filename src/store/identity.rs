@@ -436,3 +436,135 @@ impl Store {
         })
     }
 }
+
+impl Store {
+    pub(crate) fn watch_permission(
+        &self,
+        bearer: &str,
+        id: &StreamId,
+        name: &StreamName,
+    ) -> Result<()> {
+        let identity = self.identity()?;
+        let token = VerifiedToken::parse(bearer, identity.root.public())?;
+        let rights = self.rights(&token)?;
+        if !auth::permits(
+            &rights.current,
+            &rights.ceiling,
+            Action::StreamWatch,
+            Some(id),
+            name,
+        ) {
+            return Err(Error::Forbidden);
+        }
+        token.check(
+            Action::StreamWatch.as_str(),
+            "stream",
+            id.as_str(),
+            name.as_str(),
+            &identity.instance,
+            SystemTime::now(),
+        )
+    }
+    pub(crate) fn prefix_permission(
+        &self,
+        bearer: &str,
+        action: Action,
+        prefix: &str,
+    ) -> Result<()> {
+        let selector = Selector::Prefix(prefix.to_owned());
+        selector.validate()?;
+        let identity = self.identity()?;
+        let token = VerifiedToken::parse(bearer, identity.root.public())?;
+        let rights = self.rights(&token)?;
+        // Arbitrary Datalog implication over an unbounded namespace is not
+        // supported: prefix selectors require an unattenuated scoped token.
+        if !token.is_unattenuated()
+            || !auth::permits_delegation(
+                &rights.current,
+                &rights.ceiling,
+                &[Grant {
+                    actions: vec![action],
+                    selector,
+                }],
+            )
+        {
+            return Err(Error::Forbidden);
+        }
+        token.check(
+            action.as_str(),
+            "stream_prefix",
+            prefix,
+            prefix,
+            &identity.instance,
+            SystemTime::now(),
+        )
+    }
+    pub fn list_streams(
+        &mut self,
+        bearer: &str,
+        prefix: &str,
+        after: &str,
+        limit: usize,
+    ) -> Result<(Vec<crate::model::Stream>, Option<String>)> {
+        Selector::Prefix(prefix.into()).validate()?;
+        if !(1..=1000).contains(&limit) {
+            return Err(Error::Invalid("page limit"));
+        }
+        self.authenticate(bearer)?;
+        let names=self.connection.prepare("SELECT name FROM streams WHERE deleted=0 AND name>=?1 AND name<?2 AND name>?3 ORDER BY name LIMIT 1000")?.query_map(params![prefix,format!("{prefix}~"),after],|r|r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        let mut items = Vec::new();
+        let mut last = None;
+        let scanned = names.len();
+        for name in names {
+            last = Some(name.clone());
+            let stream = self.lookup_stream(&name.parse()?)?;
+            match self.authorized(
+                bearer,
+                Action::StreamList,
+                Some(&stream.id),
+                &stream.name,
+                |_| Ok(()),
+            ) {
+                Ok(()) => {}
+                Err(Error::Forbidden) => continue,
+                Err(e) => return Err(e),
+            }
+            match self.authorized(
+                bearer,
+                Action::StreamInspect,
+                Some(&stream.id),
+                &stream.name,
+                |s| s.stream(&stream.id),
+            ) {
+                Ok(stream) => items.push(stream),
+                Err(Error::Forbidden) => {}
+                Err(e) => return Err(e),
+            }
+            if items.len() == limit {
+                return Ok((items, last));
+            }
+        }
+        Ok((items, if scanned == 1000 { last } else { None }))
+    }
+    pub(crate) fn prepare_live(
+        &mut self,
+        bearer: &str,
+        id: &StreamId,
+        payload: &[u8],
+        content_type: &str,
+    ) -> Result<Option<Vec<u8>>> {
+        self.authenticate(bearer)?;
+        let stream = self.stream(id)?;
+        let config = self.config(id)?;
+        if config.value.retention != crate::model::Retention::None {
+            return Err(Error::StreamMode);
+        }
+        let candidate = crate::pipeline::evaluate(&config.value, payload, content_type);
+        self.authorized(bearer, Action::RecordAppend, Some(id), &stream.name, |s| {
+            if s.config(id)?.revision != config.revision {
+                return Err(Error::ConfigChanged);
+            }
+            candidate
+        })
+    }
+}

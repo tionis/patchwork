@@ -33,11 +33,15 @@ impl Deref for WriteTransaction<'_> {
         }
     }
 }
-struct Rollback<'a>(&'a mut Store);
+struct Rollback<'a>(&'a mut Store, bool, bool);
 impl Drop for Rollback<'_> {
     fn drop(&mut self) {
-        if !self.0.connection.is_autocommit() {
-            let _ = self.0.connection.execute_batch("ROLLBACK");
+        if self.2 && !self.0.connection.is_autocommit() {
+            let _ = self.0.connection.execute_batch(if self.1 {
+                "ROLLBACK TO command; RELEASE command"
+            } else {
+                "ROLLBACK"
+            });
         }
     }
 }
@@ -46,10 +50,20 @@ impl Store {
         &mut self,
         operation: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<T> {
-        self.connection.execute_batch("BEGIN IMMEDIATE")?;
-        let guard = Rollback(self);
+        let nested = !self.connection.is_autocommit();
+        self.connection.execute_batch(if nested {
+            "SAVEPOINT command"
+        } else {
+            "BEGIN IMMEDIATE"
+        })?;
+        let mut guard = Rollback(self, nested, true);
         let value = operation(guard.0)?;
-        guard.0.connection.execute_batch("COMMIT")?;
+        guard
+            .0
+            .connection
+            .execute_batch(if nested { "RELEASE command" } else { "COMMIT" })?;
+        // A released nested savepoint must not roll back its parent.
+        guard.2 = false;
         Ok(value)
     }
 }

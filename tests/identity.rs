@@ -466,3 +466,102 @@ fn bounded_retention_preserves_receipts_and_updates_partial_segment_summaries() 
         b"bbb"
     );
 }
+
+#[test]
+fn longest_prefix_creation_is_atomic_and_drops_leave_no_stream() {
+    use patchwork::{
+        model::{Revision, StreamConfig},
+        pipeline::Filter,
+        store::{CreationRule, CreationRules, CreationTemplate, NameAppend},
+    };
+    let (_dir, mut store, key) = fixture();
+    let admin = login(&mut store, &key);
+    let rules = CreationRules {
+        default: CreationTemplate {
+            allow_append: false,
+            config: StreamConfig::default(),
+        },
+        rules: vec![
+            CreationRule {
+                prefix: "events/".into(),
+                template: CreationTemplate {
+                    allow_append: true,
+                    config: StreamConfig {
+                        filters: vec![Filter::UppercaseAscii],
+                        ..Default::default()
+                    },
+                },
+            },
+            CreationRule {
+                prefix: "events/drop/".into(),
+                template: CreationTemplate {
+                    allow_append: true,
+                    config: StreamConfig {
+                        filters: vec![Filter::DropIfContains {
+                            data_base64: String::new(),
+                        }],
+                        ..Default::default()
+                    },
+                },
+            },
+        ],
+    };
+    store
+        .replace_creation_rules(&admin, Revision::ZERO, &rules)
+        .unwrap();
+    let dropped = "events/drop/new".parse().unwrap();
+    assert!(matches!(
+        store
+            .append_named(&admin, &dropped, b"x", "text/plain", None)
+            .unwrap(),
+        NameAppend::Dropped
+    ));
+    assert!(matches!(
+        store.lookup_stream(&dropped),
+        Err(Error::NotFound)
+    ));
+    let name = "events/new".parse().unwrap();
+    let outcome = store
+        .append_named(&admin, &name, b"abc", "text/plain", Some("creation"))
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        NameAppend::Retained { created: true, .. }
+    ));
+    let st = store.lookup_stream(&name).unwrap();
+    assert_eq!(
+        store.read(&st.id, Position::ZERO, 1, 100).unwrap().records[0].payload,
+        b"ABC"
+    );
+    assert!(matches!(
+        store
+            .append_named(&admin, &name, b"abc", "text/plain", Some("creation"))
+            .unwrap(),
+        NameAppend::Retained { created: false, .. }
+    ));
+    assert_eq!(store.stream(&st.id).unwrap().tail.get(), 1);
+    let append_only = store
+        .mint(
+            &admin,
+            &[Grant {
+                actions: vec![Action::RecordAppend],
+                selector: Selector::Prefix("events/".into()),
+            }],
+            600,
+        )
+        .unwrap();
+    let denied = "events/denied".parse().unwrap();
+    assert!(
+        store
+            .append_named(&append_only.token, &denied, b"x", "text/plain", None)
+            .is_err()
+    );
+    assert!(store.lookup_stream(&denied).is_err());
+    let invalid = "events/invalid".parse().unwrap();
+    assert!(
+        store
+            .append_named(&admin, &invalid, b"x", "text/plain", Some(""))
+            .is_err()
+    );
+    assert!(store.lookup_stream(&invalid).is_err());
+}

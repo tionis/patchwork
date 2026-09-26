@@ -19,6 +19,8 @@ const APPLICATION_ID: i64 = 0x50574348;
 const SCHEMA_VERSION: i64 = 1;
 
 mod administration;
+mod creation;
+pub use creation::{CreationRule, CreationRules, CreationTemplate, NameAppend};
 mod identity;
 mod ingress;
 mod retention;
