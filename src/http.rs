@@ -41,3 +41,5 @@ async fn ready(State(state): State<Readiness>) -> (StatusCode, Json<Health>) {
         )
     }
 }
+
+pub mod data;

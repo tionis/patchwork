@@ -144,3 +144,72 @@ fn openssh_signatures_interoperate_in_both_directions() {
         .unwrap();
     assert!(ssh::verify(&public, payload, &wrong).is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn agent_backed_public_key_can_sign_login_challenges() {
+    struct Agent(std::process::Child);
+    impl Drop for Agent {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("key");
+    let socket = dir.path().join("agent.sock");
+    assert!(
+        Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&key)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let _agent = Agent(
+        Command::new("ssh-agent")
+            .args(["-D", "-a"])
+            .arg(&socket)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !socket.exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        Command::new("ssh-add")
+            .arg(&key)
+            .env("SSH_AUTH_SOCK", &socket)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let message = dir.path().join("message");
+    let payload = b"agent-backed challenge bytes";
+    std::fs::write(&message, payload).unwrap();
+    assert!(
+        Command::new("ssh-keygen")
+            .args(["-Y", "sign", "-f"])
+            .arg(key.with_extension("pub"))
+            .args(["-n", ssh::NAMESPACE])
+            .arg(&message)
+            .env("SSH_AUTH_SOCK", &socket)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let public =
+        ssh::public_key(&std::fs::read_to_string(key.with_extension("pub")).unwrap()).unwrap();
+    ssh::verify(
+        &public,
+        payload,
+        &std::fs::read_to_string(message.with_extension("sig")).unwrap(),
+    )
+    .unwrap();
+}
