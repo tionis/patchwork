@@ -164,6 +164,24 @@ pub struct ConnectionArgs {
 }
 #[derive(Subcommand)]
 pub enum AdminCommand {
+    /// Online consistent database backup to a new private directory.
+    Backup {
+        #[arg(long)]
+        data_dir: std::path::PathBuf,
+        #[arg(long)]
+        output: std::path::PathBuf,
+    },
+    /// Verify and restore a backup into a fresh directory, preserving identity.
+    Restore {
+        #[arg(long)]
+        backup: std::path::PathBuf,
+        #[arg(long)]
+        data_dir: std::path::PathBuf,
+        #[arg(long)]
+        expected_instance: String,
+        #[arg(long)]
+        expected_origin: String,
+    },
     Principals {
         #[command(flatten)]
         connection: ConnectionArgs,

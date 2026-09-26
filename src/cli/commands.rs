@@ -101,6 +101,31 @@ async fn print_json(response: reqwest::Response) -> Result<()> {
 }
 pub async fn run(command: Command) -> Result<()> {
     match command {
+        Command::Admin {
+            command: AdminCommand::Backup { data_dir, output },
+        } => {
+            let manifest = Store::open(&data_dir)?.backup(&output)?;
+            println!(
+                "{}",
+                serde_json::to_string(&manifest).map_err(|_| Error::Invalid("backup manifest"))?
+            );
+        }
+        Command::Admin {
+            command:
+                AdminCommand::Restore {
+                    backup,
+                    data_dir,
+                    expected_instance,
+                    expected_origin,
+                },
+        } => {
+            let manifest =
+                Store::restore(&backup, &data_dir, &expected_instance, &expected_origin)?;
+            println!(
+                "{}",
+                json!({"outcome":"restored","instance_id":manifest.instance_id,"origin":manifest.origin})
+            );
+        }
         Command::Hook {
             connection,
             command,

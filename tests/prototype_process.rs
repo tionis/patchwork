@@ -669,4 +669,132 @@ fn kv_cli_roundtrips_binary_values_and_checks_conditions() {
         .status
         .success()
     );
+    let hook_stream: Value = serde_json::from_slice(
+        &ok(
+            &[
+                "stream",
+                "--url",
+                &url,
+                "--token-file",
+                token,
+                "create",
+                "hooks/cli",
+            ],
+            None,
+        )
+        .stdout,
+    )
+    .unwrap();
+    let hook_file = dir.path().join("hook.json");
+    std::fs::write(&hook_file,json!({"config":{"stream_id":hook_stream["id"],"enabled":true,"git_ref":null,"transform":"wakeup","success_status":204},"secret":"cli-webhook-secret-123456"}).to_string()).unwrap();
+    let hook: Value = serde_json::from_slice(
+        &ok(
+            &[
+                "hook",
+                "--url",
+                &url,
+                "--token-file",
+                token,
+                "create",
+                "--file",
+                hook_file.to_str().unwrap(),
+            ],
+            None,
+        )
+        .stdout,
+    )
+    .unwrap();
+    let hid = hook["id"].as_str().unwrap();
+    ok(
+        &["hook", "--url", &url, "--token-file", token, "get", hid],
+        None,
+    );
+    let bytes =
+        json!({"ref":"refs/heads/main","after":"abc","repository":{"full_name":"example/repo"}})
+            .to_string();
+    use hmac::Mac;
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(b"cli-webhook-secret-123456").unwrap();
+    mac.update(bytes.as_bytes());
+    let signature = format!(
+        "sha256={}",
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let response = reqwest::Client::new()
+            .post(format!("{url}/hooks/{hid}"))
+            .header("x-hub-signature-256", signature)
+            .header("x-github-event", "push")
+            .header("x-github-delivery", uuid::Uuid::new_v4().to_string())
+            .body(bytes)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    });
+    let backup = dir.path().join("backup");
+    let manifest: Value = serde_json::from_slice(
+        &ok(
+            &[
+                "admin",
+                "backup",
+                "--data-dir",
+                path,
+                "--output",
+                backup.to_str().unwrap(),
+            ],
+            None,
+        )
+        .stdout,
+    )
+    .unwrap();
+    drop(_server);
+    let restored = dir.path().join("restored");
+    ok(
+        &[
+            "admin",
+            "restore",
+            "--backup",
+            backup.to_str().unwrap(),
+            "--data-dir",
+            restored.to_str().unwrap(),
+            "--expected-instance",
+            manifest["instance_id"].as_str().unwrap(),
+            "--expected-origin",
+            &url,
+        ],
+        None,
+    );
+    let _restored_server = start(restored.to_str().unwrap(), &address, &url);
+    let hook: Value = serde_json::from_slice(
+        &ok(
+            &["hook", "--url", &url, "--token-file", token, "get", hid],
+            None,
+        )
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(hook["value"]["counters"]["accepted"], "1");
+    assert!(
+        !cli(
+            &[
+                "kv",
+                "--url",
+                &url,
+                "--token-file",
+                token,
+                sid,
+                "get",
+                aid,
+                "key/日本"
+            ],
+            None
+        )
+        .status
+        .success()
+    );
 }

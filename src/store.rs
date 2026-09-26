@@ -21,6 +21,7 @@ const SCHEMA_VERSION: i64 = 1;
 mod administration;
 mod creation;
 pub use creation::{CreationRule, CreationRules, CreationTemplate, NameAppend};
+pub mod backup;
 pub mod hooks;
 mod identity;
 mod ingress;
@@ -41,6 +42,9 @@ pub struct Store {
 impl Store {
     /// Opens only the new format file; never opens/migrates legacy patchwork.db.
     pub fn open(data_dir: &Path) -> Result<Self> {
+        if data_dir.join(".restore-incomplete").exists() {
+            return Err(Error::Invalid("incomplete restore"));
+        }
         std::fs::create_dir_all(data_dir)?;
         let mut connection = Connection::open(data_dir.join("patchwork-v1.sqlite3"))?;
         connection.busy_timeout(Duration::from_secs(2))?;
