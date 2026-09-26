@@ -1,5 +1,11 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("authentication failed")]
+    Unauthorized,
+    #[error("permission denied")]
+    Forbidden,
+    #[error("service is busy")]
+    Busy,
     #[error("invalid {0}")]
     Invalid(&'static str),
     #[error("numeric range exhausted")]

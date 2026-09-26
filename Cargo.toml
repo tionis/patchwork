@@ -7,6 +7,10 @@ license = "MIT"
 publish = false
 
 [dependencies]
+biscuit-auth = { version = "=6.0.0", default-features = false, features = ["datalog-macro"] }
+ssh-key = { version = "=0.6.7", default-features = false, features = ["std", "ed25519"] }
+base64 = "0.22"
+rand = "0.8"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "json"] }
 clap = { version = "4.5", features = ["derive"] }
 reqwest = { version = "0.13.5", default-features = false }
@@ -20,7 +24,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-biscuit-auth = { version = "6.0.0", default-features = false, features = ["datalog-macro"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 
