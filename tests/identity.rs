@@ -142,3 +142,62 @@ fn credential_expiry_principal_disable_and_policy_removal_take_effect() {
     assert!(store.mint(&session, &[], 100).is_err());
     assert!(store.lookup_stream(&name).is_err());
 }
+
+#[test]
+fn failed_challenge_attempts_are_bounded_and_exact_scopes_do_not_follow_names() {
+    let (_dir, mut store, key) = fixture();
+    let challenge = store
+        .challenge(&key.public_key().to_openssh().unwrap())
+        .unwrap();
+    for _ in 0..5 {
+        assert!(
+            store
+                .exchange(&challenge.challenge_id, "malformed")
+                .is_err()
+        );
+    }
+    let signature = key
+        .sign(
+            ssh::NAMESPACE,
+            ssh_key::HashAlg::Sha512,
+            &STANDARD.decode(&challenge.payload_base64).unwrap(),
+        )
+        .unwrap()
+        .to_pem(ssh_key::LineEnding::LF)
+        .unwrap();
+    assert!(store.exchange(&challenge.challenge_id, &signature).is_err());
+    let session = login(&mut store, &key);
+    let name = "events/exact".parse().unwrap();
+    let stream = store.create_stream(&name).unwrap();
+    let scope = [Grant {
+        actions: vec![Action::RecordRead],
+        selector: Selector::Stream(stream.id.as_str().into()),
+    }];
+    let reader = store.mint(&session, &scope, 600).unwrap();
+    assert!(
+        store
+            .authorized(
+                &reader.token,
+                Action::RecordRead,
+                Some(&stream.id),
+                &name,
+                |s| s.read(&stream.id, Position::ZERO, 1, 1)
+            )
+            .is_ok()
+    );
+    store
+        .delete_stream(&stream.id, patchwork::model::Revision::ZERO)
+        .unwrap();
+    let replacement = store.create_stream(&name).unwrap();
+    assert!(
+        store
+            .authorized(
+                &reader.token,
+                Action::RecordRead,
+                Some(&replacement.id),
+                &name,
+                |s| s.read(&replacement.id, Position::ZERO, 1, 1)
+            )
+            .is_err()
+    );
+}

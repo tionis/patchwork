@@ -62,5 +62,6 @@ CREATE TABLE challenges (
     id TEXT PRIMARY KEY,
     ssh_key TEXT NOT NULL,
     payload TEXT NOT NULL,
-    expires_at INTEGER NOT NULL
+    expires_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 5)
 ) STRICT;

@@ -156,7 +156,7 @@ impl Store {
                 return Err(Error::Busy);
             }
             store.connection.execute(
-                "INSERT INTO challenges VALUES (?1,?2,?3,?4)",
+                "INSERT INTO challenges(id,ssh_key,payload,expires_at) VALUES (?1,?2,?3,?4)",
                 params![challenge_id, key, payload, expires_at],
             )?;
             Ok(())
@@ -179,6 +179,9 @@ impl Store {
             .optional()?
             .ok_or(Error::Unauthorized)?;
         if expires <= now()? {
+            return Err(Error::Unauthorized);
+        }
+        if self.connection.execute("UPDATE challenges SET attempts=attempts+1 WHERE id=?1 AND expires_at>?2 AND attempts<5", params![challenge_id,now()?])? != 1 {
             return Err(Error::Unauthorized);
         }
         ssh::verify(&ssh::public_key(&key)?, payload.as_bytes(), signature)?;
@@ -274,8 +277,32 @@ impl Store {
             if !auth::permits(&current, &ceiling, action, id, name) {
                 return Err(Error::Forbidden);
             }
+            // Recheck time-sensitive attenuation after any SQLite lock wait.
+            verified.check(
+                action.as_str(),
+                "stream",
+                id.map_or("", StreamId::as_str),
+                name.as_str(),
+                &identity.instance,
+                SystemTime::now(),
+            )?;
             command(store)
         })
+    }
+    fn can_delegate(&self, current: &[Grant], ceiling: &[Grant], grants: &[Grant]) -> Result<bool> {
+        for grant in grants {
+            if let Selector::Stream(id) = &grant.selector {
+                let stream = self.stream(&id.parse()?)?;
+                if !grant.actions.iter().all(|action| {
+                    auth::permits(current, ceiling, *action, Some(&stream.id), &stream.name)
+                }) {
+                    return Ok(false);
+                }
+            } else if !auth::permits_delegation(current, ceiling, std::slice::from_ref(grant)) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
     pub fn mint(
         &mut self,
@@ -309,7 +336,7 @@ impl Store {
             } = store.rights(&verified)?;
             if kind != "ssh_session"
                 || !can_mint
-                || !auth::permits_delegation(&current, &ceiling, grants)
+                || !store.can_delegate(&current, &ceiling, grants)?
             {
                 return Err(Error::Forbidden);
             }
