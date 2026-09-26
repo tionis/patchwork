@@ -34,7 +34,10 @@ done
 patchwork_demo_id=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <"$patchwork_demo_dir/stream.json")
 printf '\000\377hello Patchwork\n' >"$patchwork_demo_dir/input.bin"
 "$patchwork_cli" append --url "$patchwork_demo_url" --token-file "$patchwork_demo_dir/session" \
-    "$patchwork_demo_id" <"$patchwork_demo_dir/input.bin"
+    "$patchwork_demo_id" --idempotency-key demo-once <"$patchwork_demo_dir/input.bin"
+"$patchwork_cli" append --url "$patchwork_demo_url" --token-file "$patchwork_demo_dir/session" \
+    "$patchwork_demo_id" --idempotency-key demo-once <"$patchwork_demo_dir/input.bin" >"$patchwork_demo_dir/retry.json"
+python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["deduplicated"] and r["position"] == "0"' <"$patchwork_demo_dir/retry.json"
 cat >"$patchwork_demo_dir/read-scope.json" <<'JSON'
 [{"actions":["record.read"],"selector":{"kind":"prefix","value":"events/"}}]
 JSON
@@ -49,4 +52,4 @@ if "$patchwork_cli" append --url "$patchwork_demo_url" --token-file "$patchwork_
     exit 1
 fi
 "$patchwork_cli" read --url "$patchwork_demo_url" --token-file "$patchwork_demo_dir/reader" "$patchwork_demo_id"
-printf 'Prototype passed: binary round trip and read-only enforcement. Data and logs: %s\n' "$patchwork_demo_dir"
+printf 'Core demo passed: binary round trip, idempotent retry and read-only enforcement. Data and logs: %s\n' "$patchwork_demo_dir"

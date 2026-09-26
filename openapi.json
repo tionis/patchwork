@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Patchwork loopback prototype",
+    "title": "Patchwork authenticated streams",
     "version": "0.1.0",
-    "description": "Opt in with --data-api after local bootstrap. Infinite retained streams only; none descriptors have no delivery. No listing, follow, trim, objects, KV, pipelines or idempotency. Input bodies are limited to 1 MiB. Prototype capacity and production authorization gates remain open."
+    "description": "Authenticated stream core with SSHSIG login, Biscuit attenuation, revisioned administration, pipelines, durable idempotency, bounded retention and SSE. Data routes require --data-api and local bootstrap. The server binds loopback; HTTPS clients can use a TLS frontend. Objects, snapshots, KV and webhooks are not implemented. Compatibility aliases without /v1 remain available."
   },
   "servers": [
     {
@@ -38,6 +38,136 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": []
@@ -67,20 +197,131 @@
             }
           },
           "503": {
-            "description": "Startup is incomplete or shutdown has begun.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
-              "application/json": {
+              "application/problem+json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "status": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "status"
-                  ]
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -89,7 +330,7 @@
         "security": []
       }
     },
-    "/auth/challenges": {
+    "/v1/auth/challenges": {
       "post": {
         "summary": "Create a 60-second SSHSIG challenge",
         "responses": {
@@ -104,7 +345,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -114,7 +355,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -124,7 +365,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -134,7 +375,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -144,7 +385,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -154,7 +395,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -164,7 +405,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -174,7 +415,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -184,7 +425,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -194,7 +435,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -204,7 +445,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -223,12 +484,12 @@
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "ssh_public_key": {
+                  "public_key": {
                     "type": "string"
                   }
                 },
                 "required": [
-                  "ssh_public_key"
+                  "public_key"
                 ]
               }
             }
@@ -236,7 +497,7 @@
         }
       }
     },
-    "/auth/exchange": {
+    "/v1/auth/exchange": {
       "post": {
         "summary": "Redeem a challenge once for a 15-minute SSH session",
         "responses": {
@@ -251,7 +512,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -261,7 +522,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -271,7 +532,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -281,7 +542,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -291,7 +552,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -301,7 +562,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -311,7 +572,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -321,7 +582,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -331,7 +592,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -341,7 +602,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -351,7 +612,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -387,293 +668,7 @@
         }
       }
     },
-    "/credentials": {
-      "post": {
-        "summary": "Mint from a fresh unattenuated SSH session",
-        "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Credential"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "410": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "428": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "grants": {
-                    "type": "array",
-                    "maxItems": 128,
-                    "items": {
-                      "$ref": "#/components/schemas/Grant"
-                    }
-                  },
-                  "lifetime_seconds": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 86400
-                  }
-                },
-                "required": [
-                  "grants",
-                  "lifetime_seconds"
-                ]
-              }
-            }
-          }
-        }
-      }
-    },
-    "/credentials/{id}": {
-      "delete": {
-        "summary": "Revoke a credential belonging to this principal",
-        "responses": {
-          "204": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "410": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "428": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Request failed; no successful mutation is implied.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/streams": {
+    "/v1/streams": {
       "post": {
         "summary": "Create a stream explicitly",
         "responses": {
@@ -688,7 +683,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -698,7 +693,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -708,7 +703,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -718,7 +713,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -728,7 +723,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -738,7 +733,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -748,7 +743,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -758,7 +753,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -768,7 +763,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -778,7 +773,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -788,7 +783,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -825,9 +840,202 @@
             }
           }
         }
+      },
+      "get": {
+        "summary": "List authorized descriptors; each item requires list and inspect",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Stream"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "next_cursor"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "prefix",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false
+          }
+        ]
       }
     },
-    "/streams/resolve": {
+    "/v1/streams/resolve": {
       "get": {
         "summary": "Resolve an exact canonical name with stream.inspect authority",
         "responses": {
@@ -842,7 +1050,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -852,7 +1060,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -862,7 +1070,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -872,7 +1080,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -882,7 +1090,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -892,7 +1100,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -902,7 +1110,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -912,7 +1120,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -922,7 +1130,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -932,7 +1140,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -942,7 +1150,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -964,7 +1192,7 @@
         ]
       }
     },
-    "/streams/{id}": {
+    "/v1/streams/{id}": {
       "get": {
         "summary": "Inspect a stream",
         "responses": {
@@ -979,7 +1207,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -989,7 +1217,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -999,7 +1227,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1009,7 +1237,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1019,7 +1247,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1029,7 +1257,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1039,7 +1267,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1049,7 +1277,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1059,7 +1287,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1069,7 +1297,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1079,7 +1307,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1107,7 +1355,7 @@
             "description": "Success"
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1117,7 +1365,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1127,7 +1375,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1137,7 +1385,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1147,7 +1395,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1157,7 +1405,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1167,7 +1415,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1177,7 +1425,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1187,7 +1435,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1197,7 +1445,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1207,7 +1455,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1237,7 +1505,7 @@
         ]
       }
     },
-    "/streams/{id}/config": {
+    "/v1/streams/{id}/config": {
       "get": {
         "summary": "Get concrete storage configuration",
         "responses": {
@@ -1260,7 +1528,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1270,7 +1538,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1280,7 +1548,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1290,7 +1558,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1300,7 +1568,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1310,7 +1578,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1320,7 +1588,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1330,7 +1598,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1340,7 +1608,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1350,7 +1618,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1360,7 +1628,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1382,7 +1670,7 @@
         ]
       },
       "put": {
-        "summary": "Replace configuration; mode changes are unavailable",
+        "summary": "Replace configuration; switching between retained and live modes is rejected",
         "responses": {
           "204": {
             "description": "Success",
@@ -1396,7 +1684,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1406,7 +1694,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1416,7 +1704,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1426,7 +1714,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1436,7 +1724,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1446,7 +1734,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1456,7 +1744,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1466,7 +1754,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1476,7 +1764,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1486,7 +1774,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1496,7 +1784,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1536,7 +1844,7 @@
         }
       }
     },
-    "/streams/{id}/metadata": {
+    "/v1/streams/{id}/metadata": {
       "get": {
         "summary": "Get application metadata",
         "responses": {
@@ -1559,7 +1867,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1569,7 +1877,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1579,7 +1887,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1589,7 +1897,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1599,7 +1907,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1609,7 +1917,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1619,7 +1927,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1629,7 +1937,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1639,7 +1947,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1649,7 +1957,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1659,7 +1967,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1695,7 +2023,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1705,7 +2033,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1715,7 +2043,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1725,7 +2053,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1735,7 +2063,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1745,7 +2073,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1755,7 +2083,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1765,7 +2093,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1775,7 +2103,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1785,7 +2113,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1795,7 +2123,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1835,9 +2183,9 @@
         }
       }
     },
-    "/streams/{id}/records": {
+    "/v1/streams/{id}/records": {
       "post": {
-        "summary": "Append one record; Idempotency-Key is currently rejected",
+        "summary": "Process one raw record; retained keyed outcomes persist for 24 hours per principal",
         "responses": {
           "201": {
             "description": "Success",
@@ -1850,7 +2198,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1860,7 +2208,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1870,7 +2218,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1880,7 +2228,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1890,7 +2238,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1900,7 +2248,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1910,7 +2258,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1920,7 +2268,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1930,7 +2278,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1940,7 +2288,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1950,7 +2298,47 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dropped or deduplicated retained outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppendReceipt"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Ephemeral live publication; no durable cursor or receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppendReceipt"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1968,6 +2356,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "required": false
           }
         ],
         "requestBody": {
@@ -1997,7 +2395,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2007,7 +2405,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2017,7 +2415,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2027,7 +2425,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2037,7 +2435,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2047,7 +2445,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2057,7 +2455,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2067,7 +2465,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2077,7 +2475,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2087,7 +2485,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2097,7 +2495,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2122,9 +2540,9 @@
             "schema": {
               "type": "string",
               "pattern": "^(0|[1-9][0-9]*)$",
-              "description": "Nonnegative signed-64-bit counter encoded as canonical decimal.",
-              "default": "0"
-            }
+              "description": "Nonnegative signed-64-bit counter encoded as canonical decimal."
+            },
+            "required": true
           },
           {
             "name": "limit",
@@ -2143,13 +2561,13 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 16777216,
-              "default": 1048576
+              "default": 4194304
             }
           }
         ]
       }
     },
-    "/streams/{id}/records/{position}": {
+    "/v1/streams/{id}/records/{position}": {
       "get": {
         "summary": "Read exact record bytes with stored Content-Type",
         "responses": {
@@ -2165,7 +2583,7 @@
             }
           },
           "400": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2175,7 +2593,7 @@
             }
           },
           "401": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2185,7 +2603,7 @@
             }
           },
           "403": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2195,7 +2613,7 @@
             }
           },
           "404": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2205,7 +2623,7 @@
             }
           },
           "409": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2215,7 +2633,7 @@
             }
           },
           "410": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2225,7 +2643,7 @@
             }
           },
           "412": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2235,7 +2653,7 @@
             }
           },
           "413": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2245,7 +2663,7 @@
             }
           },
           "422": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2255,7 +2673,7 @@
             }
           },
           "428": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2265,7 +2683,27 @@
             }
           },
           "503": {
-            "description": "Request failed; no successful mutation is implied.",
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2295,6 +2733,2586 @@
             }
           }
         ]
+      }
+    },
+    "/v1/auth/credentials": {
+      "post": {
+        "summary": "Mint from a fresh unattenuated SSH session",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credential"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "grants": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                      "$ref": "#/components/schemas/Grant"
+                    }
+                  },
+                  "lifetime_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 86400
+                  }
+                },
+                "required": [
+                  "grants",
+                  "lifetime_seconds"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List own credentials; secrets are never returned",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CredentialDescriptor"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "next_cursor"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false
+          }
+        ]
+      }
+    },
+    "/v1/auth/credentials/{id}": {
+      "delete": {
+        "summary": "Revoke a credential belonging to this principal",
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/auth/whoami": {
+      "get": {
+        "summary": "Inspect authenticated identity",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "principal_id": {
+                      "type": "string"
+                    },
+                    "credential_id": {
+                      "type": "string"
+                    },
+                    "instance_id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "principal_id",
+                    "credential_id",
+                    "instance_id",
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/principals": {
+      "get": {
+        "summary": "List principals",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Principal"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "next_cursor"
+                  ]
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Revision tag used verbatim in If-Match."
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "required": false
+          }
+        ]
+      },
+      "post": {
+        "summary": "Create a principal",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Principal"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Revision tag used verbatim in If-Match."
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrincipalInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/principals/{id}": {
+      "put": {
+        "summary": "Replace principal using ETag \"principal:ID:REV\"; last enabled admin cannot be removed",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Principal"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Revision tag used verbatim in If-Match."
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrincipalInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/policy": {
+      "get": {
+        "summary": "Read policy with ETag",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthPolicy"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Revision tag used verbatim in If-Match."
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Replace using If-Match \"policy:REV\"",
+        "responses": {
+          "204": {
+            "description": "Success",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Revision tag used verbatim in If-Match."
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthPolicy"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/creation-rules": {
+      "get": {
+        "summary": "Read creation-rules with ETag",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreationRules"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Revision tag used verbatim in If-Match."
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Replace using If-Match \"creation-rules:REV\"",
+        "responses": {
+          "204": {
+            "description": "Success",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Revision tag used verbatim in If-Match."
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreationRules"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/streams/append": {
+      "post": {
+        "summary": "Append by exact name, with opt-in longest-prefix creation; absent drop leaves no stream",
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppendReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dropped or deduplicated retained outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppendReceipt"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Ephemeral live publication; no durable cursor or receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppendReceipt"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "required": false
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "*/*": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 1048576
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/streams/{id}/follow": {
+      "get": {
+        "summary": "Retained follow: ready then record events; event ID is STREAM_ID:NEXT_POSITION. Supply from or Last-Event-ID; inconsistent pairs fail.",
+        "responses": {
+          "200": {
+            "description": "SSE stream. Comments are keepalives. Authorization is refreshed before batches and at least once per second while idle. Terminal error events close the stream.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$",
+              "description": "Nonnegative signed-64-bit counter encoded as canonical decimal."
+            },
+            "required": false
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ]
+      }
+    },
+    "/v1/streams/{id}/live": {
+      "get": {
+        "summary": "Ephemeral live subscription: ready with epoch/sequence, then record events; eight-record queue and lagged closure",
+        "responses": {
+          "200": {
+            "description": "SSE stream. Comments are keepalives. Authorization is refreshed before batches and at least once per second while idle. Terminal error events close the stream.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ]
+      }
+    },
+    "/v1/watch": {
+      "post": {
+        "summary": "Watch hints only. Choose prefix or explicit IDs; all explicit IDs must be authorized. Prefix requires universal prefix authority and an unattenuated token.",
+        "responses": {
+          "200": {
+            "description": "SSE stream. Comments are keepalives. Authorization is refreshed before batches and at least once per second while idle. Terminal error events close the stream.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed. Retry a possibly committed mutation with its original idempotency key.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "prefix": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "prefix"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "stream_ids": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "maxItems": 256
+                      }
+                    },
+                    "required": [
+                      "stream_ids"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -2340,25 +5358,208 @@
         "additionalProperties": false,
         "properties": {
           "retention": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "infinite",
-                  "none"
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "infinite"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "none"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mode": {
+                    "const": "bounded"
+                  },
+                  "max_age_seconds": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]*)$",
+                        "description": "Nonnegative signed-64-bit counter encoded as canonical decimal."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "max_bytes": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]*)$",
+                        "description": "Nonnegative signed-64-bit counter encoded as canonical decimal."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "mode"
                 ]
               }
-            },
-            "required": [
-              "mode"
-            ]
+            ],
+            "description": "Bounded mode requires at least one positive bound. Retained/none mode changes are rejected."
           },
           "max_record_bytes": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 1048576
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Canonical decimal, 1 through 1048576."
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "uppercase_ascii"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "prepend"
+                    },
+                    "data_base64": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "data_base64"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "drop_if_contains"
+                    },
+                    "data_base64": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "data_base64"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "reject_if_contains"
+                    },
+                    "data_base64": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "data_base64"
+                  ]
+                }
+              ]
+            },
+            "maxItems": 16
+          },
+          "validators": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "utf8"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "json"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "content_type"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "value"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "max_bytes"
+                    },
+                    "value": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1048576
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "value"
+                  ]
+                }
+              ]
+            },
+            "maxItems": 16
           }
         },
         "required": [
@@ -2395,15 +5596,20 @@
             "type": "string",
             "pattern": "^(0|[1-9][0-9]*)$",
             "description": "Nonnegative signed-64-bit counter encoded as canonical decimal."
+          },
+          "mode": {
+            "enum": [
+              "retained",
+              "none"
+            ]
           }
         },
         "required": [
           "id",
           "name",
-          "head",
-          "tail",
           "config_revision",
-          "metadata_revision"
+          "metadata_revision",
+          "mode"
         ]
       },
       "Metadata": {
@@ -2432,10 +5638,18 @@
           "actions": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 9,
+            "maxItems": 17,
             "items": {
               "type": "string",
               "enum": [
+                "stream.list",
+                "stream.watch",
+                "record.subscribe",
+                "admin.read",
+                "admin.write",
+                "credential.mint",
+                "credential.list",
+                "credential.revoke",
                 "stream.create",
                 "stream.inspect",
                 "stream.delete",
@@ -2456,7 +5670,8 @@
                 "type": "string",
                 "enum": [
                   "stream",
-                  "prefix"
+                  "prefix",
+                  "instance"
                 ]
               },
               "value": {
@@ -2485,8 +5700,8 @@
             "type": "string"
           },
           "expires_at": {
-            "type": "integer",
-            "description": "Unix seconds"
+            "type": "string",
+            "format": "date-time"
           }
         },
         "required": [
@@ -2506,7 +5721,8 @@
             "type": "string"
           },
           "expires_at": {
-            "type": "integer"
+            "type": "string",
+            "format": "date-time"
           },
           "namespace": {
             "const": "patchwork-auth-v1"
@@ -2528,21 +5744,30 @@
             "pattern": "^(0|[1-9][0-9]*)$",
             "description": "Nonnegative signed-64-bit counter encoded as canonical decimal."
           },
-          "payload_base64": {
+          "data_base64": {
             "type": "string"
           },
           "content_type": {
             "type": "string"
           },
-          "accepted_at_ms": {
-            "type": "integer"
+          "accepted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "object_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 0
           }
         },
         "required": [
           "position",
-          "payload_base64",
+          "data_base64",
           "content_type",
-          "accepted_at_ms"
+          "accepted_at",
+          "object_refs"
         ]
       },
       "AppendReceipt": {
@@ -2550,7 +5775,11 @@
         "additionalProperties": false,
         "properties": {
           "outcome": {
-            "const": "appended"
+            "enum": [
+              "appended",
+              "dropped",
+              "published"
+            ]
           },
           "stream_id": {
             "type": "string"
@@ -2564,13 +5793,28 @@
             "type": "string",
             "pattern": "^(0|[1-9][0-9]*)$",
             "description": "Nonnegative signed-64-bit counter encoded as canonical decimal."
+          },
+          "deduplicated": {
+            "type": "boolean"
+          },
+          "idempotency_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "epoch": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Nonnegative signed-64-bit counter encoded as canonical decimal."
+          },
+          "name": {
+            "type": "string"
           }
         },
         "required": [
-          "outcome",
-          "stream_id",
-          "position",
-          "next_position"
+          "outcome"
         ]
       },
       "Replay": {
@@ -2597,13 +5841,180 @@
             "items": {
               "$ref": "#/components/schemas/Record"
             }
+          },
+          "stream_id": {
+            "type": "string"
           }
         },
         "required": [
           "head",
           "tail",
           "next_position",
-          "records"
+          "records",
+          "stream_id"
+        ]
+      },
+      "PrincipalInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ssh_public_key": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "can_mint": {
+            "type": "boolean"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Grant"
+            }
+          }
+        },
+        "required": [
+          "ssh_public_key",
+          "enabled",
+          "can_mint",
+          "grants"
+        ]
+      },
+      "Principal": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Nonnegative signed-64-bit counter encoded as canonical decimal."
+          },
+          "ssh_public_key": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "can_mint": {
+            "type": "boolean"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Grant"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "ssh_public_key",
+          "enabled",
+          "can_mint",
+          "grants"
+        ]
+      },
+      "AuthPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "max_api_lifetime_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400
+          }
+        },
+        "required": [
+          "max_api_lifetime_seconds"
+        ]
+      },
+      "CreationRules": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "allow_append": {
+                "type": "boolean"
+              },
+              "config": {
+                "$ref": "#/components/schemas/Config"
+              }
+            },
+            "required": [
+              "allow_append",
+              "config"
+            ]
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "prefix": {
+                  "type": "string"
+                },
+                "allow_append": {
+                  "type": "boolean"
+                },
+                "config": {
+                  "$ref": "#/components/schemas/Config"
+                }
+              },
+              "required": [
+                "prefix",
+                "allow_append",
+                "config"
+              ]
+            },
+            "maxItems": 128
+          }
+        },
+        "required": [
+          "default",
+          "rules"
+        ]
+      },
+      "CredentialDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Grant"
+            }
+          },
+          "kind": {
+            "enum": [
+              "ssh_session",
+              "api"
+            ]
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revoked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "grants",
+          "kind",
+          "expires_at",
+          "revoked"
         ]
       }
     }

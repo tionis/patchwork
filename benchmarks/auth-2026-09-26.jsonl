@@ -1,0 +1,10 @@
+{"arch":"x86_64","cpu":"model name\t: Intel(R) Core(TM) i7-8650U CPU @ 1.90GHz","limits":{"blocks":8,"bytes":32768,"execution_ms":50,"facts":1000,"iterations":100},"os":"linux","profile":"release","samples":100}
+{"accepted":100,"blocks":1,"encoded_bytes":548,"extra_facts":10,"p50_us":501,"p95_us":4605,"p99_us":9504,"process_cumulative_peak_rss":"VmHWM:\t    3652 kB","rejected":0,"requests_per_second":862.1201650501469}
+{"accepted":100,"blocks":1,"encoded_bytes":1868,"extra_facts":100,"p50_us":974,"p95_us":3061,"p99_us":4382,"process_cumulative_peak_rss":"VmHWM:\t    3748 kB","rejected":0,"requests_per_second":761.9913879885728}
+{"accepted":0,"blocks":1,"encoded_bytes":16232,"extra_facts":1000,"p50_us":3016,"p95_us":7017,"p99_us":10106,"process_cumulative_peak_rss":"VmHWM:\t    4404 kB","rejected":100,"requests_per_second":258.12811356711865}
+{"accepted":100,"blocks":8,"encoded_bytes":1948,"extra_facts":10,"p50_us":1952,"p95_us":3551,"p99_us":5239,"process_cumulative_peak_rss":"VmHWM:\t    4364 kB","rejected":0,"requests_per_second":472.12385534810596}
+{"accepted":100,"blocks":8,"encoded_bytes":3280,"extra_facts":100,"p50_us":2503,"p95_us":4466,"p99_us":6903,"process_cumulative_peak_rss":"VmHWM:\t    4364 kB","rejected":0,"requests_per_second":358.7070208860714}
+{"accepted":0,"blocks":8,"encoded_bytes":17640,"extra_facts":1000,"p50_us":4233,"p95_us":11926,"p99_us":15365,"process_cumulative_peak_rss":"VmHWM:\t    4384 kB","rejected":100,"requests_per_second":184.21694603396804}
+{"accepted":0,"blocks":32,"encoded_bytes":6748,"extra_facts":10,"p50_us":617,"p95_us":730,"p99_us":4727,"process_cumulative_peak_rss":"VmHWM:\t    4384 kB","rejected":100,"requests_per_second":1284.044909932981}
+{"accepted":0,"blocks":32,"encoded_bytes":8068,"extra_facts":100,"p50_us":707,"p95_us":3558,"p99_us":4794,"process_cumulative_peak_rss":"VmHWM:\t    4384 kB","rejected":100,"requests_per_second":1050.970956333544}
+{"accepted":0,"blocks":32,"encoded_bytes":22472,"extra_facts":1000,"p50_us":1397,"p95_us":1781,"p99_us":2087,"process_cumulative_peak_rss":"VmHWM:\t    4384 kB","rejected":100,"requests_per_second":685.5128358199706}
