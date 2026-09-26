@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Action {
+    #[serde(rename = "kv.read")]
+    KvRead,
+    #[serde(rename = "kv.write")]
+    KvWrite,
+    #[serde(rename = "attachment.read")]
+    AttachmentRead,
+    #[serde(rename = "attachment.write")]
+    AttachmentWrite,
     #[serde(rename = "stream.list")]
     StreamList,
     #[serde(rename = "stream.watch")]
@@ -45,7 +53,11 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 21] = [
+        Self::KvRead,
+        Self::KvWrite,
+        Self::AttachmentRead,
+        Self::AttachmentWrite,
         Self::StreamList,
         Self::StreamWatch,
         Self::RecordSubscribe,
@@ -66,6 +78,10 @@ impl Action {
     ];
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::KvRead => "kv.read",
+            Self::KvWrite => "kv.write",
+            Self::AttachmentRead => "attachment.read",
+            Self::AttachmentWrite => "attachment.write",
             Self::StreamList => "stream.list",
             Self::StreamWatch => "stream.watch",
             Self::RecordSubscribe => "record.subscribe",

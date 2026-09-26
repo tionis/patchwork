@@ -514,3 +514,159 @@ fn bootstrap_login_binary_stream_scoped_credentials_and_hard_restart() {
         bytes
     );
 }
+
+#[test]
+fn kv_cli_roundtrips_binary_values_and_checks_conditions() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("key");
+    let token = dir.path().join("session");
+    assert!(
+        Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&key)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap().to_string();
+    drop(probe);
+    let url = format!("http://{address}");
+    let path = dir.path().to_str().unwrap();
+    let public = key.with_extension("pub");
+    ok(
+        &[
+            "admin",
+            "bootstrap",
+            "--data-dir",
+            path,
+            "--ssh-public-key",
+            public.to_str().unwrap(),
+            "--origin",
+            &url,
+        ],
+        None,
+    );
+    let _server = start(path, &address, &url);
+    ok(
+        &[
+            "login",
+            "--url",
+            &url,
+            "--ssh-key",
+            key.to_str().unwrap(),
+            "--ssh-public-key",
+            public.to_str().unwrap(),
+            "--output",
+            token.to_str().unwrap(),
+        ],
+        None,
+    );
+    let token = token.to_str().unwrap();
+    let st: Value = serde_json::from_slice(
+        &ok(
+            &[
+                "stream",
+                "--url",
+                &url,
+                "--token-file",
+                token,
+                "create",
+                "kv/cli",
+            ],
+            None,
+        )
+        .stdout,
+    )
+    .unwrap();
+    let sid = st["id"].as_str().unwrap();
+    let a: Value = serde_json::from_slice(
+        &ok(
+            &[
+                "kv",
+                "--url",
+                &url,
+                "--token-file",
+                token,
+                sid,
+                "enable",
+                "--config-revision",
+                "0",
+            ],
+            None,
+        )
+        .stdout,
+    )
+    .unwrap();
+    let aid = a["id"].as_str().unwrap();
+    let args = [
+        "kv",
+        "--url",
+        &url,
+        "--token-file",
+        token,
+        sid,
+        "put",
+        aid,
+        "key/日本",
+        "--if-absent",
+        "--idempotency-key",
+        "first",
+    ];
+    let receipt: Value = serde_json::from_slice(&ok(&args, Some(b"\0\xffvalue")).stdout).unwrap();
+    assert_eq!(receipt["revision"], "0");
+    let retry: Value = serde_json::from_slice(&ok(&args, Some(b"\0\xffvalue")).stdout).unwrap();
+    assert_eq!(retry["deduplicated"], true);
+    assert_eq!(
+        ok(
+            &[
+                "kv",
+                "--url",
+                &url,
+                "--token-file",
+                token,
+                sid,
+                "get",
+                aid,
+                "key/日本"
+            ],
+            None
+        )
+        .stdout,
+        b"\0\xffvalue"
+    );
+    ok(
+        &[
+            "kv",
+            "--url",
+            &url,
+            "--token-file",
+            token,
+            sid,
+            "delete",
+            aid,
+            "key/日本",
+            "--if-match",
+            "0",
+        ],
+        None,
+    );
+    assert!(
+        !cli(
+            &[
+                "kv",
+                "--url",
+                &url,
+                "--token-file",
+                token,
+                sid,
+                "get",
+                aid,
+                "key/日本"
+            ],
+            None
+        )
+        .status
+        .success()
+    );
+}

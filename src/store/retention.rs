@@ -16,6 +16,14 @@ impl Store {
             [id.as_str()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
+        // KV recovery has no snapshot producer yet. Keep its complete source.
+        if connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM kv_attachments WHERE stream_id=?1)",
+            [id.as_str()],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Position::new(head);
+        }
         let Retention::Bounded {
             max_age_seconds,
             max_bytes,

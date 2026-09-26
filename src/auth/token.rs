@@ -136,7 +136,7 @@ pub fn attenuate(
     }
     let mut block = BlockBuilder::new();
     if read_only {
-        block=block.code("check if operation($op), [\"record.read\",\"record.subscribe\",\"stream.inspect\",\"stream.list\",\"stream.watch\",\"stream.config.read\",\"metadata.read\"].contains($op);").map_err(|_|Error::Invalid("attenuation"))?;
+        block=block.code("check if operation($op), [\"record.read\",\"record.subscribe\",\"stream.inspect\",\"stream.list\",\"stream.watch\",\"stream.config.read\",\"metadata.read\",\"kv.read\",\"attachment.read\"].contains($op);").map_err(|_|Error::Invalid("attenuation"))?;
     }
     if let Some(id) = stream {
         id.parse::<crate::model::StreamId>()?;

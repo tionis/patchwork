@@ -11,6 +11,14 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Read and conditionally mutate authoritative KV state.
+    Kv {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        stream_id: String,
+        #[command(subcommand)]
+        command: KvCommand,
+    },
     /// One-time local administrator bootstrap. The data directory is private.
     Admin {
         #[command(subcommand)]
@@ -286,5 +294,47 @@ pub enum PrincipalCommand {
         file: std::path::PathBuf,
         #[arg(long)]
         revision: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum KvCommand {
+    Enable {
+        #[arg(long)]
+        config_revision: String,
+    },
+    Attachments,
+    Get {
+        attachment: String,
+        key: String,
+    },
+    List {
+        attachment: String,
+        #[arg(long, default_value = "")]
+        prefix: String,
+        #[arg(long)]
+        cursor: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    Put {
+        attachment: String,
+        key: String,
+        #[arg(long, conflicts_with = "if_absent")]
+        if_match: Option<String>,
+        #[arg(long)]
+        if_absent: bool,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+        #[arg(long, default_value = "application/octet-stream")]
+        content_type: String,
+    },
+    Delete {
+        attachment: String,
+        key: String,
+        #[arg(long)]
+        if_match: Option<String>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
     },
 }

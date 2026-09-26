@@ -101,6 +101,11 @@ async fn print_json(response: reqwest::Response) -> Result<()> {
 }
 pub async fn run(command: Command) -> Result<()> {
     match command {
+        Command::Kv {
+            connection,
+            stream_id,
+            command,
+        } => kv_command(&connection, &stream_id, command).await?,
         Command::Admin {
             command:
                 AdminCommand::Recover {
@@ -750,4 +755,168 @@ fn admin_page(path: &str, after: Option<&str>, limit: usize) -> Result<String> {
         "{path}?after={}&limit={limit}",
         after.unwrap_or("")
     ))
+}
+
+async fn kv_command(
+    connection: &ConnectionArgs,
+    sid: &str,
+    command: super::KvCommand,
+) -> Result<()> {
+    use super::KvCommand;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    sid.parse::<StreamId>()?;
+    let base = origin(&connection.url)?;
+    let token = bounded_file(
+        &connection.token_file,
+        crate::auth::token::MAX_TOKEN_BYTES + 1,
+    )?;
+    let c = client()?;
+    let root = format!("v1/streams/{sid}");
+    let url = |path: &str| base.join(path).map_err(|_| Error::Invalid("KV path"));
+    let response = match command {
+        KvCommand::Enable { config_revision } => {
+            config_revision.parse::<Revision>()?;
+            c.post(url(&format!("{root}/attachments"))?)
+                .bearer_auth(token.trim())
+                .header("if-match", format!("\"{sid}:config:{config_revision}\""))
+                .json(&json!({"type":crate::store::kv::TYPE}))
+                .send()
+                .await
+                .map_err(Error::HealthRequest)?
+        }
+        KvCommand::Attachments => c
+            .get(url(&format!("{root}/attachments"))?)
+            .bearer_auth(token.trim())
+            .send()
+            .await
+            .map_err(Error::HealthRequest)?,
+        KvCommand::Get { attachment, key } => {
+            validate_attachment(&attachment)?;
+            crate::store::kv::validate_key(&key)?;
+            let response = checked(
+                c.get(url(&format!(
+                    "{root}/kv/{attachment}/items/{}",
+                    URL_SAFE_NO_PAD.encode(key.as_bytes())
+                ))?)
+                .bearer_auth(token.trim())
+                .send()
+                .await
+                .map_err(Error::HealthRequest)?,
+            )
+            .await?;
+            std::io::stdout().write_all(&response.bytes().await.map_err(Error::HealthRequest)?)?;
+            return Ok(());
+        }
+        KvCommand::List {
+            attachment,
+            prefix,
+            cursor,
+            limit,
+        } => {
+            validate_attachment(&attachment)?;
+            let mut query = url(&format!("{root}/kv/{attachment}/items"))?;
+            query
+                .query_pairs_mut()
+                .append_pair("prefix", &prefix)
+                .append_pair("limit", &limit.to_string());
+            if let Some(cursor) = cursor {
+                query.query_pairs_mut().append_pair("cursor", &cursor);
+            }
+            c.get(query)
+                .bearer_auth(token.trim())
+                .send()
+                .await
+                .map_err(Error::HealthRequest)?
+        }
+        command => {
+            let (attachment, key, if_match, if_absent, idempotency, content_type, put) =
+                match command {
+                    KvCommand::Put {
+                        attachment,
+                        key,
+                        if_match,
+                        if_absent,
+                        idempotency_key,
+                        content_type,
+                    } => (
+                        attachment,
+                        key,
+                        if_match,
+                        if_absent,
+                        idempotency_key,
+                        content_type,
+                        true,
+                    ),
+                    KvCommand::Delete {
+                        attachment,
+                        key,
+                        if_match,
+                        idempotency_key,
+                    } => (
+                        attachment,
+                        key,
+                        if_match,
+                        false,
+                        idempotency_key,
+                        String::new(),
+                        false,
+                    ),
+                    _ => unreachable!(),
+                };
+            validate_attachment(&attachment)?;
+            crate::store::kv::validate_key(&key)?;
+            let mut request = c
+                .request(
+                    if put {
+                        reqwest::Method::PUT
+                    } else {
+                        reqwest::Method::DELETE
+                    },
+                    url(&format!(
+                        "{root}/kv/{attachment}/items/{}",
+                        URL_SAFE_NO_PAD.encode(key.as_bytes())
+                    ))?,
+                )
+                .bearer_auth(token.trim());
+            if let Some(revision) = if_match {
+                revision.parse::<Position>()?;
+                request = request.header("if-match", format!("\"kv:{attachment}:{revision}\""));
+            }
+            if if_absent {
+                request = request.header("if-none-match", "*");
+            }
+            if let Some(key) = idempotency {
+                request = request.header("idempotency-key", key);
+            }
+            if put {
+                let mut bytes = Vec::new();
+                std::io::stdin()
+                    .take((crate::store::kv::MAX_VALUE_BYTES + 1) as u64)
+                    .read_to_end(&mut bytes)?;
+                if bytes.len() > crate::store::kv::MAX_VALUE_BYTES {
+                    return Err(Error::TooLarge);
+                }
+                request = request.header("content-type", content_type).body(bytes);
+            }
+            request.send().await.map_err(Error::HealthRequest)?
+        }
+    };
+    let response = checked(response).await?;
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+        println!(
+            "{}",
+            json!({"status":204,"position":response.headers().get("patchwork-position").and_then(|v|v.to_str().ok()),"applied_position":response.headers().get("patchwork-applied-position").and_then(|v|v.to_str().ok()),"deduplicated":response.headers().get("patchwork-deduplicated").and_then(|v|v.to_str().ok())})
+        );
+        Ok(())
+    } else {
+        print_json(response).await
+    }
+}
+fn validate_attachment(id: &str) -> Result<()> {
+    uuid::Uuid::parse_str(
+        id.strip_prefix("att_")
+            .ok_or(Error::Invalid("attachment ID"))?,
+    )
+    .map_err(|_| Error::Invalid("attachment ID"))?;
+    Ok(())
 }

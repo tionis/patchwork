@@ -99,3 +99,18 @@ CREATE TABLE creation_rules (
     value TEXT NOT NULL
 ) STRICT;
 INSERT INTO creation_rules(singleton,value) VALUES (1,'{"default":{"allow_append":false,"config":{"retention":{"mode":"infinite"},"max_record_bytes":"1048576","filters":[],"validators":[]}},"rules":[]}');
+
+CREATE TABLE kv_attachments (
+    stream_id TEXT PRIMARY KEY NOT NULL REFERENCES streams(id),
+    id TEXT UNIQUE NOT NULL,
+    applied_position INTEGER NOT NULL DEFAULT 0 CHECK(applied_position>=0)
+) STRICT;
+CREATE TABLE kv_items (
+    attachment_id TEXT NOT NULL REFERENCES kv_attachments(id),
+    key TEXT NOT NULL CHECK(length(CAST(key AS BLOB)) BETWEEN 1 AND 1024),
+    value BLOB,
+    content_type TEXT,
+    revision INTEGER NOT NULL CHECK(revision>=0),
+    CHECK((value IS NULL AND content_type IS NULL) OR (value IS NOT NULL AND content_type IS NOT NULL)),
+    PRIMARY KEY(attachment_id,key)
+) STRICT, WITHOUT ROWID;

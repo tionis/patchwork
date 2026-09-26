@@ -1,6 +1,7 @@
 //! Authenticated prototype routes. A bounded blocking boundary keeps SQLite and
 //! cryptographic work off Tokio workers; no unbounded writer task queue.
 mod admission;
+mod kv;
 mod subscriptions;
 use crate::{
     Error, Result,
@@ -114,6 +115,15 @@ pub fn router(service: DataService) -> Router {
         .route("/admin/policy", get(policy_get).put(policy_put))
         .route("/credentials/{id}", axum::routing::delete(revoke))
         .route("/streams", post(create).get(streams_list))
+        .route(
+            "/streams/{id}/attachments",
+            get(kv::attachments).post(kv::install),
+        )
+        .route("/streams/{id}/kv/{aid}/items", get(kv::list))
+        .route(
+            "/streams/{id}/kv/{aid}/items/{key}",
+            get(kv::get).put(kv::put).delete(kv::delete),
+        )
         .route("/streams/{id}/follow", get(subscriptions::follow))
         .route("/streams/{id}/live", get(subscriptions::live))
         .route("/watch", post(subscriptions::watch))

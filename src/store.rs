@@ -23,6 +23,7 @@ mod creation;
 pub use creation::{CreationRule, CreationRules, CreationTemplate, NameAppend};
 mod identity;
 mod ingress;
+pub mod kv;
 mod retention;
 pub use administration::{AuthPolicy, PrincipalDescriptor, PrincipalInput};
 pub use ingress::AppendReceipt;
@@ -84,6 +85,8 @@ impl Store {
         self.connection.prepare(
             "SELECT config,config_revision,metadata,metadata_revision,deleted FROM streams WHERE 0",
         )?;
+        self.connection
+            .prepare("SELECT id,applied_position FROM kv_attachments WHERE 0")?;
         Ok(())
     }
 
@@ -348,6 +351,7 @@ impl Store {
         }
         let position = Position::new(tail)?;
         let next = position.next()?;
+        Self::apply_kv_event(&tx, id, payload, position)?;
         let accepted_at_ms: i64 = tx.query_row(
             "SELECT CAST(unixepoch('subsec')*1000 AS INTEGER)",
             [],

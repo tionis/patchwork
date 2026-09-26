@@ -27,10 +27,10 @@ pub fn timestamp(seconds: i64) -> Result<String> {
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|_| Error::Exhausted)
 }
-fn key_valid(key: &str) -> bool {
+pub(super) fn key_valid(key: &str) -> bool {
     (1..=128).contains(&key.len()) && key.bytes().all(|b| (32..=126).contains(&b))
 }
-fn digest(payload: &[u8], content_type: &str) -> Vec<u8> {
+pub(super) fn digest(payload: &[u8], content_type: &str) -> Vec<u8> {
     let mut hash = Sha256::new();
     hash.update(b"patchwork/append/v1\0");
     hash.update((content_type.len() as u64).to_be_bytes());
@@ -47,19 +47,53 @@ impl Store {
         key: &str,
         digest: &[u8],
     ) -> Result<Option<AppendReceipt>> {
-        let row:Option<(Vec<u8>,String)>=self.connection.query_row("SELECT digest,receipt FROM receipts WHERE stream_id=?1 AND principal_id=?2 AND endpoint='raw' AND key=?3 AND expires_at>?4",params![id.as_str(),principal,key,now()?],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-        if let Some((saved, receipt)) = row {
-            if saved != digest {
-                return Err(Error::Conflict);
-            }
-            let mut receipt: AppendReceipt =
-                serde_json::from_str(&receipt).map_err(|_| Error::DatabaseFormat)?;
+        let mut receipt: Option<AppendReceipt> =
+            self.load_receipt((id, principal, "raw", key), digest)?;
+        if let Some(receipt) = &mut receipt {
             receipt.deduplicated = Some(true);
-            Ok(Some(receipt))
-        } else {
-            Ok(None)
+        }
+        Ok(receipt)
+    }
+    pub(super) fn load_receipt<T: serde::de::DeserializeOwned>(
+        &self,
+        (id, principal, endpoint, key): (&StreamId, &str, &str, &str),
+        digest: &[u8],
+    ) -> Result<Option<T>> {
+        let row: Option<(Vec<u8>,String)> = self.connection.query_row(
+            "SELECT digest,receipt FROM receipts WHERE stream_id=?1 AND principal_id=?2 AND endpoint=?3 AND key=?4 AND expires_at>?5",
+            params![id.as_str(),principal,endpoint,key,now()?], |r| Ok((r.get(0)?,r.get(1)?))
+        ).optional()?;
+        match row {
+            Some((saved, receipt)) if saved == digest => Ok(Some(
+                serde_json::from_str(&receipt).map_err(|_| Error::DatabaseFormat)?,
+            )),
+            Some(_) => Err(Error::Conflict),
+            None => Ok(None),
         }
     }
+    pub(super) fn save_receipt<T: Serialize>(
+        &self,
+        (id, principal, endpoint, key): (&StreamId, &str, &str, &str),
+        digest: &[u8],
+        receipt: &T,
+        expires: i64,
+    ) -> Result<()> {
+        self.connection.execute("DELETE FROM receipts WHERE stream_id=?1 AND principal_id=?2 AND endpoint=?3 AND key=?4 AND expires_at<=?5", params![id.as_str(),principal,endpoint,key,now()?])?;
+        self.connection.execute(
+            "INSERT INTO receipts VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                id.as_str(),
+                principal,
+                endpoint,
+                key,
+                digest,
+                serde_json::to_string(receipt).map_err(|_| Error::Invalid("receipt"))?,
+                expires
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn append_authorized(
         &mut self,
         bearer: &str,
@@ -124,19 +158,7 @@ impl Store {
                 idempotency_expires_at: key.map(|_| timestamp(expires)).transpose()?,
             };
             if let Some(key) = key {
-                s.connection
-                    .execute("DELETE FROM receipts WHERE stream_id=?1 AND principal_id=?2 AND endpoint='raw' AND key=?3 AND expires_at<=?4", params![id.as_str(), principal, key, now()?])?;
-                s.connection.execute(
-                    "INSERT INTO receipts VALUES (?1,?2,'raw',?3,?4,?5,?6)",
-                    params![
-                        id.as_str(),
-                        principal,
-                        key,
-                        digest,
-                        serde_json::to_string(&receipt).map_err(|_| Error::Invalid("receipt"))?,
-                        expires
-                    ],
-                )?;
+                s.save_receipt((id, &principal, "raw", key), &digest, &receipt, expires)?;
             }
             Ok(receipt)
         })
