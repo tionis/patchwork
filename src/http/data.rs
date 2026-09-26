@@ -27,10 +27,37 @@ pub struct DataService {
 }
 impl DataService {
     pub fn new(store: Store) -> Self {
-        Self {
+        let service = Self {
             store: Arc::new(Mutex::new(store)),
             admission: Arc::new(Semaphore::new(32)),
-        }
+        };
+        let weak = Arc::downgrade(&service.store);
+        let admission = Arc::downgrade(&service.admission);
+        tokio::spawn(async move {
+            let mut after = String::new();
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let (Some(store), Some(admission)) = (weak.upgrade(), admission.upgrade()) else {
+                    break;
+                };
+                let Ok(permit) = admission.try_acquire_owned() else {
+                    continue;
+                };
+                let cursor = after.clone();
+                if let Ok(Ok(next)) = tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    store
+                        .lock()
+                        .map_err(|_| Error::Busy)?
+                        .maintenance_page(&cursor)
+                })
+                .await
+                {
+                    after = next;
+                }
+            }
+        });
+        service
     }
     async fn run<T: Send + 'static>(
         &self,
@@ -93,10 +120,11 @@ impl IntoResponse for ApiError {
             Error::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             Error::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             Error::NotFound => (StatusCode::NOT_FOUND, "not_found"),
-            Error::Conflict | Error::PositionAhead | Error::StreamMode => {
+            Error::Conflict | Error::ConfigChanged | Error::PositionAhead | Error::StreamMode => {
                 (StatusCode::CONFLICT, "conflict")
             }
             Error::RevisionMismatch => (StatusCode::PRECONDITION_FAILED, "revision_mismatch"),
+            Error::Rejected => (StatusCode::UNPROCESSABLE_ENTITY, "rejected"),
             Error::HistoryLost => (StatusCode::GONE, "history_lost"),
             Error::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
             Error::Invalid("If-Match required") => {
@@ -394,10 +422,8 @@ async fn append(
     headers: HeaderMap,
     body: Bytes,
 ) -> std::result::Result<impl IntoResponse, ApiError> {
-    if headers.contains_key("idempotency-key") {
-        return Err(Error::Invalid("idempotency unavailable").into());
-    }
     let token = bearer(&headers)?;
+    let id: StreamId = id.parse()?;
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .map(|v| v.to_str())
@@ -405,7 +431,23 @@ async fn append(
         .map_err(|_| Error::Invalid("content type"))?
         .unwrap_or("application/octet-stream")
         .to_owned();
-    Ok((StatusCode::CREATED,Json(s.run(move|s|{let st=stream(s,&token,&id)?;let p=s.authorized(&token,Action::RecordAppend,Some(&st.id),&st.name,|s|s.append(&st.id,&body,&content_type))?;Ok(json!({"outcome":"appended","stream_id":id,"position":p.to_string(),"next_position":p.next()?.to_string()}))}).await?)))
+    if headers.contains_key("patchwork-object-refs") {
+        return Err(Error::Invalid("object links unavailable").into());
+    }
+    let key = headers
+        .get("idempotency-key")
+        .map(|v| v.to_str().map(str::to_owned))
+        .transpose()
+        .map_err(|_| Error::Invalid("idempotency key"))?;
+    let receipt = s
+        .run(move |s| s.append_authorized(&token, &id, &body, &content_type, key.as_deref()))
+        .await?;
+    let status = if receipt.deduplicated == Some(true) || receipt.outcome == "dropped" {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((status, Json(receipt)))
 }
 #[derive(Deserialize)]
 struct ReadInput {

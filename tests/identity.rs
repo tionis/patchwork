@@ -294,3 +294,175 @@ fn administration_cas_and_old_issuance_ceilings_fence_policy_expansion() {
             .all(|v| v.get("token").is_none())
     );
 }
+
+#[test]
+fn pipeline_receipts_survive_reauthentication_reopen_and_configuration_changes() {
+    use patchwork::{
+        model::{Revision, StreamConfig},
+        pipeline::{Filter, Validator},
+    };
+    let (dir, mut store, key) = fixture();
+    let session = login(&mut store, &key);
+    let stream = store
+        .create_stream(&"events/pipeline".parse().unwrap())
+        .unwrap();
+    let config = StreamConfig {
+        filters: vec![
+            Filter::UppercaseAscii,
+            Filter::DropIfContains {
+                data_base64: STANDARD.encode(b"DROP"),
+            },
+        ],
+        validators: vec![Validator::Utf8],
+        ..Default::default()
+    };
+    store
+        .replace_config(&stream.id, Revision::ZERO, &config)
+        .unwrap();
+    let first = store
+        .append_authorized(
+            &session,
+            &stream.id,
+            b"hello",
+            "text/plain",
+            Some("request-1"),
+        )
+        .unwrap();
+    assert_eq!(first.position.as_deref(), Some("0"));
+    assert_eq!(
+        store
+            .read(&stream.id, Position::ZERO, 1, 100)
+            .unwrap()
+            .records[0]
+            .payload,
+        b"HELLO"
+    );
+    let dropped = store
+        .append_authorized(&session, &stream.id, b"drop", "text/plain", Some("drop-1"))
+        .unwrap();
+    assert_eq!(dropped.outcome, "dropped");
+    let changed = StreamConfig {
+        filters: vec![Filter::RejectIfContains {
+            data_base64: String::new(),
+        }],
+        ..Default::default()
+    };
+    store
+        .replace_config(&stream.id, Revision::new(1).unwrap(), &changed)
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(dir.path()).unwrap();
+    let fresh = login(&mut store, &key);
+    let retry = store
+        .append_authorized(
+            &fresh,
+            &stream.id,
+            b"hello",
+            "text/plain",
+            Some("request-1"),
+        )
+        .unwrap();
+    assert_eq!(retry.deduplicated, Some(true));
+    assert_eq!(retry.position, first.position);
+    assert_eq!(
+        store
+            .append_authorized(&fresh, &stream.id, b"drop", "text/plain", Some("drop-1"))
+            .unwrap()
+            .deduplicated,
+        Some(true)
+    );
+    assert!(matches!(
+        store.append_authorized(
+            &fresh,
+            &stream.id,
+            b"different",
+            "text/plain",
+            Some("request-1")
+        ),
+        Err(Error::Conflict)
+    ));
+    assert!(matches!(
+        store.append_authorized(&fresh, &stream.id, b"new", "text/plain", None),
+        Err(Error::Rejected)
+    ));
+    assert_eq!(store.stream(&stream.id).unwrap().tail.get(), 1);
+    store
+        .revoke(
+            &fresh,
+            store.whoami(&session).unwrap()["credential_id"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(
+        store
+            .append_authorized(
+                &session,
+                &stream.id,
+                b"hello",
+                "text/plain",
+                Some("request-1")
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn bounded_retention_preserves_receipts_and_updates_partial_segment_summaries() {
+    use patchwork::model::{Retention, StreamConfig};
+    let (dir, mut store, key) = fixture();
+    let session = login(&mut store, &key);
+    let config = StreamConfig {
+        retention: Retention::Bounded {
+            max_age_seconds: None,
+            max_bytes: Some(4),
+        },
+        ..Default::default()
+    };
+    let stream = store
+        .create_stream_with(
+            &"events/trim".parse().unwrap(),
+            &config,
+            &Default::default(),
+        )
+        .unwrap();
+    store
+        .append_authorized(&session, &stream.id, b"aaa", "text/plain", Some("trimmed"))
+        .unwrap();
+    store
+        .append_authorized(&session, &stream.id, b"bbb", "text/plain", None)
+        .unwrap();
+    assert_eq!(store.stream(&stream.id).unwrap().head.get(), 1);
+    assert!(matches!(
+        store.read(&stream.id, Position::ZERO, 10, 100),
+        Err(Error::HistoryLost)
+    ));
+    let segment = store
+        .segments(&stream.id, Position::ZERO, 10)
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        (
+            segment.start.get(),
+            segment.end.get(),
+            segment.record_count,
+            segment.payload_bytes
+        ),
+        (1, 2, 1, 3)
+    );
+    let receipt = store
+        .append_authorized(&session, &stream.id, b"aaa", "text/plain", Some("trimmed"))
+        .unwrap();
+    assert_eq!(receipt.position.as_deref(), Some("0"));
+    assert_eq!(receipt.deduplicated, Some(true));
+    drop(store);
+    let mut store = Store::open(dir.path()).unwrap();
+    assert_eq!(
+        store
+            .read(&stream.id, Position::new(1).unwrap(), 1, 100)
+            .unwrap()
+            .records[0]
+            .payload,
+        b"bbb"
+    );
+}

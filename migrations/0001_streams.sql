@@ -80,3 +80,15 @@ CREATE TABLE auth_audit (
     resource TEXT NOT NULL,
     accepted_at INTEGER NOT NULL
 ) STRICT;
+
+CREATE TABLE receipts (
+    stream_id TEXT NOT NULL REFERENCES streams(id),
+    principal_id TEXT NOT NULL REFERENCES principals(id),
+    endpoint TEXT NOT NULL,
+    key TEXT NOT NULL,
+    digest BLOB NOT NULL,
+    receipt TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    PRIMARY KEY(stream_id,principal_id,endpoint,key)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX receipts_expiry ON receipts(expires_at);

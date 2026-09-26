@@ -1,5 +1,9 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("record rejected by pipeline")]
+    Rejected,
+    #[error("stream configuration changed during processing")]
+    ConfigChanged,
     #[error("authentication failed")]
     Unauthorized,
     #[error("permission denied")]

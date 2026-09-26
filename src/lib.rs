@@ -6,6 +6,7 @@ pub mod config;
 pub mod error;
 pub mod http;
 pub mod model;
+pub mod pipeline;
 pub mod store;
 
 pub use error::{Error, Result};

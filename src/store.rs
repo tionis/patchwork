@@ -20,7 +20,10 @@ const SCHEMA_VERSION: i64 = 1;
 
 mod administration;
 mod identity;
+mod ingress;
+mod retention;
 pub use administration::{AuthPolicy, PrincipalDescriptor, PrincipalInput};
+pub use ingress::AppendReceipt;
 #[cfg(test)]
 mod tests;
 mod transaction;
@@ -207,7 +210,7 @@ impl Store {
         }
         let previous: StreamConfig =
             serde_json::from_str(&previous).map_err(|_| Error::DatabaseFormat)?;
-        if previous.retention != config.retention {
+        if (previous.retention == Retention::None) != (config.retention == Retention::None) {
             return Err(Error::StreamMode);
         }
         let next = expected.next()?;
@@ -372,6 +375,7 @@ impl Store {
             "UPDATE streams SET tail=?2 WHERE id=?1",
             params![id.as_str(), next.get()],
         )?;
+        Self::trim_in_transaction(&tx, id, &config, 1000)?;
         tx.commit()?;
         Ok(position)
     }

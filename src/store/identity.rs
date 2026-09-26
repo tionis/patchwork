@@ -132,6 +132,15 @@ impl Store {
             root: KeyPair::from(&key),
         })
     }
+    pub(crate) fn principal_id(&self, bearer: &str) -> Result<String> {
+        let identity = self.identity()?;
+        let verified = VerifiedToken::parse(bearer, identity.root.public())?;
+        self.rights(&verified)?;
+        if verified.instance != identity.instance {
+            return Err(Error::Unauthorized);
+        }
+        Ok(verified.principal)
+    }
     pub fn authenticate(&self, bearer: &str) -> Result<()> {
         let identity = self.identity()?;
         let verified = VerifiedToken::parse(bearer, identity.root.public())?;

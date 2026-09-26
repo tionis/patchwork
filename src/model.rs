@@ -124,12 +124,20 @@ pub struct Stream {
 pub struct StreamConfig {
     pub retention: Retention,
     pub max_record_bytes: usize,
+    #[serde(default)]
+    pub filters: Vec<crate::pipeline::Filter>,
+    #[serde(default)]
+    pub validators: Vec<crate::pipeline::Validator>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Retention {
     Infinite,
+    Bounded {
+        max_age_seconds: Option<i64>,
+        max_bytes: Option<i64>,
+    },
     None,
 }
 
@@ -138,6 +146,8 @@ impl Default for StreamConfig {
         Self {
             retention: Retention::Infinite,
             max_record_bytes: crate::store::MAX_RECORD_BYTES,
+            filters: Vec::new(),
+            validators: Vec::new(),
         }
     }
 }
@@ -147,6 +157,17 @@ impl StreamConfig {
         if !(1..=crate::store::MAX_RECORD_BYTES).contains(&self.max_record_bytes) {
             return Err(Error::Invalid("record limit"));
         }
+        if let Retention::Bounded {
+            max_age_seconds,
+            max_bytes,
+        } = &self.retention
+            && ((max_age_seconds.is_none() && max_bytes.is_none())
+                || max_age_seconds.is_some_and(|v| v <= 0 || v > i64::MAX / 1000)
+                || max_bytes.is_some_and(|v| v <= 0))
+        {
+            return Err(Error::Invalid("retention bounds"));
+        }
+        crate::pipeline::validate_config(self)?;
         Ok(())
     }
 }
