@@ -21,6 +21,7 @@ const SCHEMA_VERSION: i64 = 1;
 mod administration;
 mod creation;
 pub use creation::{CreationRule, CreationRules, CreationTemplate, NameAppend};
+pub mod hooks;
 mod identity;
 mod ingress;
 pub mod kv;
@@ -87,6 +88,8 @@ impl Store {
         )?;
         self.connection
             .prepare("SELECT id,applied_position FROM kv_attachments WHERE 0")?;
+        self.connection
+            .prepare("SELECT id,revision FROM hooks WHERE 0")?;
         Ok(())
     }
 

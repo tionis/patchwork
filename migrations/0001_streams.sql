@@ -83,7 +83,7 @@ CREATE TABLE auth_audit (
 
 CREATE TABLE receipts (
     stream_id TEXT NOT NULL REFERENCES streams(id),
-    principal_id TEXT NOT NULL REFERENCES principals(id),
+    principal_id TEXT NOT NULL, -- Principal ID or explicit hook grant ID.
     endpoint TEXT NOT NULL,
     key TEXT NOT NULL,
     digest BLOB NOT NULL,
@@ -114,3 +114,17 @@ CREATE TABLE kv_items (
     CHECK((value IS NULL AND content_type IS NULL) OR (value IS NOT NULL AND content_type IS NOT NULL)),
     PRIMARY KEY(attachment_id,key)
 ) STRICT, WITHOUT ROWID;
+
+CREATE TABLE hooks (
+    id TEXT PRIMARY KEY NOT NULL,
+    stream_id TEXT NOT NULL REFERENCES streams(id),
+    owner_id TEXT NOT NULL REFERENCES principals(id),
+    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
+    config TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
+    accepted INTEGER NOT NULL DEFAULT 0 CHECK(accepted>=0),
+    dropped INTEGER NOT NULL DEFAULT 0 CHECK(dropped>=0),
+    rejected INTEGER NOT NULL DEFAULT 0 CHECK(rejected>=0),
+    errors INTEGER NOT NULL DEFAULT 0 CHECK(errors>=0)
+) STRICT;

@@ -101,6 +101,10 @@ async fn print_json(response: reqwest::Response) -> Result<()> {
 }
 pub async fn run(command: Command) -> Result<()> {
     match command {
+        Command::Hook {
+            connection,
+            command,
+        } => hook_command(&connection, command).await?,
         Command::Kv {
             connection,
             stream_id,
@@ -919,4 +923,79 @@ fn validate_attachment(id: &str) -> Result<()> {
     )
     .map_err(|_| Error::Invalid("attachment ID"))?;
     Ok(())
+}
+
+async fn hook_command(connection: &ConnectionArgs, command: super::HookCommand) -> Result<()> {
+    use super::HookCommand;
+    match command {
+        HookCommand::Create { file } => {
+            print_json(
+                request(
+                    connection,
+                    reqwest::Method::POST,
+                    "hooks",
+                    Some(read_json(&file)?),
+                )
+                .await?,
+            )
+            .await
+        }
+        HookCommand::List { after, limit } => {
+            let mut path = origin(&connection.url)?
+                .join("hooks")
+                .map_err(|_| Error::Invalid("hook path"))?;
+            path.query_pairs_mut()
+                .append_pair("after", &after)
+                .append_pair("limit", &limit.to_string());
+            print_json(
+                request(
+                    connection,
+                    reqwest::Method::GET,
+                    &format!("hooks?{}", path.query().unwrap_or("")),
+                    None,
+                )
+                .await?,
+            )
+            .await
+        }
+        command => {
+            let (id, file, revision, delete) = match command {
+                HookCommand::Get { id } => (id, None, None, false),
+                HookCommand::Update { id, file, revision } => {
+                    (id, Some(file), Some(revision), false)
+                }
+                HookCommand::Delete { id, revision } => (id, None, Some(revision), true),
+                _ => unreachable!(),
+            };
+            uuid::Uuid::parse_str(id.strip_prefix("hook_").ok_or(Error::Invalid("hook ID"))?)
+                .map_err(|_| Error::Invalid("hook ID"))?;
+            if let Some(revision) = &revision {
+                revision.parse::<Revision>()?;
+            }
+            let etag = revision.map(|r| format!("\"hook:{id}:{r}\""));
+            if !delete {
+                return control(connection, &format!("hooks/{id}"), file.as_deref(), etag).await;
+            }
+            let token = bounded_file(
+                &connection.token_file,
+                crate::auth::token::MAX_TOKEN_BYTES + 1,
+            )?;
+            checked(
+                client()?
+                    .delete(
+                        origin(&connection.url)?
+                            .join(&format!("v1/hooks/{id}"))
+                            .map_err(|_| Error::Invalid("hook URL"))?,
+                    )
+                    .bearer_auth(token.trim())
+                    .header("if-match", etag.ok_or(Error::Invalid("revision"))?)
+                    .send()
+                    .await
+                    .map_err(Error::HealthRequest)?,
+            )
+            .await?;
+            println!("{{\"outcome\":\"deleted\"}}");
+            Ok(())
+        }
+    }
 }

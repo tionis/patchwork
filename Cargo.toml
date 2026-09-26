@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 memchr = "2"
+hmac = "0.12"
 sha2 = "0.10"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 futures-util = "0.3"

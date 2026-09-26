@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Action {
+    #[serde(rename = "hook.manage")]
+    HookManage,
     #[serde(rename = "kv.read")]
     KvRead,
     #[serde(rename = "kv.write")]
@@ -53,7 +55,8 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
+        Self::HookManage,
         Self::KvRead,
         Self::KvWrite,
         Self::AttachmentRead,
@@ -78,6 +81,7 @@ impl Action {
     ];
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::HookManage => "hook.manage",
             Self::KvRead => "kv.read",
             Self::KvWrite => "kv.write",
             Self::AttachmentRead => "attachment.read",

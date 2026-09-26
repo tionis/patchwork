@@ -11,6 +11,13 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Manage signed GitHub push webhook ingress.
+    Hook {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        #[command(subcommand)]
+        command: HookCommand,
+    },
     /// Read and conditionally mutate authoritative KV state.
     Kv {
         #[command(flatten)]
@@ -336,5 +343,34 @@ pub enum KvCommand {
         if_match: Option<String>,
         #[arg(long)]
         idempotency_key: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum HookCommand {
+    List {
+        #[arg(long, default_value = "")]
+        after: String,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    Get {
+        id: String,
+    },
+    Create {
+        #[arg(long)]
+        file: std::path::PathBuf,
+    },
+    Update {
+        id: String,
+        #[arg(long)]
+        file: std::path::PathBuf,
+        #[arg(long)]
+        revision: String,
+    },
+    Delete {
+        id: String,
+        #[arg(long)]
+        revision: String,
     },
 }

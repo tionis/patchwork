@@ -591,3 +591,21 @@ pub(super) async fn append_named(
         }
     }
 }
+
+impl DataService {
+    pub(super) fn publish_hook_live(&self, id: &str, name: &str, payload: Vec<u8>) -> Result<()> {
+        let mut hub = self.hub.lock().map_err(|_| Error::Busy)?;
+        let entry = hub
+            .live
+            .entry(id.into())
+            .or_insert_with(|| (0, broadcast::channel(8).0));
+        entry.0 = entry.0.checked_add(1).ok_or(Error::Exhausted)?;
+        let _ = entry.1.send(LiveRecord {
+            sequence: entry.0,
+            payload: Arc::new(payload),
+            content_type: "application/json".into(),
+        });
+        hub.hint(id.into(), name.into(), "records");
+        Ok(())
+    }
+}

@@ -1,6 +1,7 @@
 //! Authenticated prototype routes. A bounded blocking boundary keeps SQLite and
 //! cryptographic work off Tokio workers; no unbounded writer task queue.
 mod admission;
+mod hooks;
 mod kv;
 mod subscriptions;
 use crate::{
@@ -101,6 +102,14 @@ impl DataService {
 }
 pub fn router(service: DataService) -> Router {
     Router::new()
+        .route("/hooks", get(hooks::list).post(hooks::create))
+        .route(
+            "/hooks/{id}",
+            get(hooks::get)
+                .put(hooks::put)
+                .delete(hooks::delete)
+                .post(hooks::ingest),
+        )
         .route("/auth/challenges", post(challenge))
         .route("/auth/exchange", post(exchange))
         .route("/credentials", post(mint).get(credentials_get))
