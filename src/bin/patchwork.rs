@@ -1,16 +1,11 @@
 use clap::Parser;
-use patchwork::cli::{Cli, Command, check_health};
+use patchwork::cli::{Cli, run};
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    let result = match Cli::parse().command {
-        Command::Health { url } => check_health(&url).await,
-    };
+    let result = run(Cli::parse().command).await;
     match result {
-        Ok(()) => {
-            println!("healthy");
-            std::process::ExitCode::SUCCESS
-        }
+        Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
             std::process::ExitCode::FAILURE
