@@ -213,3 +213,51 @@ fn agent_backed_public_key_can_sign_login_challenges() {
     )
     .unwrap();
 }
+
+#[test]
+fn typed_offline_attenuation_enforces_every_constraint_and_parent() {
+    let root = KeyPair::new();
+    let id = format!("str_{}", uuid::Uuid::new_v4());
+    let parent = token::issue(&root, "alice", "credential", "instance").unwrap();
+    let child = token::attenuate(
+        &parent,
+        true,
+        Some(&id),
+        Some("events/"),
+        Some("2099-01-01T00:00:00Z"),
+    )
+    .unwrap();
+    let child = token::attenuate(&child, false, None, Some("events/public/"), None).unwrap();
+    let verified = VerifiedToken::parse(&child, root.public()).unwrap();
+    let check = |action, id: &str, name| {
+        verified.check(action, "stream", id, name, "instance", SystemTime::now())
+    };
+    check("record.read", &id, "events/public/a").unwrap();
+    assert!(check("record.append", &id, "events/public/a").is_err());
+    assert!(
+        check(
+            "record.read",
+            &uuid::Uuid::new_v4().to_string(),
+            "events/public/a"
+        )
+        .is_err()
+    );
+    assert!(check("record.read", &id, "events/private/a").is_err());
+    assert!(check("record.read", &id, "events/publicity/a").is_err());
+    let expired =
+        token::attenuate(&child, false, None, None, Some("2000-01-01T00:00:00Z")).unwrap();
+    assert!(
+        VerifiedToken::parse(&expired, root.public())
+            .unwrap()
+            .check(
+                "record.read",
+                "stream",
+                &id,
+                "events/public/a",
+                "instance",
+                SystemTime::now()
+            )
+            .is_err()
+    );
+    assert!(token::attenuate(&parent, false, None, Some("events"), None).is_err());
+}

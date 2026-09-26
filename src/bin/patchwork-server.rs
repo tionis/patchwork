@@ -32,9 +32,10 @@ async fn run() -> patchwork::Result<()> {
     }
     let readiness = Readiness::default();
     let app = if data_api {
-        router(readiness.clone()).merge(patchwork::http::data::router(
-            patchwork::http::data::DataService::new(store),
-        ))
+        let data = patchwork::http::data::router(patchwork::http::data::DataService::new(store));
+        router(readiness.clone())
+            .nest("/v1", data.clone())
+            .merge(data)
     } else {
         drop(store);
         router(readiness.clone())

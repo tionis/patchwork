@@ -10,3 +10,5 @@ pub mod pipeline;
 pub mod store;
 
 pub use error::{Error, Result};
+
+pub mod wire;

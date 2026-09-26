@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use std::time::Duration;
 
 #[derive(Parser)]
-#[command(version, about = "Patchwork CLI (bootstrap)")]
+#[command(version, about = "Patchwork authenticated stream CLI")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -39,6 +39,41 @@ pub enum Command {
         #[command(flatten)]
         connection: ConnectionArgs,
         stream_id: String,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+        #[arg(long, default_value = "application/octet-stream")]
+        content_type: String,
+    },
+    AppendNamed {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        name: String,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+        #[arg(long, default_value = "application/octet-stream")]
+        content_type: String,
+    },
+    Follow {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        stream_id: String,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        last_event_id: Option<String>,
+    },
+    Live {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        stream_id: String,
+    },
+    Watch {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        #[arg(long, conflicts_with = "stream_ids")]
+        prefix: Option<String>,
+        #[arg(long = "stream", required_unless_present = "prefix")]
+        stream_ids: Vec<String>,
     },
     /// Read a bounded JSON/base64 replay page.
     Read {
@@ -64,7 +99,7 @@ pub enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
-    /// Check liveness AND readiness. This bootstrap client supports HTTP only.
+    /// Check liveness and readiness.
     Health {
         #[arg(long, default_value = "http://127.0.0.1:8080")]
         url: String,
@@ -73,7 +108,7 @@ pub enum Command {
 
 pub async fn check_health(base: &str) -> Result<()> {
     let base = reqwest::Url::parse(base).map_err(|_| Error::Invalid("server URL"))?;
-    if base.scheme() != "http"
+    if !matches!(base.scheme(), "http" | "https")
         || base.host_str().is_none()
         || !base.username().is_empty()
         || base.password().is_some()
@@ -81,7 +116,9 @@ pub async fn check_health(base: &str) -> Result<()> {
         || base.fragment().is_some()
         || base.path() != "/"
     {
-        return Err(Error::Invalid("server URL (expected an HTTP origin)"));
+        return Err(Error::Invalid(
+            "server URL (expected an HTTP or HTTPS origin)",
+        ));
     }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
@@ -110,6 +147,28 @@ pub struct ConnectionArgs {
 }
 #[derive(Subcommand)]
 pub enum AdminCommand {
+    Principals {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        #[command(subcommand)]
+        command: PrincipalCommand,
+    },
+    Policy {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+        #[arg(long, requires = "file")]
+        revision: Option<String>,
+    },
+    CreationRules {
+        #[command(flatten)]
+        connection: ConnectionArgs,
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+        #[arg(long, requires = "file")]
+        revision: Option<String>,
+    },
     Bootstrap {
         #[arg(long)]
         data_dir: std::path::PathBuf,
@@ -123,6 +182,32 @@ pub enum AdminCommand {
 pub enum StreamCommand {
     Create {
         name: String,
+        #[arg(long)]
+        config_file: Option<std::path::PathBuf>,
+        #[arg(long)]
+        metadata_file: Option<std::path::PathBuf>,
+    },
+    List {
+        #[arg(long, default_value = "")]
+        prefix: String,
+        #[arg(long)]
+        cursor: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    Config {
+        id: String,
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+        #[arg(long, requires = "file")]
+        revision: Option<String>,
+    },
+    Metadata {
+        id: String,
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+        #[arg(long, requires = "file")]
+        revision: Option<String>,
     },
     Show {
         id: String,
@@ -138,6 +223,21 @@ pub enum StreamCommand {
 }
 #[derive(Subcommand)]
 pub enum TokenCommand {
+    List,
+    Whoami,
+    Inspect,
+    Attenuate {
+        #[arg(long)]
+        read_only: bool,
+        #[arg(long)]
+        stream: Option<String>,
+        #[arg(long)]
+        prefix: Option<String>,
+        #[arg(long)]
+        expires_at: Option<String>,
+        #[arg(long)]
+        output: std::path::PathBuf,
+    },
     Mint {
         #[arg(long)]
         scope_file: std::path::PathBuf,
@@ -153,3 +253,19 @@ pub enum TokenCommand {
 
 mod commands;
 pub use commands::run;
+
+#[derive(Subcommand)]
+pub enum PrincipalCommand {
+    List,
+    Create {
+        #[arg(long)]
+        file: std::path::PathBuf,
+    },
+    Update {
+        id: String,
+        #[arg(long)]
+        file: std::path::PathBuf,
+        #[arg(long)]
+        revision: String,
+    },
+}

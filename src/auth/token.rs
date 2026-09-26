@@ -102,3 +102,77 @@ impl VerifiedToken {
         Ok(())
     }
 }
+
+/// Append checks using typed parameter substitution; no issuer key or server
+/// call is required and no check in the parent chain can be removed.
+pub fn attenuate(
+    encoded: &str,
+    read_only: bool,
+    stream: Option<&str>,
+    prefix: Option<&str>,
+    expires_at: Option<&str>,
+) -> Result<String> {
+    use biscuit_auth::{
+        BlockBuilder,
+        builder::{date, string},
+    };
+    use std::collections::HashMap;
+    if encoded.len() > MAX_TOKEN_BYTES
+        || (!read_only && stream.is_none() && prefix.is_none() && expires_at.is_none())
+    {
+        return Err(Error::Invalid("attenuation"));
+    }
+    let token = UnverifiedBiscuit::from_base64(encoded).map_err(|_| Error::Unauthorized)?;
+    if token.block_count() >= MAX_BLOCKS {
+        return Err(Error::Invalid("attenuation block limit"));
+    }
+    let mut block = BlockBuilder::new();
+    if read_only {
+        block=block.code("check if operation($op), [\"record.read\",\"record.subscribe\",\"stream.inspect\",\"stream.list\",\"stream.watch\",\"stream.config.read\",\"metadata.read\"].contains($op);").map_err(|_|Error::Invalid("attenuation"))?;
+    }
+    if let Some(id) = stream {
+        id.parse::<crate::model::StreamId>()?;
+        block = block
+            .code_with_params(
+                "check if resource(\"stream\", {id});",
+                HashMap::from([("id".into(), string(id))]),
+                HashMap::new(),
+            )
+            .map_err(|_| Error::Invalid("attenuation"))?;
+    }
+    if let Some(prefix) = prefix {
+        crate::auth::Selector::Prefix(prefix.into()).validate()?;
+        block = block
+            .code_with_params(
+                "check if resource_name($name), $name.starts_with({prefix});",
+                HashMap::from([("prefix".into(), string(prefix))]),
+                HashMap::new(),
+            )
+            .map_err(|_| Error::Invalid("attenuation"))?;
+    }
+    if let Some(expiry) = expires_at {
+        let time =
+            time::OffsetDateTime::parse(expiry, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| Error::Invalid("expiry"))?;
+        let seconds = u64::try_from(time.unix_timestamp()).map_err(|_| Error::Invalid("expiry"))?;
+        let deadline = SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_secs(seconds))
+            .ok_or(Error::Exhausted)?;
+        block = block
+            .code_with_params(
+                "check if time($now), $now < {expiry};",
+                HashMap::from([("expiry".into(), date(&deadline))]),
+                HashMap::new(),
+            )
+            .map_err(|_| Error::Invalid("attenuation"))?;
+    }
+    let result = token
+        .append(block)
+        .map_err(|_| Error::Invalid("attenuation"))?
+        .to_base64()
+        .map_err(|_| Error::Invalid("attenuation"))?;
+    if result.len() > MAX_TOKEN_BYTES {
+        return Err(Error::TooLarge);
+    }
+    Ok(result)
+}

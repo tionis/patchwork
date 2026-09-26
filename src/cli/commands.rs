@@ -1,4 +1,4 @@
-use super::{AdminCommand, Command, ConnectionArgs, StreamCommand, TokenCommand};
+use super::{AdminCommand, Command, ConnectionArgs, PrincipalCommand, StreamCommand, TokenCommand};
 use crate::{
     Error, Result,
     auth::{Grant, ssh},
@@ -15,8 +15,10 @@ use std::{
 };
 fn origin(value: &str) -> Result<reqwest::Url> {
     let url = reqwest::Url::parse(value).map_err(|_| Error::Invalid("URL"))?;
-    if url.scheme() != "http"
-        || !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+    if !(url.scheme() == "https"
+        || (url.scheme() == "http"
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))))
+        || url.host_str().is_none()
         || url.path() != "/"
         || url.query().is_some()
         || url.fragment().is_some()
@@ -24,7 +26,7 @@ fn origin(value: &str) -> Result<reqwest::Url> {
         || url.password().is_some()
     {
         return Err(Error::Invalid(
-            "prototype client requires a loopback HTTP origin",
+            "expected an HTTPS origin or loopback HTTP origin",
         ));
     }
     Ok(url)
@@ -81,7 +83,11 @@ async fn request(
     let base = origin(&args.url)?;
     let token = bounded_file(&args.token_file, crate::auth::token::MAX_TOKEN_BYTES + 1)?;
     let mut request = client()?
-        .request(method, base.join(path).map_err(|_| Error::Invalid("path"))?)
+        .request(
+            method,
+            base.join(&format!("v1/{path}"))
+                .map_err(|_| Error::Invalid("path"))?,
+        )
         .bearer_auth(token.trim());
     if let Some(body) = body {
         request = request.json(&body);
@@ -98,6 +104,75 @@ pub async fn run(command: Command) -> Result<()> {
         Command::Health { url } => {
             super::check_health(&url).await?;
             println!("healthy");
+        }
+        Command::Admin {
+            command:
+                AdminCommand::Principals {
+                    connection,
+                    command,
+                },
+        } => match command {
+            PrincipalCommand::List => {
+                print_json(
+                    request(&connection, reqwest::Method::GET, "admin/principals", None).await?,
+                )
+                .await?
+            }
+            PrincipalCommand::Create { file } => {
+                print_json(
+                    request(
+                        &connection,
+                        reqwest::Method::POST,
+                        "admin/principals",
+                        Some(read_json(&file)?),
+                    )
+                    .await?,
+                )
+                .await?
+            }
+            PrincipalCommand::Update { id, file, revision } => {
+                uuid::Uuid::parse_str(&id).map_err(|_| Error::Invalid("principal ID"))?;
+                revision.parse::<Revision>()?;
+                control(
+                    &connection,
+                    &format!("admin/principals/{id}"),
+                    Some(&file),
+                    Some(format!("\"principal:{id}:{revision}\"")),
+                )
+                .await?;
+            }
+        },
+        Command::Admin {
+            command:
+                AdminCommand::Policy {
+                    connection,
+                    file,
+                    revision,
+                },
+        } => {
+            control(
+                &connection,
+                "admin/policy",
+                file.as_deref(),
+                revision.map(|r| format!("\"policy:{r}\"")),
+            )
+            .await?
+        }
+        Command::Admin {
+            command:
+                AdminCommand::CreationRules {
+                    connection,
+                    file,
+                    revision,
+                },
+        } => {
+            control(
+                &connection,
+                "admin/creation-rules",
+                file.as_deref(),
+                revision.map(|r| format!("\"creation-rules:{r}\"")),
+            )
+            .await?
         }
         Command::Admin {
             command:
@@ -133,7 +208,7 @@ pub async fn run(command: Command) -> Result<()> {
             let public = bounded_file(&ssh_public_key, 1024)?;
             let c = client()?;
             let challenge: Value = checked(
-                c.post(base.join("auth/challenges").unwrap())
+                c.post(base.join("v1/auth/challenges").unwrap())
                     .json(&json!({"ssh_public_key":public}))
                     .send()
                     .await
@@ -176,7 +251,7 @@ pub async fn run(command: Command) -> Result<()> {
             }
             let signature =
                 String::from_utf8(signed.stdout).map_err(|_| Error::Invalid("signature"))?;
-            let receipt:Value=checked(c.post(base.join("auth/exchange").unwrap()).json(&json!({"challenge_id":value_string(&challenge,"challenge_id")?,"signature":signature})).send().await.map_err(Error::HealthRequest)?).await?.json().await.map_err(Error::HealthRequest)?;
+            let receipt:Value=checked(c.post(base.join("v1/auth/exchange").unwrap()).json(&json!({"challenge_id":value_string(&challenge,"challenge_id")?,"signature":signature})).send().await.map_err(Error::HealthRequest)?).await?.json().await.map_err(Error::HealthRequest)?;
             save_secret(&output, value_string(&receipt, "token")?)?;
             println!(
                 "{}",
@@ -187,16 +262,70 @@ pub async fn run(command: Command) -> Result<()> {
             connection,
             command,
         } => match command {
-            StreamCommand::Create { name } => {
+            StreamCommand::Create {
+                name,
+                config_file,
+                metadata_file,
+            } => {
                 name.parse::<StreamName>()?;
+                let mut body = json!({"name":name});
+                if let Some(file) = config_file {
+                    body["config"] = read_json(&file)?;
+                }
+                if let Some(file) = metadata_file {
+                    body["metadata"] = read_json(&file)?;
+                }
                 print_json(
-                    request(
-                        &connection,
-                        reqwest::Method::POST,
-                        "streams",
-                        Some(json!({"name":name})),
+                    request(&connection, reqwest::Method::POST, "streams", Some(body)).await?,
+                )
+                .await?;
+            }
+            StreamCommand::List {
+                prefix,
+                cursor,
+                limit,
+            } => {
+                let mut url = origin(&connection.url)?.join("v1/streams").unwrap();
+                url.query_pairs_mut()
+                    .append_pair("prefix", &prefix)
+                    .append_pair("limit", &limit.to_string());
+                if let Some(cursor) = cursor {
+                    url.query_pairs_mut().append_pair("cursor", &cursor);
+                }
+                let token = bounded_file(
+                    &connection.token_file,
+                    crate::auth::token::MAX_TOKEN_BYTES + 1,
+                )?;
+                print_json(
+                    checked(
+                        client()?
+                            .get(url)
+                            .bearer_auth(token.trim())
+                            .send()
+                            .await
+                            .map_err(Error::HealthRequest)?,
                     )
                     .await?,
+                )
+                .await?;
+            }
+            StreamCommand::Config { id, file, revision } => {
+                id.parse::<StreamId>()?;
+                control(
+                    &connection,
+                    &format!("streams/{id}/config"),
+                    file.as_deref(),
+                    revision.map(|r| format!("\"{id}:config:{r}\"")),
+                )
+                .await?;
+            }
+            StreamCommand::Metadata { id, file, revision } => {
+                id.parse::<StreamId>()?;
+                control(
+                    &connection,
+                    &format!("streams/{id}/metadata"),
+                    file.as_deref(),
+                    revision.map(|r| format!("\"{id}:metadata:{r}\"")),
                 )
                 .await?;
             }
@@ -240,7 +369,7 @@ pub async fn run(command: Command) -> Result<()> {
                     client()?
                         .delete(
                             origin(&connection.url)?
-                                .join(&format!("streams/{id}"))
+                                .join(&format!("v1/streams/{id}"))
                                 .unwrap(),
                         )
                         .bearer_auth(token.trim())
@@ -256,37 +385,77 @@ pub async fn run(command: Command) -> Result<()> {
         Command::Append {
             connection,
             stream_id,
+            idempotency_key,
+            content_type,
         } => {
             stream_id.parse::<StreamId>()?;
-            let mut bytes = Vec::new();
-            std::io::stdin()
-                .take((MAX_RECORD_BYTES + 1) as u64)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > MAX_RECORD_BYTES {
-                return Err(Error::TooLarge);
-            }
-            let token = bounded_file(
-                &connection.token_file,
-                crate::auth::token::MAX_TOKEN_BYTES + 1,
-            )?;
-            print_json(
-                checked(
-                    client()?
-                        .post(
-                            origin(&connection.url)?
-                                .join(&format!("streams/{stream_id}/records"))
-                                .unwrap(),
-                        )
-                        .bearer_auth(token.trim())
-                        .header("Content-Type", "application/octet-stream")
-                        .body(bytes)
-                        .send()
-                        .await
-                        .map_err(Error::HealthRequest)?,
-                )
-                .await?,
+            append_bytes(
+                &connection,
+                &format!("streams/{stream_id}/records"),
+                idempotency_key.as_deref(),
+                &content_type,
             )
             .await?;
+        }
+        Command::AppendNamed {
+            connection,
+            name,
+            idempotency_key,
+            content_type,
+        } => {
+            name.parse::<StreamName>()?;
+            append_bytes(
+                &connection,
+                &format!("streams/append?name={name}"),
+                idempotency_key.as_deref(),
+                &content_type,
+            )
+            .await?;
+        }
+        Command::Follow {
+            connection,
+            stream_id,
+            from,
+            last_event_id,
+        } => {
+            stream_id.parse::<StreamId>()?;
+            let path = if let Some(from) = from {
+                from.parse::<Position>()?;
+                format!("streams/{stream_id}/follow?from={from}")
+            } else if last_event_id.is_some() {
+                format!("streams/{stream_id}/follow")
+            } else {
+                format!("streams/{stream_id}/follow?from=0")
+            };
+            subscription(&connection, &path, None, last_event_id.as_deref()).await?;
+        }
+        Command::Live {
+            connection,
+            stream_id,
+        } => {
+            stream_id.parse::<StreamId>()?;
+            subscription(
+                &connection,
+                &format!("streams/{stream_id}/live"),
+                None,
+                None,
+            )
+            .await?;
+        }
+        Command::Watch {
+            connection,
+            prefix,
+            stream_ids,
+        } => {
+            let body = if let Some(prefix) = prefix {
+                json!({"prefix":prefix})
+            } else {
+                for id in &stream_ids {
+                    id.parse::<StreamId>()?;
+                }
+                json!({"stream_ids":stream_ids})
+            };
+            subscription(&connection, "watch", Some(body), None).await?;
         }
         Command::Read {
             connection,
@@ -330,6 +499,49 @@ pub async fn run(command: Command) -> Result<()> {
             connection,
             command,
         } => match command {
+            TokenCommand::List => {
+                print_json(
+                    request(&connection, reqwest::Method::GET, "auth/credentials", None).await?,
+                )
+                .await?
+            }
+            TokenCommand::Whoami => {
+                print_json(request(&connection, reqwest::Method::GET, "auth/whoami", None).await?)
+                    .await?
+            }
+            TokenCommand::Inspect => {
+                let text = bounded_file(
+                    &connection.token_file,
+                    crate::auth::token::MAX_TOKEN_BYTES + 1,
+                )?;
+                let token = biscuit_auth::UnverifiedBiscuit::from_base64(text.trim())
+                    .map_err(|_| Error::Unauthorized)?;
+                println!(
+                    "{}",
+                    json!({"signature_verified":false,"blocks":token.block_count(),"has_third_party_blocks":token.external_public_keys().iter().any(Option::is_some)})
+                );
+            }
+            TokenCommand::Attenuate {
+                read_only,
+                stream,
+                prefix,
+                expires_at,
+                output,
+            } => {
+                let text = bounded_file(
+                    &connection.token_file,
+                    crate::auth::token::MAX_TOKEN_BYTES + 1,
+                )?;
+                let result = crate::auth::token::attenuate(
+                    text.trim(),
+                    read_only,
+                    stream.as_deref(),
+                    prefix.as_deref(),
+                    expires_at.as_deref(),
+                )?;
+                save_secret(&output, &result)?;
+                println!("{}", json!({"outcome":"attenuated"}));
+            }
             TokenCommand::Mint {
                 scope_file,
                 lifetime_seconds,
@@ -369,6 +581,152 @@ pub async fn run(command: Command) -> Result<()> {
                 println!("{{\"outcome\":\"revoked\"}}");
             }
         },
+    }
+    Ok(())
+}
+
+fn read_json(path: &Path) -> Result<Value> {
+    serde_json::from_str(&bounded_file(path, 1024 * 1024)?).map_err(|_| Error::Invalid("JSON file"))
+}
+async fn control(
+    connection: &ConnectionArgs,
+    path: &str,
+    file: Option<&Path>,
+    etag: Option<String>,
+) -> Result<()> {
+    if let Some(file) = file {
+        let tag = etag.ok_or(Error::Invalid("revision required"))?;
+        let token = bounded_file(
+            &connection.token_file,
+            crate::auth::token::MAX_TOKEN_BYTES + 1,
+        )?;
+        let response = checked(
+            client()?
+                .put(
+                    origin(&connection.url)?
+                        .join(&format!("v1/{path}"))
+                        .unwrap(),
+                )
+                .bearer_auth(token.trim())
+                .header("If-Match", tag)
+                .json(&read_json(file)?)
+                .send()
+                .await
+                .map_err(Error::HealthRequest)?,
+        )
+        .await?;
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        println!("{}", json!({"outcome":"updated","etag":etag}));
+    } else {
+        let response = request(connection, reqwest::Method::GET, path, None).await?;
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let value: Value = response.json().await.map_err(Error::HealthRequest)?;
+        println!("{}", json!({"etag":etag,"value":value}));
+    }
+    Ok(())
+}
+async fn append_bytes(
+    connection: &ConnectionArgs,
+    path: &str,
+    key: Option<&str>,
+    content_type: &str,
+) -> Result<()> {
+    crate::pipeline::validate_content_type(content_type)?;
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .take((MAX_RECORD_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_RECORD_BYTES {
+        return Err(Error::TooLarge);
+    }
+    let token = bounded_file(
+        &connection.token_file,
+        crate::auth::token::MAX_TOKEN_BYTES + 1,
+    )?;
+    let mut request = client()?
+        .post(
+            origin(&connection.url)?
+                .join(&format!("v1/{path}"))
+                .unwrap(),
+        )
+        .bearer_auth(token.trim())
+        .header("Content-Type", content_type)
+        .body(bytes);
+    if let Some(key) = key {
+        request = request.header("Idempotency-Key", key);
+    }
+    print_json(checked(request.send().await.map_err(Error::HealthRequest)?).await?).await
+}
+async fn subscription(
+    connection: &ConnectionArgs,
+    path: &str,
+    body: Option<Value>,
+    last_event_id: Option<&str>,
+) -> Result<()> {
+    let token = bounded_file(
+        &connection.token_file,
+        crate::auth::token::MAX_TOKEN_BYTES + 1,
+    )?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(Error::HealthRequest)?;
+    let mut request = client
+        .request(
+            if body.is_some() {
+                reqwest::Method::POST
+            } else {
+                reqwest::Method::GET
+            },
+            origin(&connection.url)?
+                .join(&format!("v1/{path}"))
+                .unwrap(),
+        )
+        .bearer_auth(token.trim());
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    if let Some(id) = last_event_id {
+        request = request.header("Last-Event-ID", id);
+    }
+    let mut response = checked(request.send().await.map_err(Error::HealthRequest)?).await?;
+    let mut frame = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(Error::HealthRequest)? {
+        std::io::stdout().write_all(&chunk)?;
+        std::io::stdout().flush()?;
+        frame.extend_from_slice(&chunk);
+        while let Some(end) = frame.windows(2).position(|w| w == b"\n\n") {
+            let value = std::str::from_utf8(&frame[..end]).map_err(|_| Error::Invalid("SSE"))?;
+            if value.lines().any(|l| {
+                [
+                    "event: unauthorized",
+                    "event: lagged",
+                    "event: history_lost",
+                    "event: unavailable",
+                    "event: resync_required",
+                    "event: deleted",
+                ]
+                .contains(&l)
+            }) {
+                return Err(Error::Invalid(
+                    "subscription closed; inspect last SSE event",
+                ));
+            }
+            frame.drain(..end + 2);
+        }
+        if frame.len() > 2 * 1024 * 1024 {
+            return Err(Error::TooLarge);
+        }
     }
     Ok(())
 }

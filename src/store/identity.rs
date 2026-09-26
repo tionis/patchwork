@@ -18,6 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct Challenge {
     pub challenge_id: String,
     pub payload_base64: String,
+    #[serde(serialize_with = "crate::wire::timestamp")]
     pub expires_at: i64,
     pub namespace: &'static str,
 }
@@ -25,6 +26,7 @@ pub struct Challenge {
 pub struct CredentialReceipt {
     pub credential_id: String,
     pub token: String,
+    #[serde(serialize_with = "crate::wire::timestamp")]
     pub expires_at: i64,
 }
 pub(super) fn now() -> Result<i64> {

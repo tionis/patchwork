@@ -215,7 +215,7 @@ async fn data_routes_require_auth_and_enforce_cas_and_limits() {
         call(
             &app,
             "GET",
-            &format!("/streams/{id}/records"),
+            &format!("/streams/{id}/records?from=0"),
             Some("invalid"),
             None,
             Value::Null

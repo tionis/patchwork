@@ -125,7 +125,7 @@ impl Store {
             };
             if let Some(key) = key {
                 s.connection
-                    .execute("DELETE FROM receipts WHERE expires_at<=?1", [now()?])?;
+                    .execute("DELETE FROM receipts WHERE stream_id=?1 AND principal_id=?2 AND endpoint='raw' AND key=?3 AND expires_at<=?4", params![id.as_str(), principal, key, now()?])?;
                 s.connection.execute(
                     "INSERT INTO receipts VALUES (?1,?2,'raw',?3,?4,?5,?6)",
                     params![

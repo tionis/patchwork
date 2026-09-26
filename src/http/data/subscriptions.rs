@@ -165,7 +165,7 @@ pub(super) async fn follow(
                     Ok(page) => {
                         if let Some(record) = page.records.into_iter().next() {
                             state.cursor = page.next_position;
-                            let ev=event("record",json!({"position":record.position.to_string(),"payload_base64":STANDARD.encode(record.payload),"content_type":record.content_type,"accepted_at_ms":record.accepted_at_ms})).id(format!("{}:{}",state.id,state.cursor));
+                            let ev=event("record",json!({"position":record.position.to_string(),"data_base64":STANDARD.encode(record.payload),"object_refs":[],"content_type":record.content_type,"accepted_at":crate::wire::timestamp_ms(record.accepted_at_ms).unwrap_or_default()})).id(format!("{}:{}",state.id,state.cursor));
                             return Some((Ok(ev), state));
                         }
                     }
@@ -270,7 +270,7 @@ pub(super) async fn live(
                         return Some((
                             Ok(event(
                                 "record",
-                                json!({"sequence":record.sequence.to_string(),"payload_base64":STANDARD.encode(record.payload.as_slice()),"content_type":record.content_type}),
+                                json!({"sequence":record.sequence.to_string(),"data_base64":STANDARD.encode(record.payload.as_slice()),"object_refs":[],"content_type":record.content_type}),
                             )),
                             state,
                         ));

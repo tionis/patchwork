@@ -121,16 +121,17 @@ impl Store {
             tail: Position::ZERO,
             config_revision: Revision::ZERO,
             metadata_revision: Revision::ZERO,
+            retained: config.retention != Retention::None,
         })
     }
 
     pub fn stream(&self, id: &StreamId) -> Result<Stream> {
-        let (name, head, tail, config_revision, metadata_revision): (String, i64, i64, i64, i64) = self
+        let (name, head, tail, config_revision, metadata_revision,retained): (String, i64, i64, i64, i64,bool) = self
             .connection
             .query_row(
-                "SELECT name,head,tail,config_revision,metadata_revision FROM streams WHERE id=?1 AND deleted=0",
+                "SELECT name,head,tail,config_revision,metadata_revision,json_extract(config,'$.retention.mode')!='none' FROM streams WHERE id=?1 AND deleted=0",
                 [id.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,r.get(5)?)),
             )
             .optional()?
             .ok_or(Error::NotFound)?;
@@ -141,6 +142,7 @@ impl Store {
             tail: Position::new(tail)?,
             config_revision: Revision::new(config_revision)?,
             metadata_revision: Revision::new(metadata_revision)?,
+            retained,
         })
     }
 

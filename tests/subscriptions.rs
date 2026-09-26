@@ -177,9 +177,15 @@ async fn live_is_ephemeral_bounded_and_watch_only_receives_hints() {
     assert!(chunk(&mut live).await.contains("epoch"));
     let records = format!("/streams/{}/records", st.id.as_str());
     assert_eq!(
-        call(&app, "GET", &records, &watcher.token, vec![])
-            .await
-            .status(),
+        call(
+            &app,
+            "GET",
+            &format!("{records}?from=0"),
+            &watcher.token,
+            vec![]
+        )
+        .await
+        .status(),
         StatusCode::FORBIDDEN
     );
     for n in 0..10 {
@@ -199,7 +205,7 @@ async fn live_is_ephemeral_bounded_and_watch_only_receives_hints() {
     assert!(!hint.contains("payload"));
     assert!(chunk(&mut live).await.contains("lagged"));
     assert!(live.next().await.is_none());
-    let response = call(&app, "GET", &records, &admin, vec![]).await;
+    let response = call(&app, "GET", &format!("{records}?from=0"), &admin, vec![]).await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 #[tokio::test]

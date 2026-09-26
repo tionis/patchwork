@@ -25,6 +25,7 @@ use tokio::sync::Semaphore;
 pub struct DataService {
     store: Arc<Mutex<Store>>,
     admission: Arc<Semaphore>,
+    requests: Arc<Semaphore>,
     hub: Arc<Mutex<subscriptions::Hub>>,
     subscriptions: Arc<Semaphore>,
 }
@@ -33,6 +34,7 @@ impl DataService {
         let service = Self {
             store: Arc::new(Mutex::new(store)),
             admission: Arc::new(Semaphore::new(32)),
+            requests: Arc::new(Semaphore::new(64)),
             hub: Arc::new(Mutex::new(subscriptions::Hub::new())),
             subscriptions: Arc::new(Semaphore::new(128)),
         };
@@ -118,9 +120,29 @@ pub fn router(service: DataService) -> Router {
         .route("/streams/{id}/records", get(read).post(append))
         .route("/streams/{id}/records/{position}", get(raw))
         .layer(DefaultBodyLimit::max(crate::store::MAX_RECORD_BYTES))
+        .layer(axum::middleware::from_fn_with_state(
+            service.clone(),
+            admit_request,
+        ))
         .layer(axum::middleware::map_response(normalize_response))
         .with_state(service)
 }
+// Admit before body extraction so slow uploads cannot allocate unbounded
+// buffers. The deadline covers upload and handler work, not SSE lifetimes.
+async fn admit_request(
+    State(service): State<DataService>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let Ok(_permit) = service.requests.try_acquire() else {
+        return ApiError(Error::Busy).into_response();
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(10), next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
+    }
+}
+
 pub struct ApiError(Error);
 impl From<Error> for ApiError {
     fn from(e: Error) -> Self {
@@ -185,7 +207,12 @@ fn etag(id: &StreamId, kind: &str, revision: Revision) -> String {
     format!("\"{}:{kind}:{revision}\"", id.as_str())
 }
 fn descriptor(s: Stream) -> Value {
-    json!({"id":s.id.as_str(),"name":s.name.as_str(),"head":s.head.to_string(),"tail":s.tail.to_string(),"config_revision":s.config_revision.to_string(),"metadata_revision":s.metadata_revision.to_string()})
+    let mut value = json!({"id":s.id.as_str(),"name":s.name.as_str(),"mode":if s.retained{"retained"}else{"none"},"config_revision":s.config_revision.to_string(),"metadata_revision":s.metadata_revision.to_string()});
+    if s.retained {
+        value["head"] = json!(s.head.to_string());
+        value["tail"] = json!(s.tail.to_string());
+    }
+    value
 }
 fn stream(store: &Store, token: &str, id: &str) -> Result<Stream> {
     store.authenticate(token)?;
@@ -195,6 +222,7 @@ fn stream(store: &Store, token: &str, id: &str) -> Result<Stream> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ChallengeInput {
+    #[serde(rename = "public_key", alias = "ssh_public_key")]
     ssh_public_key: String,
 }
 async fn challenge(
@@ -437,21 +465,17 @@ async fn append(
 }
 #[derive(Deserialize)]
 struct ReadInput {
-    #[serde(default = "zero")]
     from: String,
     #[serde(default = "page_limit")]
     limit: usize,
     #[serde(default = "byte_limit")]
     max_bytes: usize,
 }
-fn zero() -> String {
-    "0".into()
-}
 fn page_limit() -> usize {
     100
 }
 fn byte_limit() -> usize {
-    1024 * 1024
+    4 * 1024 * 1024
 }
 async fn read(
     State(s): State<DataService>,
@@ -461,7 +485,7 @@ async fn read(
 ) -> std::result::Result<impl IntoResponse, ApiError> {
     let token = bearer(&headers)?;
     let from: Position = input.from.parse()?;
-    Ok(Json(s.run(move|s|{let st=stream(s,&token,&id)?;let page=s.authorized(&token,Action::RecordRead,Some(&st.id),&st.name,|s|s.read(&st.id,from,input.limit,input.max_bytes))?;Ok(json!({"head":page.head.to_string(),"tail":page.tail.to_string(),"next_position":page.next_position.to_string(),"records":page.records.into_iter().map(|r|json!({"position":r.position.to_string(),"payload_base64":STANDARD.encode(r.payload),"content_type":r.content_type,"accepted_at_ms":r.accepted_at_ms})).collect::<Vec<_>>()}))}).await?))
+    Ok(Json(s.run(move|s|{let st=stream(s,&token,&id)?;let page=s.authorized(&token,Action::RecordRead,Some(&st.id),&st.name,|s|s.read(&st.id,from,input.limit,input.max_bytes))?;Ok(json!({"stream_id":id,"head":page.head.to_string(),"tail":page.tail.to_string(),"next_position":page.next_position.to_string(),"records":page.records.into_iter().map(|r|json!({"position":r.position.to_string(),"data_base64":STANDARD.encode(r.payload),"object_refs":[],"content_type":r.content_type,"accepted_at":crate::wire::timestamp_ms(r.accepted_at_ms).unwrap_or_default()})).collect::<Vec<_>>()}))}).await?))
 }
 async fn raw(
     State(s): State<DataService>,

@@ -565,3 +565,44 @@ fn longest_prefix_creation_is_atomic_and_drops_leave_no_stream() {
     );
     assert!(store.lookup_stream(&invalid).is_err());
 }
+
+#[test]
+fn concurrent_authenticated_retries_allocate_once_and_expired_keys_are_reusable() {
+    let (dir, mut store, key) = fixture();
+    let token = login(&mut store, &key);
+    let stream = store
+        .create_stream(&"events/concurrent".parse().unwrap())
+        .unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let mut connection = Store::open(dir.path()).unwrap();
+            let token = token.clone();
+            let id = stream.id.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                connection
+                    .append_authorized(&token, &id, b"once", "text/plain", Some("same-key"))
+                    .unwrap()
+            })
+        })
+        .collect();
+    let receipts: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert!(receipts.iter().all(|r| r.position.as_deref() == Some("0")));
+    assert_eq!(
+        receipts
+            .iter()
+            .filter(|r| r.deduplicated == Some(false))
+            .count(),
+        1
+    );
+    assert_eq!(store.stream(&stream.id).unwrap().tail.get(), 1);
+    let db = rusqlite::Connection::open(dir.path().join("patchwork-v1.sqlite3")).unwrap();
+    db.execute("UPDATE receipts SET expires_at=0", []).unwrap();
+    let next = store
+        .append_authorized(&token, &stream.id, b"new", "text/plain", Some("same-key"))
+        .unwrap();
+    assert_eq!(next.position.as_deref(), Some("1"));
+    assert_eq!(next.deduplicated, Some(false));
+}

@@ -98,4 +98,4 @@ CREATE TABLE creation_rules (
     revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
     value TEXT NOT NULL
 ) STRICT;
-INSERT INTO creation_rules(singleton,value) VALUES (1,'{"default":{"allow_append":false,"config":{"retention":{"mode":"infinite"},"max_record_bytes":1048576,"filters":[],"validators":[]}},"rules":[]}');
+INSERT INTO creation_rules(singleton,value) VALUES (1,'{"default":{"allow_append":false,"config":{"retention":{"mode":"infinite"},"max_record_bytes":"1048576","filters":[],"validators":[]}},"rules":[]}');

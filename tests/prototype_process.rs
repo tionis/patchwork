@@ -142,6 +142,23 @@ fn bootstrap_login_binary_stream_scoped_credentials_and_hard_restart() {
     );
     let created: Value = serde_json::from_slice(&output.stdout).unwrap();
     let id = created["id"].as_str().unwrap();
+    let attenuated = dir.path().join("attenuated");
+    ok(
+        &[
+            "token",
+            "--url",
+            &url,
+            "--token-file",
+            session.to_str().unwrap(),
+            "attenuate",
+            "--read-only",
+            "--stream",
+            id,
+            "--output",
+            attenuated.to_str().unwrap(),
+        ],
+        None,
+    );
     let bytes = b"\x00\xffbinary\nrecord";
     let output = ok(
         &[
@@ -151,6 +168,8 @@ fn bootstrap_login_binary_stream_scoped_credentials_and_hard_restart() {
             "--token-file",
             session.to_str().unwrap(),
             id,
+            "--idempotency-key",
+            "restart-retry",
         ],
         Some(bytes),
     );
@@ -246,6 +265,128 @@ fn bootstrap_login_binary_stream_scoped_credentials_and_hard_restart() {
     server.0.wait().unwrap();
     drop(server);
     let _server = start(path, &address, &url);
+    let retried: Value = serde_json::from_slice(
+        &ok(
+            &[
+                "append",
+                "--url",
+                &url,
+                "--token-file",
+                session.to_str().unwrap(),
+                id,
+                "--idempotency-key",
+                "restart-retry",
+            ],
+            Some(bytes),
+        )
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(retried["position"], "0");
+    assert_eq!(retried["deduplicated"], true);
+    assert_eq!(
+        ok(
+            &[
+                "get",
+                "--url",
+                &url,
+                "--token-file",
+                attenuated.to_str().unwrap(),
+                id,
+                "0"
+            ],
+            None
+        )
+        .stdout,
+        bytes
+    );
+    assert!(
+        !cli(
+            &[
+                "append",
+                "--url",
+                &url,
+                "--token-file",
+                attenuated.to_str().unwrap(),
+                id
+            ],
+            Some(b"denied")
+        )
+        .status
+        .success()
+    );
+    for command in [["admin", "policy"], ["admin", "creation-rules"]] {
+        ok(
+            &[
+                command[0],
+                command[1],
+                "--url",
+                &url,
+                "--token-file",
+                session.to_str().unwrap(),
+            ],
+            None,
+        );
+    }
+    ok(
+        &[
+            "admin",
+            "principals",
+            "--url",
+            &url,
+            "--token-file",
+            session.to_str().unwrap(),
+            "list",
+        ],
+        None,
+    );
+    ok(
+        &[
+            "token",
+            "--url",
+            &url,
+            "--token-file",
+            session.to_str().unwrap(),
+            "whoami",
+        ],
+        None,
+    );
+    ok(
+        &[
+            "token",
+            "--url",
+            &url,
+            "--token-file",
+            session.to_str().unwrap(),
+            "list",
+        ],
+        None,
+    );
+    ok(
+        &[
+            "stream",
+            "--url",
+            &url,
+            "--token-file",
+            session.to_str().unwrap(),
+            "list",
+        ],
+        None,
+    );
+    for command in ["config", "metadata"] {
+        ok(
+            &[
+                "stream",
+                "--url",
+                &url,
+                "--token-file",
+                session.to_str().unwrap(),
+                command,
+                id,
+            ],
+            None,
+        );
+    }
     assert_eq!(
         ok(
             &[

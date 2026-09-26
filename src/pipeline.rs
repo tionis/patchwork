@@ -88,11 +88,7 @@ pub fn evaluate(
             }
             Filter::DropIfContains { data_base64 } | Filter::RejectIfContains { data_base64 } => {
                 let pattern = decode(data_base64)?;
-                if pattern.is_empty()
-                    || candidate
-                        .windows(pattern.len())
-                        .any(|window| window == pattern)
-                {
+                if memchr::memmem::find(&candidate, &pattern).is_some() {
                     return if matches!(filter, Filter::DropIfContains { .. }) {
                         Ok(None)
                     } else {
@@ -106,6 +102,9 @@ pub fn evaluate(
         return Err(Error::TooLarge);
     }
     for validator in &config.validators {
+        if started.elapsed() > std::time::Duration::from_millis(100) {
+            return Err(Error::Busy);
+        }
         match validator {
             Validator::Utf8 => {
                 std::str::from_utf8(&candidate).map_err(|_| Error::Rejected)?;
@@ -122,6 +121,9 @@ pub fn evaluate(
             }
             _ => {}
         }
+    }
+    if started.elapsed() > std::time::Duration::from_millis(100) {
+        return Err(Error::Busy);
     }
     Ok(Some(candidate))
 }

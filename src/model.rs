@@ -115,6 +115,7 @@ pub struct Stream {
     pub tail: Position,
     pub config_revision: Revision,
     pub metadata_revision: Revision,
+    pub retained: bool,
 }
 
 /// Storage configuration. Pipelines, attachments and recovery requirements are
@@ -123,6 +124,7 @@ pub struct Stream {
 #[serde(deny_unknown_fields)]
 pub struct StreamConfig {
     pub retention: Retention,
+    #[serde(with = "crate::wire::usize_decimal")]
     pub max_record_bytes: usize,
     #[serde(default)]
     pub filters: Vec<crate::pipeline::Filter>,
@@ -135,7 +137,9 @@ pub struct StreamConfig {
 pub enum Retention {
     Infinite,
     Bounded {
+        #[serde(default, with = "crate::wire::optional_decimal")]
         max_age_seconds: Option<i64>,
+        #[serde(default, with = "crate::wire::optional_decimal")]
         max_bytes: Option<i64>,
     },
     None,
