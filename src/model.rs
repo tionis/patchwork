@@ -113,6 +113,90 @@ pub struct Stream {
     pub name: StreamName,
     pub head: Position,
     pub tail: Position,
+    pub config_revision: Revision,
+    pub metadata_revision: Revision,
+}
+
+/// Storage configuration. Pipelines, attachments and recovery requirements are
+/// deliberately unavailable until their implementations can validate them.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamConfig {
+    pub retention: Retention,
+    pub max_record_bytes: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Retention {
+    Infinite,
+    None,
+}
+
+impl Default for StreamConfig {
+    fn default() -> Self {
+        Self {
+            retention: Retention::Infinite,
+            max_record_bytes: crate::store::MAX_RECORD_BYTES,
+        }
+    }
+}
+
+impl StreamConfig {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if !(1..=crate::store::MAX_RECORD_BYTES).contains(&self.max_record_bytes) {
+            return Err(Error::Invalid("record limit"));
+        }
+        Ok(())
+    }
+}
+
+/// Bounded JSON object, with no implicit object links or privileged fields.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Metadata(String);
+
+impl Default for Metadata {
+    fn default() -> Self {
+        Self("{}".to_owned())
+    }
+}
+
+impl Metadata {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for Metadata {
+    type Err = Error;
+    fn from_str(value: &str) -> Result<Self> {
+        if value.len() > 64 * 1024 {
+            return Err(Error::TooLarge);
+        }
+        let parsed: serde_json::Value =
+            serde_json::from_str(value).map_err(|_| Error::Invalid("metadata JSON"))?;
+        if !parsed.is_object() {
+            return Err(Error::Invalid("metadata object"));
+        }
+        Ok(Self(value.to_owned()))
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct Versioned<T> {
+    pub revision: Revision,
+    pub value: T,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct Segment {
+    pub start: Position,
+    pub end: Position,
+    pub record_count: i64,
+    pub payload_bytes: i64,
+    pub min_accepted_at_ms: i64,
+    pub max_accepted_at_ms: i64,
+    pub sealed: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]

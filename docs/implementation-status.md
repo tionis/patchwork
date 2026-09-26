@@ -4,7 +4,7 @@ Verified bootstrap: 2026-09-23 (design revised 2026-09-25), Linux x86_64, Rust/C
 
 ## Available behavior
 
-One Rust package provides server/CLI binaries, typed config/errors and JSON tracing; checked names/UUID IDs/positions/revisions; new-format SQLite initialization and migration 0001; WAL/FULL/foreign keys/busy handling; internal infinite-retention stream creation, immutable retained append and bounded replay; byte/position persistence across reopen; health/readiness, graceful SIGINT/SIGTERM and health CLI. GitHub verification workflow is configured.
+The 2026-09-26 M1-04 increment adds internal exact-name lookup, config and metadata CAS, lifecycle tombstones, and atomic logical segment summaries. One Rust package provides server/CLI binaries, typed config/errors and JSON tracing; checked names/UUID IDs/positions/revisions; new-format SQLite initialization and migration 0001; WAL/FULL/foreign keys/busy handling; internal infinite-retention stream creation, immutable retained append and bounded replay; byte/position persistence across reopen; health/readiness, graceful SIGINT/SIGTERM and health CLI. GitHub verification workflow is configured.
 
 A dev-only Biscuit 6.0.0 spike tests issuance/verification, trusted fact joins, offline action/resource attenuation and forged attenuation facts. It is not production authorization.
 
@@ -32,7 +32,17 @@ Storage tests cover fresh/reopened DB, exact binary/empty/large payloads, ordere
 
 Known upstream warning: `proc-macro-error2 2.0.1` future Rust compatibility, documented with the required Biscuit `datalog-macro` feature. Current pinned checks pass. Remote CI has not run.
 
-The storage design now records SQLite's row-per-record append and prefix-trim costs, WAL/page-reuse limits and the data-lifetime boundary between records, object roots, snapshots, KV, jobs and live traffic. Logical segments are internal summaries, not a physical deletion optimization. G19–G21 and M2-07 specify evidence still needed; no append/trim benchmark, retention GC or vacuum policy has been implemented.
+The storage design now records SQLite's row-per-record append and prefix-trim costs, WAL/page-reuse limits and the data-lifetime boundary between records, object roots, snapshots, KV, jobs and live traffic. Logical segments are internal summaries, not a physical deletion optimization. G19–G21 and M2-07 specify evidence still needed; append summaries now exist, but no append/trim benchmark, retention GC or vacuum policy has been implemented.
+
+## M1-04 storage increment — 2026-09-26
+
+M1-04 is partial. Implemented internal operations: exact live-name lookup; atomic creation with concrete config and metadata; independently revisioned config and metadata replacement; config-CAS logical deletion with durable tombstones and reusable names; retained append with per-stream record limits; and bounded logical-segment pages. Segments seal at 8 MiB payload or 10,000 records and maintain count, byte total and minimum/maximum acceptance timestamps in the record transaction. Clock rollback does not hide a newer timestamp in the maximum summary.
+
+Supported config is intentionally limited to infinite retention or storage-only live descriptors and record size limits. Live append/replay is rejected; there is no live delivery service. Bounded retention, pipelines, attachments, recovery requirements and object links remain unavailable; unknown config fields fail deserialization. Metadata is a bounded JSON object and does not configure privileges or establish object roots. Logical deletion retains underlying rows until a future reclamation implementation. No public data routes were added.
+
+Verification passed: `cargo fmt --all -- --check`, `cargo build --locked --offline --all-targets`, `cargo clippy --locked --offline --all-targets -- -D warnings`, and `cargo test --locked --offline --all-targets` (19 tests). The new `stream_lifecycle` integration target has four tests covering concurrent config/metadata CAS winners, independent revisions, deletion/recreation, per-stream limits, live-mode rejection, invalid config/metadata, interleaved byte segments, summary-to-row comparison and reopen. Two added store unit tests cover revision exhaustion, inserted-record/segment rollback on faults, the 10,000-record boundary, empty payload accounting, timestamp rollback and reopened summaries. This is storage-level evidence only; public CAS statuses, object roots, full mode-none attachment validation, prefix trimming and hard-kill/power-loss conformance remain unverified.
+
+Migration 0001 changed in place under D29; recreate development data directories. No existing data was converted. Startup now checks the lifecycle columns, so old bootstrap schemas fail startup. The existing upstream future-compatibility warning remains unchanged.
 
 ## Documentation verification
 

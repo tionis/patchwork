@@ -8,6 +8,10 @@ pub enum Error {
     NotFound,
     #[error("stream name already exists")]
     Conflict,
+    #[error("revision does not match")]
+    RevisionMismatch,
+    #[error("operation is unavailable for this stream mode")]
+    StreamMode,
     #[error("position ahead of tail")]
     PositionAhead,
     #[error("requested history is unavailable")]

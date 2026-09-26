@@ -1,4 +1,4 @@
-//! Synchronous, internal-only storage for infinite-retention streams.
+//! Synchronous, internal-only storage for stream lifecycle and infinite-retention records.
 //! A mutable connection serializes calls; there is no HTTP write admission yet.
 use std::{path::Path, time::Duration};
 
@@ -6,10 +6,15 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::{
     Error, Result,
-    model::{Position, ReadPage, Record, Stream, StreamId, StreamName},
+    model::{
+        Metadata, Position, ReadPage, Record, Retention, Revision, Segment, Stream, StreamConfig,
+        StreamId, StreamName, Versioned,
+    },
 };
 
 pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
+pub const SEGMENT_TARGET_BYTES: i64 = 8 * 1024 * 1024;
+pub const SEGMENT_TARGET_RECORDS: i64 = 10_000;
 const APPLICATION_ID: i64 = 0x50574348;
 const SCHEMA_VERSION: i64 = 1;
 
@@ -65,18 +70,30 @@ impl Store {
     }
 
     pub fn check_ready(&self) -> Result<()> {
-        self.connection
-            .query_row("SELECT count(*) FROM streams WHERE 0", [], |_| Ok(()))?;
+        self.connection.prepare(
+            "SELECT config,config_revision,metadata,metadata_revision,deleted FROM streams WHERE 0",
+        )?;
         Ok(())
     }
 
     pub fn create_stream(&mut self, name: &StreamName) -> Result<Stream> {
+        self.create_stream_with(name, &StreamConfig::default(), &Metadata::default())
+    }
+
+    pub fn create_stream_with(
+        &mut self,
+        name: &StreamName,
+        config: &StreamConfig,
+        metadata: &Metadata,
+    ) -> Result<Stream> {
+        config.validate()?;
+        let encoded = serde_json::to_string(config).map_err(|_| Error::Invalid("stream config"))?;
         let id = StreamId::random();
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM streams WHERE name=?1)",
+            "SELECT EXISTS(SELECT 1 FROM streams WHERE name=?1 AND deleted=0)",
             [name.as_str()],
             |r| r.get(0),
         )?;
@@ -84,8 +101,8 @@ impl Store {
             return Err(Error::Conflict);
         }
         tx.execute(
-            "INSERT INTO streams(id,name) VALUES (?1,?2)",
-            params![id.as_str(), name.as_str()],
+            "INSERT INTO streams(id,name,config,metadata) VALUES (?1,?2,?3,?4)",
+            params![id.as_str(), name.as_str(), encoded, metadata.as_str()],
         )?;
         tx.commit()?;
         Ok(Stream {
@@ -93,16 +110,18 @@ impl Store {
             name: name.clone(),
             head: Position::ZERO,
             tail: Position::ZERO,
+            config_revision: Revision::ZERO,
+            metadata_revision: Revision::ZERO,
         })
     }
 
     pub fn stream(&self, id: &StreamId) -> Result<Stream> {
-        let (name, head, tail): (String, i64, i64) = self
+        let (name, head, tail, config_revision, metadata_revision): (String, i64, i64, i64, i64) = self
             .connection
             .query_row(
-                "SELECT name,head,tail FROM streams WHERE id=?1",
+                "SELECT name,head,tail,config_revision,metadata_revision FROM streams WHERE id=?1 AND deleted=0",
                 [id.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .optional()?
             .ok_or(Error::NotFound)?;
@@ -111,7 +130,183 @@ impl Store {
             name: name.parse()?,
             head: Position::new(head)?,
             tail: Position::new(tail)?,
+            config_revision: Revision::new(config_revision)?,
+            metadata_revision: Revision::new(metadata_revision)?,
         })
+    }
+
+    /// Exact live-name lookup. Reading never creates a stream.
+    pub fn lookup_stream(&self, name: &StreamName) -> Result<Stream> {
+        let id: String = self
+            .connection
+            .query_row(
+                "SELECT id FROM streams WHERE name=?1 AND deleted=0",
+                [name.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        self.stream(&id.parse()?)
+    }
+
+    pub fn config(&self, id: &StreamId) -> Result<Versioned<StreamConfig>> {
+        let (revision, value): (i64, String) = self
+            .connection
+            .query_row(
+                "SELECT config_revision,config FROM streams WHERE id=?1 AND deleted=0",
+                [id.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        Ok(Versioned {
+            revision: Revision::new(revision)?,
+            value: serde_json::from_str(&value).map_err(|_| Error::DatabaseFormat)?,
+        })
+    }
+
+    pub fn metadata(&self, id: &StreamId) -> Result<Versioned<Metadata>> {
+        let (revision, value): (i64, String) = self
+            .connection
+            .query_row(
+                "SELECT metadata_revision,metadata FROM streams WHERE id=?1 AND deleted=0",
+                [id.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        Ok(Versioned {
+            revision: Revision::new(revision)?,
+            value: value.parse()?,
+        })
+    }
+
+    pub fn replace_config(
+        &mut self,
+        id: &StreamId,
+        expected: Revision,
+        config: &StreamConfig,
+    ) -> Result<Revision> {
+        config.validate()?;
+        let encoded = serde_json::to_string(config).map_err(|_| Error::Invalid("stream config"))?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (revision, previous): (i64, String) = tx
+            .query_row(
+                "SELECT config_revision,config FROM streams WHERE id=?1 AND deleted=0",
+                [id.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        if revision != expected.get() {
+            return Err(Error::RevisionMismatch);
+        }
+        let previous: StreamConfig =
+            serde_json::from_str(&previous).map_err(|_| Error::DatabaseFormat)?;
+        if previous.retention != config.retention {
+            return Err(Error::StreamMode);
+        }
+        let next = expected.next()?;
+        tx.execute(
+            "UPDATE streams SET config=?2,config_revision=?3 WHERE id=?1",
+            params![id.as_str(), encoded, next.get()],
+        )?;
+        tx.commit()?;
+        Ok(next)
+    }
+
+    pub fn replace_metadata(
+        &mut self,
+        id: &StreamId,
+        expected: Revision,
+        metadata: &Metadata,
+    ) -> Result<Revision> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let revision: i64 = tx
+            .query_row(
+                "SELECT metadata_revision FROM streams WHERE id=?1 AND deleted=0",
+                [id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        if revision != expected.get() {
+            return Err(Error::RevisionMismatch);
+        }
+        let next = expected.next()?;
+        tx.execute(
+            "UPDATE streams SET metadata=?2,metadata_revision=?3 WHERE id=?1",
+            params![id.as_str(), metadata.as_str(), next.get()],
+        )?;
+        tx.commit()?;
+        Ok(next)
+    }
+
+    /// Logical deletion releases the name. Reclamation is separate; the old ID
+    /// remains a tombstone and cannot be used to access a recreated resource.
+    pub fn delete_stream(&mut self, id: &StreamId, expected_config: Revision) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let revision: i64 = tx
+            .query_row(
+                "SELECT config_revision FROM streams WHERE id=?1 AND deleted=0",
+                [id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        if revision != expected_config.get() {
+            return Err(Error::RevisionMismatch);
+        }
+        let next = expected_config.next()?;
+        tx.execute(
+            "UPDATE streams SET deleted=1,config_revision=?2 WHERE id=?1",
+            params![id.as_str(), next.get()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Bounded internal summary page, ordered by segment start (inclusive).
+    pub fn segments(
+        &mut self,
+        id: &StreamId,
+        from: Position,
+        limit: usize,
+    ) -> Result<Vec<Segment>> {
+        if !(1..=1000).contains(&limit) {
+            return Err(Error::Invalid("segment page limit"));
+        }
+        let tx = self.connection.transaction()?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM streams WHERE id=?1 AND deleted=0)",
+            [id.as_str()],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Err(Error::NotFound);
+        }
+        let mut statement = tx.prepare("SELECT start,end,record_count,payload_bytes,min_accepted_at_ms,max_accepted_at_ms,sealed
+            FROM segments WHERE stream_id=?1 AND start>=?2 ORDER BY start LIMIT ?3")?;
+        let mut rows = statement.query(params![id.as_str(), from.get(), limit as i64])?;
+        let mut segments = Vec::new();
+        while let Some(row) = rows.next()? {
+            segments.push(Segment {
+                start: Position::new(row.get(0)?)?,
+                end: Position::new(row.get(1)?)?,
+                record_count: row.get(2)?,
+                payload_bytes: row.get(3)?,
+                min_accepted_at_ms: row.get(4)?,
+                max_accepted_at_ms: row.get(5)?,
+                sealed: row.get(6)?,
+            });
+        }
+        Ok(segments)
     }
 
     pub fn append(
@@ -132,16 +327,51 @@ impl Store {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let tail: i64 = tx
-            .query_row("SELECT tail FROM streams WHERE id=?1", [id.as_str()], |r| {
-                r.get(0)
-            })
+        let (tail, encoded): (i64, String) = tx
+            .query_row(
+                "SELECT tail,config FROM streams WHERE id=?1 AND deleted=0",
+                [id.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .optional()?
             .ok_or(Error::NotFound)?;
+        let config: StreamConfig =
+            serde_json::from_str(&encoded).map_err(|_| Error::DatabaseFormat)?;
+        if config.retention == Retention::None {
+            return Err(Error::StreamMode);
+        }
+        if payload.len() > config.max_record_bytes {
+            return Err(Error::TooLarge);
+        }
         let position = Position::new(tail)?;
         let next = position.next()?;
-        tx.execute("INSERT INTO records(stream_id,position,payload,content_type,accepted_at_ms) VALUES (?1,?2,?3,?4,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![id.as_str(), position.get(), payload, content_type])?;
+        let accepted_at_ms: i64 = tx.query_row(
+            "SELECT CAST(unixepoch('subsec')*1000 AS INTEGER)",
+            [],
+            |r| r.get(0),
+        )?;
+        tx.execute("INSERT INTO records(stream_id,position,payload,content_type,accepted_at_ms) VALUES (?1,?2,?3,?4,?5)",
+            params![id.as_str(), position.get(), payload, content_type, accepted_at_ms])?;
+        let updated = tx.execute(
+            "UPDATE segments SET end=?2,record_count=record_count+1,payload_bytes=payload_bytes+?3,
+             min_accepted_at_ms=min(min_accepted_at_ms,?4),max_accepted_at_ms=max(max_accepted_at_ms,?4),
+             sealed=(record_count+1>=?5 OR payload_bytes+?3>=?6)
+             WHERE stream_id=?1 AND sealed=0 AND end=?7",
+            params![id.as_str(), next.get(), payload.len() as i64, accepted_at_ms,
+                SEGMENT_TARGET_RECORDS, SEGMENT_TARGET_BYTES, position.get()],
+        )?;
+        if updated == 0 {
+            tx.execute(
+                "INSERT INTO segments VALUES (?1,?2,?3,1,?4,?5,?5,0)",
+                params![
+                    id.as_str(),
+                    position.get(),
+                    next.get(),
+                    payload.len() as i64,
+                    accepted_at_ms
+                ],
+            )?;
+        }
         tx.execute(
             "UPDATE streams SET tail=?2 WHERE id=?1",
             params![id.as_str(), next.get()],
@@ -162,14 +392,19 @@ impl Store {
             return Err(Error::Invalid("read budget"));
         }
         let tx = self.connection.transaction()?;
-        let (head, tail): (i64, i64) = tx
+        let (head, tail, encoded): (i64, i64, String) = tx
             .query_row(
-                "SELECT head,tail FROM streams WHERE id=?1",
+                "SELECT head,tail,config FROM streams WHERE id=?1 AND deleted=0",
                 [id.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?
             .ok_or(Error::NotFound)?;
+        let config: StreamConfig =
+            serde_json::from_str(&encoded).map_err(|_| Error::DatabaseFormat)?;
+        if config.retention == Retention::None {
+            return Err(Error::StreamMode);
+        }
         let (head, tail) = (Position::new(head)?, Position::new(tail)?);
         if from < head {
             return Err(Error::HistoryLost);
