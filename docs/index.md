@@ -1,33 +1,32 @@
-# Patchwork system design
+# Patchwork design
 
-Revision 2026-09-25. Patchwork is a single-node backend for scripts and applications, built from immutable objects, revisioned references and ordered streams. Shared authorization, processing, retention and execution services make those primitives safe to compose.
+Revision 2026-09-29. Patchwork is a single-node backend for scripts and web apps: durable and ephemeral streams, keyed state, Automerge documents and content storage behind one identity and sharing layer. The design is driven by named use cases, not by a fixed set of primitives.
 
-This is the implementation plan, not a claim that the service is complete. [Implementation status](implementation-status.md) records what actually runs; [development](development.md) contains commands. Schemas and signatures are logical contracts until frozen by their format/API gates. **Every conformance case in this wiki is specified, not executed, unless implementation status records it as run**; individual documents do not repeat this.
+This is the plan, not a claim that the service is complete. [Implementation status](implementation-status.md) records what runs; [development](development.md) has commands. Every acceptance criterion in the [roadmap](roadmap.md) is unmet until status records executed evidence.
 
-## Reading order and document ownership
+## Reading order
 
-1. [Scope](scope.md) and [system overview](unified-design.md): product boundaries, primitives and composition rules.
-2. [Architecture](architecture.md): stream semantics, command path and invariants.
-3. [Protocol](protocol.md): HTTP conventions and operation inventory.
-4. [Storage](storage.md): transactions, object graph, recovery and collection; [client-produced snapshots](external-snapshots.md) defines external production and encrypted-state trust.
-5. [Authorization](authorization.md): identity, delegation, trusted facts and revocation.
-6. [Processing](processing.md) and [Functions](functions-design.md): built-ins and scoped sandbox execution.
-7. [Applications](reference-apps.md): hosting, sessions and end-to-end usage contracts; [later integrations](later-integrations.md) holds frozen and deferred integration contracts (redirect bindings, cr-sqlite).
-8. [Acceptance plan](conformance.md), [object cases](object-conformance.md) and [function cases](function-conformance.md): required evidence.
-9. [Decisions and gates](decisions.md), [implementation workflow](implementation-guide.md) and [roadmap](roadmap.md): stable requirements, unresolved choices, release stages and verifiable tasks.
+1. [Use cases](use-cases.md): the projects and scripts the design serves.
+2. [Design](design.md): resource kinds, the shared control plane and per-kind designs.
+3. [Decisions and gates](decisions.md): requirements, defaults and the evidence needed before enabling a capability.
+4. [Roadmap](roadmap.md): milestones, tasks and acceptance.
 
-Each subject has one owning specification; other documents link to it rather than define a competing contract. Correct inconsistencies in documents and affected tests before implementation. There is no separate combined design copy.
+Specifications of built behavior:
 
-The [storage contract](storage.md) includes a cross-component data-lifetime table and the SQLite row/segment/trim cost model. Logical segments are internal planning summaries, not object chunks or public stream boundaries; physical layout alternatives remain measurement-driven.
+- [Architecture](architecture.md): stream semantics, the append path and invariants.
+- [Protocol](protocol.md): HTTP conventions and the operation inventory.
+- [Authorization](authorization.md): identity, delegation, URL-transport credentials and revocation.
+- [Storage](storage.md): SQLite rules, retention, backup.
+- [Processing](processing.md): pipeline, stream KV and webhook ingress.
+- [Dependencies](dependency-decisions.md).
+
+Each subject has one owning document; others link to it. Correct inconsistencies in documents and affected tests before implementation. The earlier primitive-first design (objects, references, snapshots, recovery requirements, Functions, hosted apps, P2P and media) was removed in this revision and is in git history.
 
 ## Status vocabulary
 
-- **Requirement:** stable product or safety property, listed as C01–C19 and I01–I12.
-- **Default:** selected implementation policy that may change with documented rationale and matching tests.
-- **Gate:** evidence needed before choosing a format/library or enabling a capability.
-- **Frozen:** specified for a later stage; do not extend until the objects-and-recovery release ships.
-- **Deferred:** outside the planned releases; no placeholder success responses.
+- **Requirement:** a stable product or safety property (C-series in [decisions](decisions.md)).
+- **Default:** a selected policy that may change with rationale and matching tests.
+- **Gate:** evidence needed before choosing a library or enabling a capability.
+- **Deferred or later:** not planned for the current milestone; no placeholder responses.
 
-Unresolved gates are explicit implementation work, not alternative architectures silently available to production. Runtime availability and verification results belong in implementation status.
-
-Deployment, data deletion, and schema migration require their own reviewed implementation and verification. This design does not authorize them. Wiki maintenance follows [Vulcan agent guidance](AGENTS.md); its generated skills are under `.agents/skills/`, with [summarize-note](AI/Prompts/summarize-note.md) and [daily-review](AI/Prompts/daily-review.md) prompt examples.
+Deployment, data deletion and schema migration need their own reviewed step. Wiki maintenance follows [Vulcan agent guidance](AGENTS.md); generated skills are under `.agents/skills/`, with [summarize-note](AI/Prompts/summarize-note.md) and [daily-review](AI/Prompts/daily-review.md) prompt examples.

@@ -10,11 +10,11 @@ The initial dev-only Biscuit spike is retained. Biscuit 6.0.0 now also verifies 
 
 ## Unavailable behavior and decisions
 
-Objects/references, snapshots/GC, KV, webhooks, UI, backup/restore, Apps, Functions, P2P/media and CRDT integration remain unavailable. Public deployment and release certification remain open. The server binds loopback and supports a TLS frontend; the CLI verifies HTTPS using platform trust. The default server remains health-only. Readiness means startup completed, not continuous storage health.
+URL-transport credentials, long-poll delivery, keyspaces, Automerge documents, the database kind, the blob store and any UI remain unavailable; see [design](design.md) and [roadmap](roadmap.md). Snapshots, recovery requirements, hosted apps, Functions, P2P/media and object references were removed from the design. Public deployment and release certification remain open. The server binds loopback and supports a TLS frontend; the CLI verifies HTTPS using platform trust. The default server remains health-only. Readiness means startup completed, not continuous storage health.
 
 Implementation choices: one repository-root Rust package; exact toolchain/lockfile; explicit data directory and `patchwork-v1.sqlite3` with application ID `0x50574348` and schema version 1; foreign/future DB refusal; canonical UUID-based IDs; decimal-string positions/revisions/byte bounds; RFC3339 wire timestamps; 1 MiB records and bounded replay. HTTP uses canonical `/v1` data routes, with earlier root aliases preserved. CLI covers SSH login, credential inspection/list/mint/revoke/offline attenuation, principal/policy/creation-rule administration, local recovery, stream lifecycle/config/metadata/listing, retained/live append, replay, follow/live/watch. [Dependency decisions](dependency-decisions.md) records the original API/license findings.
 
-The design uses three data primitives (objects, references, streams), one authoritative SQLite transaction domain, one object graph and one job/lease lifecycle. Directory/app/snapshot formats compose these. Hierarchical named references are SQLite-indexed typed-root pointers with CAS and root retention, not a second mutable KV engine. Multi-key app changes use map batch + ref CAS; commands append at most one record. Server and external recovery requirements share trim safety and per-requirement lag budgets. Server authorization is a typed allow-only grant model; Biscuit carries identity and attenuation only. GC and backup are designed to run online. Work is staged: streams, then objects and recovery, then structured objects; later integrations are frozen. The operational UI and hosted apps use one browser session implementation with separate origin, audience and grant ceilings; a fresh SSH handoff is required for operational mint provenance. Exact format, runtime and integration choices remain gates, not implemented features.
+The design is now organized by resource kind (stream, keyspace, document, database, blob store) over one SQLite transaction domain and a thin shared control plane; see [design](design.md). Only streams, credentials, stream KV, hooks and backup are implemented.
 
 ## Historical bootstrap verification — 2026-09-23
 
@@ -68,10 +68,20 @@ Verification for this core increment passed: full all-target test suite (**44 te
 
 The final release-profile verifier sample is stored at repository-root `benchmarks/auth-2026-09-26.jsonl`: Linux x86_64, Intel Core i7-8650U @ 1.90 GHz, Rust 1.98.1, 100 requests per matrix cell, on a shared development host with concurrent build activity. Accepted cases (1/8 blocks, 10/100 extra facts with checks) measured p50 0.501–2.503 ms, p95 3.061–4.605 ms and p99 4.382–9.504 ms. Process cumulative peak RSS reached about 4.4 MB; this is not isolated per-request allocation. All 32-block cases and all 1,000-extra-fact cases were rejected (authority/ambient facts also count). These short, contended samples establish bounded behavior and provide a reproduction baseline, not sustained HTTP capacity or a latency SLO. A check of the initial benchmark exposed the initial-fact limit gap; both initial and derived limits now fail closed and have a regression test.
 
+## Stage-1 services — 2026-09-26
+
+Three commits after the core milestone add the remaining stage-1 services. Each is a runnable subset; the matching baseline tasks in the [roadmap](roadmap.md) stay **partial** until gate evidence is recorded.
+
+- **Transactional KV** (`32daf9d`): per-stream KV attachments installed through `/streams/{id}/attachments`, with `/streams/{id}/kv/{aid}/items[/{key}]` GET/PUT/DELETE, conditional writes and durable retries. Materialization commits in the append transaction (D08).
+- **Signed webhook ingress** (`288f4bc`): hook administration at `/hooks` and `/hooks/{id}`, with GitHub-style HMAC verification, scoped append authority and durable delivery receipts. CLI hook commands were added.
+- **Online backup and restore** (`77590f0`): `patchwork backup` produces a standalone consistent database copy plus a checksummed `patchwork/db-backup/v1` manifest via SQLite's online backup API. `patchwork restore` verifies the manifest, instance identity and origin before restoring into a fresh directory. Block closure joins in stage 2.
+
+The full suite now has **58 passing tests** (`cargo test --locked --offline --all-targets`), including new `kv`, `kv_api`, `hooks` and `backup` targets and extended real-process fixtures. Known gaps: `openapi.json` does not yet describe the KV, attachment or hook routes; KV snapshots and provider-contract (G-PROVIDER) evidence remain pending; backup has no fault-injection or large-data evidence.
+
 ## Documentation verification
 
 Run `vulcan --vault docs --output json doctor --fail-on-issues` from the repository root. It passed with zero unresolved/ambiguous links, broken embeds, parse/type issues, stale or missing index rows, and orphan notes/assets. Vulcan doctor does not validate roadmap task-ID uniqueness or dependency cycles; those remain review obligations until an equivalent wiki collection check exists. `git diff --check` checks tracked-file whitespace. None of these checks proves architectural correctness or runtime conformance.
 
 ## Next work and safety
 
-Next work: stage-1 KV, signed webhook ingress, DB backup/restore, operational metrics and broader release-gate evidence. The core stream system is runnable; the full stage-1 release also requires these services. Object work starts in stage 2. G-AUTH/G-SSH still need a longer fuzz campaign and deployment/load review; durability/capacity gates need the remaining fault and pressure matrix. Format/graph and sandbox gates apply to later stages.
+Next work follows the [roadmap](roadmap.md): first the Vulcan wake-up path (URL-transport credentials, long-poll streams, deployment), then the OpenAPI description of KV, attachment and hook routes and an append/trim benchmark. Object work starts in stage 2. G-AUTH/G-SSH still need a longer fuzz campaign and deployment/load review; durability/capacity gates need the remaining fault and pressure matrix. Format/graph and sandbox gates apply to later stages.

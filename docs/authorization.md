@@ -1,6 +1,6 @@
 # Authorization, authentication, and delegation
 
-The same policy model governs streams, objects, references, snapshots, app bindings and function invocations. Root/hash knowledge, GC pins and pagination cursors grant no authority. [Object access](unified-design.md) and [Functions](functions-design.md) define scoped host operations; they are not independent token systems.
+The same policy model governs every resource kind (streams, keyspaces, documents, databases, blobs) and URL-transport credentials. Knowing a name, hash or cursor grants no authority. See [design](design.md#shared-control-plane).
 
 ## Status
 
@@ -57,21 +57,21 @@ Default deny. Budget limits (token bytes, blocks, facts, iterations, time) fail 
 
 ## Permission boundaries
 
-Distinct actions include `stream.create/list/inspect/delete/watch`, `stream.config.read/write`, `metadata.read/write`, `record.append/read/subscribe`, `snapshot.list/read/create/publish/accept/delete`, `object.create/read/link/pin`, `ref.create/list/read/publish/delete`, `lease.create/renew/release`, `job.read/cancel`, `function.invoke`, `attachment.read/write`, `consumer.rebuild/skip`, `kv.read/write`, `hook.manage`, `credential.mint/revoke`, and administrative policy/principal operations. `snapshot.accept` is scoped to a recovery requirement and distinct from publication; configuring trusted producers requires config-write authority. Redirect route administration is a separate platform grant ([later integrations](later-integrations.md#redirect-serving-bindings-g-redirect-r-09)). See [client-produced snapshots](external-snapshots.md); these actions are not implemented APIs.
+Distinct actions include `stream.create/list/inspect/delete/watch`, `stream.config.read/write`, `metadata.read/write`, `record.append/read/subscribe`, `attachment.read/write`, `kv.read/write`, `hook.manage`, `credential.mint/revoke`, and administrative policy and principal operations. Planned kinds add `keyspace.*`, `doc.read/write`, `db.read/write`, `blob.*` and `link.create/revoke` in the same style, with publish, subscribe, read and write kept as separate actions.
 
-Snapshot `read` grants payload/dependency access through that authorized snapshot context; `list` grants descriptor access only. Reading a descriptor does not authorize a bare object lookup. Verify every permitted reference path and current resource policy; global existence never grants access. An owner-scoped upload lease permits access only under its current authenticated owner policy. Root-scoped grants cover required content descendants, not optional history or unrelated roots. Client-provided root context is verified, not trusted.
 
-Derived-view read never implies raw-history read. Watch access never implies metadata, raw record, or object access. Content-addressed deduplication is not an access-control boundary. Control-plane operations cannot be hidden inside ordinary application metadata.
+Derived-view read never implies raw-history read. Watch access never implies metadata or raw record access. Control-plane operations cannot be hidden inside ordinary application metadata.
 
 Exact ID scopes survive neither deletion/recreation nor reassignment. Prefix scopes intentionally apply to future resources matching the authorized canonical prefix; make that distinction visible in token creation UI. Prefix creation defaults do not grant prefix authority.
 
-Reference namespace checks use the canonical name with component-boundary prefixes and the stable ID/current policy at admission and CAS commit. Prefix listing filters each item and reauthorizes each page; a cursor or guessed name grants neither descriptor visibility nor target bytes.
 
-## App, share and service admission
+## Apps, links and delegation
 
-App bindings and shares are managed grants using the same current-policy/issuance-ceiling model. They do not mint ambient owner credentials. One browser session service issues host-only Secure HttpOnly cookies for the trusted operational origin and for app origins; each session binds principal or guest grant, origin/audience, approved operations, expiry, revocation lineage and issuance provenance. App sessions additionally bind approved app resources. Admission can only narrow an existing authenticated session or redeem an explicitly administered share grant. An attenuated caller cannot discard restrictions by exchanging for a cookie. Guest authority comes from the share grant, never an inferred account identity.
+Apps keep their own identity (D32). An app backend receives a credential for its own name prefix and narrows it offline per user, document or session, then hands the result to a browser. Patchwork checks it like any credential; per-user revocation is the app's job, so browser credentials use short expiries. A WebSocket cannot send headers, so its credential is a URL-transport credential in `?token=`.
 
-The operational UI obtains its session through a one-use handoff from a fresh SSH-authenticated CLI session. This preserves the original session kind, issuance ceiling and unattenuated provenance for the trusted origin; minting still requires current `credential.mint` and a fresh session. An API-token, app-session or guest exchange cannot acquire that provenance or mint general credentials. Background jobs/consumers receive explicit service grants bounded to fixed resources and operations. Deleting or disabling a binding/grant fences active work. App deployment permission allows code to use already approved capabilities; capability expansion needs separate administration. Secret URL redemption proves only possession of that grant and uses a dedicated leak-resistant exchange, never a global hash-based capability.
+URL-transport credentials (planned, G-URLCRED) serve clients that cannot send headers. Any credential minted with `url_transport` may be presented as `?token=…`; minting refuses that flag for session tokens and for any credential with administrative, mint or principal-wide authority, so only narrow, explicit-resource, non-administrative credentials can ride in a URL. Each is minted for one purpose, is revocable and expires like any credential, and is rechecked against current policy on use. The server logs only a fingerprint for requests that carry one, sets `Referrer-Policy: no-referrer` and `Cache-Control: no-store`, and rejects a token given both in the header and the query. See [design](design.md#shared-control-plane).
+
+The operational session handoff and minting rules in [architecture](architecture.md#operations) still apply: an API token, app credential or link cannot acquire minting provenance.
 
 ## SSH login
 

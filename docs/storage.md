@@ -1,141 +1,59 @@
-# Storage, snapshots, and garbage collection
+# Storage, retention and backup
 
-## Chosen starting point
+One SQLite database owns all mutable authoritative state: the control plane, stream records, keyspaces, document chunks and change sets. Large immutable content (later, the blob store) lives in local block files that SQLite catalogs. There is no second authoritative database. [Design](design.md) defines the kinds; this page defines how they persist.
 
-One SQLite database owns mutable authoritative state. Local content-addressed files hold shared chunks and typed nodes; [object formats](unified-design.md) define their identities and edges. Logical segments group SQLite records, not physical log files. Do not add a second authoritative database or independent tree-library collector. A later CRDT integration may use a separate, disposable derived SQLite sidecar only if its state and applied position commit together there and can be reconstructed from an accepted snapshot plus protected retained suffix; cross-file WAL commits are not a correctness boundary. See [processing](processing.md).
+## SQLite configuration
 
-Use WAL, `synchronous=FULL`, foreign keys on every connection, bounded busy handling/write admission and short transactions. SQLite has a single WAL writer; long readers can delay checkpoints. The deployment needs a supported local filesystem and tested synchronization behavior. [SQLite WAL](https://www.sqlite.org/wal.html), [synchronous setting](https://www.sqlite.org/pragma.html#pragma_synchronous).
+WAL, `synchronous=FULL`, foreign keys on every connection, bounded busy handling, bounded write admission and short transactions. SQLite has one WAL writer; long readers can delay checkpoints, so finish database reads before any network send, subscription wait or long computation. The deployment needs a supported local filesystem. [SQLite WAL](https://www.sqlite.org/wal.html), [synchronous](https://www.sqlite.org/pragma.html#pragma_synchronous).
 
-An acknowledgement means the configured durable commit completed, not merely that bytes reached a process buffer. Graceful reopen, hard-kill recovery and hardware power loss require distinct evidence.
+An acknowledgement means the configured durable commit completed. Graceful reopen, hard-kill recovery and hardware power loss are distinct claims and need distinct evidence.
 
-## Logical storage responsibilities
+Positions and revisions are non-negative signed 64-bit integers with checked increments. The tail may reach `i64::MAX`; the last appendable position is `i64::MAX - 1`. Records are never ordered by wall-clock time.
 
-These are schema responsibilities, not ready migrations. Use checked IDs/counters, foreign keys and explicit lifecycle constraints.
+## Responsibilities
 
-| State | Identity and contents |
+| State | Contents |
 | --- | --- |
-| Streams/records/segments | Stable stream ID; live name; config/metadata revisions; head/tail; immutable positioned bytes; logical byte/time summaries |
-| Blocks/objects/edges | Block hash and lifecycle; typed descriptor/root/profile; validated direct required edges and optional history links |
-| References | Stable ID; unique indexed canonical hierarchical name; fixed target-kind constraint; current object root; monotonic revision and lifecycle |
-| Roots/leases | Owning resource and object root; or bounded owner-scoped object/source-range protection with expiry/generation |
-| Snapshots | Immutable stream/type/boundary/object root; producer/format/config provenance and declared opaque dependencies |
-| Recovery requirements/acceptances | Stream-scoped format/config; producer/trust policy revision; selected accepted anchors and approving identity |
-| Attachments/checkpoints | Stream-scoped implementation/config; materialized state; next input position; worker generation |
-| KV/index state | Scoped keys/values and mutation/tombstone revisions; namespace revision for coarse predicate tracking |
-| Receipts | Stable resource/principal (or delegated grant)/operation/key; canonical input digest; pinned execution identity; saved result and expiry |
-| Jobs | Kind; owner/capability scope; pinned inputs/config; state, retries, generation, progress/output roots and safe error |
-| Principals/credentials/grants | Current and issued rights, ownership, expiry, revocation and revisions |
-| Platform config | Creation rules, hooks, app bindings/domains, approved function installations and secret references |
-| Usage ledger | Scoped reservations/charges for storage, invocation and served bytes; durable settlement identity |
-
-Use the same root/lease machinery for uploads, readers, snapshots, app assets, transfers and jobs. Source-range protection additionally blocks logical trim. A lease protects lifetime, not authority. Keep typed purpose-specific constraints; shared machinery does not imply arbitrary public access to internal tables.
-
-Reference names live in the authoritative SQLite catalog, with a uniqueness constraint and an index supporting exact lookup and bounded prefix scans. Do not make an immutable prolly map another mutable reference authority. A reference CAS changes its current root, revision, root ownership and optional publication record in one transaction; deleting it releases only that owner's root. Namespace quotas and listing cost need G-LIMITS evidence. Redirect descriptors and their route bindings are specified in [later integrations](later-integrations.md#redirect-serving-bindings-g-redirect-r-09).
-
-Persist positions/revisions as nonnegative signed 64-bit integers with checked increments. Tail may reach `i64::MAX`; the last appendable position is `i64::MAX - 1`. Never order records by wall-clock time.
+| Streams and records | Stable ID; live name; config and metadata revisions; head and tail; immutable positioned bytes; logical byte and time summaries |
+| Keyspaces (planned) | Key, value, content type, revision, expiry, last access; per-namespace byte and entry counters |
+| Documents (planned) | Per-document incremental change chunks, compacted base, heads, size counters |
+| Change sets (planned) | Per-database site ID, version and encoded changes, if the cr-sqlite spike succeeds |
+| Blocks and objects (later) | Block hash, size and lifecycle; raw-digest index; roots and references |
+| Principals, credentials, grants, links | Rights, ownership, expiry, revocation, hashed link secrets, revisions |
+| Receipts | Resource, principal or grant, operation, key, canonical input digest, saved result, expiry |
+| Hooks and platform config | Creation rules, hook definitions, provider verifiers |
+| Usage counters | Per-tenant storage, request and connection charges |
 
 ## Command transaction
 
-Authenticate and perform bounded preflight/pipeline evaluation outside a write transaction. In the short commit transaction recheck lifecycle, complete read dependencies, config/policy revisions, quotas, required object durability/link rights and receipt uniqueness. A retained append inserts at tail, establishes roots, advances tail/segment summaries and saves the receipt atomically. Notify only after commit.
+Authenticate and run bounded preflight and pipeline work outside a write transaction. In the short commit transaction, recheck lifecycle, revisions, quotas and receipt uniqueness. A retained append inserts at the tail, advances the tail and segment summary, and saves the receipt atomically. Notify only after commit. One command appends zero or one record to one stream.
 
-One command appends zero or one record to one stream. The supported coupled command publishes one reference and one truthful record atomically. Built-in KV additionally validates conditions and updates state/checkpoint in that same transaction. Private consumer state and checkpoint updates in the main database use the same coordinator; they are not arbitrary user-table writes. An optional derived sidecar commits its own state/checkpoint locally and recovers by idempotent replay, not by a cross-file WAL transaction. [Functions](functions-design.md) uses these commands, not another transaction engine.
+A matching authorized receipt bypasses re-execution, not current authentication. Concurrent matching requests serialize on receipt identity. Receipts do not pin records.
 
-A matching authorized receipt bypasses reexecution, not current authentication. Concurrent matching requests serialize on receipt identity. A lost response may mean a committed operation; retry resolves that only within the advertised receipt window. Receipts do not pin original records.
+## Stream layout and retention
 
-## Logical segmentation and retention planning
+The baseline is one immutable SQLite row per record, keyed by `(stream_id, position)` in a `WITHOUT ROWID` table. Ordered reads are key-range scans and new positions land near the end of the stream's range. This is not an append-only file, and interleaved streams, page splits, overflow pages, the single writer and commit synchronization all affect cost. Large data should be an explicit linked object, not an implicit promotion of a record. [File format](https://www.sqlite.org/fileformat.html), [`WITHOUT ROWID`](https://www.sqlite.org/withoutrowid.html).
 
-Initial segment target: 8 MiB payload or 10,000 records. Seal/split at a required cutoff. Every segment is a contiguous interval `[start,end)`. Age uses server acceptance timestamps; an age-eligible prefix contains only expired records. Clock rollback cannot cause an unexpired earlier record to be skipped. Byte retention chooses the shortest old prefix meeting the logical retained-byte target. Summaries accelerate planning; they do not authorize trimming extra records merely to match a segment.
+Logical segments are internal summaries (target 8 MiB payload or 10,000 records), not packed rows or public replay boundaries. They speed retention planning. A segment can be skipped for age retention only when all its records are eligible, even with clock rollback.
 
-Retention limits are targets subject to source leases and recovery safety, not a bound on total physical storage. Snapshot/ref/pin/dependency bytes are separately accounted. A stalled requirement may exceed the target. Under disk pressure reject writes visibly before discarding promised state.
+Retention is `infinite`, `bounded` (age, bytes or both) or `none`. Age uses server acceptance timestamps and an age-eligible prefix contains only expired records. Byte retention removes the shortest old prefix that meets the target. Retention limits are targets for logical bytes, not a bound on physical disk. Trim removes rows in bounded steps and never renumbers. Freed pages return to SQLite's freelist and the file does not shrink; no `auto_vacuum` or `VACUUM` policy is selected. Under disk pressure, reject writes visibly instead of discarding data.
 
-### SQLite layout and physical costs
+Mode `none` has no durable position; it exposes a process epoch and increasing sequence for gap detection only.
 
-The baseline is one immutable SQLite row per retained record, keyed by `(stream_id, position)` in a `WITHOUT ROWID` B-tree; the current migration permits up to 1 MiB of inline payload. Ordered reads are key-range scans and a new position lands near the end of its stream's range. This is not an append-only file or a constant-time guarantee: interleaved streams, page splits, large-value overflow pages, the single WAL writer and commit synchronization affect cost. The row, tail, record roots, receipt and segment summary must commit together. Large application data should use an explicit linked object, not an implicit promotion of record bytes. [SQLite file format](https://www.sqlite.org/fileformat.html), [`WITHOUT ROWID`](https://www.sqlite.org/withoutrowid.html), [WAL](https://www.sqlite.org/wal.html).
+Planned additions: keyed compaction (keep the newest record per key) and absence detection, defined in [design](design.md#stream).
 
-Logical segments are **internal summaries**, not packed rows, physical log files or public replay boundaries. They can accelerate cutoff planning and counts; they do not make deletion of many individual rows one physical operation. A segment can be skipped for age retention only when all its records are eligible, even with clock rollback/out-of-order acceptance timestamps. The 8 MiB/10,000-record target and summary schema are defaults to validate, not throughput claims.
+### Measurements owed
 
-Prefix trim removes rows and their object-root associations in a bounded atomic cutoff step. Freed SQLite pages are normally reused via its freelist, while the database file need not shrink; partially occupied B-tree pages may remain. No `auto_vacuum` or `VACUUM` policy is selected. Long read transactions can prevent WAL checkpoints from completing: finish database reads before network sends, object streaming, guest execution and subscription waits. Observe database page/freelist counts, WAL size/checkpoint progress, block files, temporary work and free disk separately. Logical retained-byte limits do not cap physical disk usage. [SQLite auto-vacuum/freelist](https://www.sqlite.org/pragma.html#pragma_auto_vacuum), [WAL checkpointing](https://www.sqlite.org/wal.html).
+Before choosing another layout, record p95/p99 append latency, trim duration, WAL growth, checkpoint delay, page reuse and reopen correctness under interleaved streams, small and maximum records, prefix trims and active readers. `examples/` should hold the benchmark harness. No throughput figure is a product promise.
 
-A single growing SQLite BLOB per segment is not an assumed optimization: incremental BLOB I/O cannot resize it, so appending requires a different update/active-tail scheme. Immutable packed segments, rowid plus index, or physical logs require measured benefit and a new recovery/transaction design. Benchmark the baseline under interleaved streams, small/maximum records, prefix trims and active readers; record p95/p99 append latency, trim duration, WAL growth, checkpoint delay, page reuse and reopen correctness before choosing a different layout. [SQLite incremental BLOB I/O](https://www.sqlite.org/c3ref/blob_open.html).
+## Keyspaces and documents (planned)
 
-### Data lifetime across components
-
-| Data | Authority/lifetime | Consequence |
-| --- | --- | --- |
-| Retained record bytes | SQLite row until head trim; positions never renumber/reuse. | Short, bounded replay reads; delete rows and their object links atomically. Receipts may outlive rows. |
-| Record/metadata links | SQLite roots while owner exists. | Payload bytes do not imply links; removing one root does not remove shared blocks. Acquire reader protection before releasing the database view. |
-| Bytes, maps, directories, app assets | Immutable blocks reached via typed edges from roots or live leases. | Finalize before publication. A range read/asset response protects blocks through delivery without holding a long SQLite read transaction. |
-| Snapshots and recovery anchors | SQLite descriptors, acceptances and roots. | Trim cannot discard required recovery coverage; accepted roots/dependencies survive record deletion. Encrypted dependencies remain declared. |
-| KV/indexes and consumer state | SQLite materialization fenced by stream position. | Synchronous state commits with append; asynchronous lag is explicit and missing history is never empty state. |
-| Receipts, jobs and usage ledgers | Separate bounded SQLite operational state. | Stream trim does not erase retry or charge identities; external effects and physical cleanup are separate. |
-| Live/media traffic | No retained row or permanent root from publication alone. | Queue/transport limits differ from retention; recording/sharing persists via explicit roots. |
-
-Logical ownership quotas and physically allocated SQLite/WAL/block/temp bytes are distinct. Deduplication or successful logical trim does not promise immediate free disk space. See [objects](unified-design.md), [protocol](protocol.md) and [tests](conformance.md).
-
-## Safe snapshot-and-trim algorithm
-
-Let current head be H and proposed cutoff P, with `H <= P <= tail`. A recovery requirement is stream configuration, optionally attached to a server snapshot producer, not a new storage engine. An external producer uses the [client snapshot contract](external-snapshots.md).
-
-1. Serialize trim planning per stream. Capture config/lifecycle/requirement revisions and establish bounded source/output leases. Source leases held by other admitted work constrain the cutoff. Appends beyond P may continue.
-2. For every requirement select an accepted compatible anchor Q with `P <= Q <= tail`, or, for a server-managed producer lacking such an anchor, plan an advance to P. To advance, choose a seed at q <= P with complete protected `[q,P)`; without a seed require genesis history. A seed below head with a gap is unusable. External requirements lacking coverage stall or lower the cutoff; the server cannot compute encrypted state on their behalf.
-3. Run each necessary server producer outside the transaction over exactly `[q,P)`. Inputs are the compatible seed and pinned semantic config, not an unverified live materialization. Bound work and finalize output objects/dependencies under leases.
-4. In one short SQLite transaction recheck head, lifecycle, complete requirement/policy set, acceptance and worker generations, source/output leases and durable root closure. Each requirement must have a usable accepted anchor at or beyond P with contiguous retained suffix to current tail. Insert new snapshots/acceptances/roots, remove record roots and rows `<P`, advance head to P and update summaries atomically. Any failed check leaves the old head intact.
-5. Release job protection. Unreachable blocks become physical-collection candidates; collection is a separate background operation, not required for logical trim success.
-
-Bound each cutoff step so transactions remain short. Existing anchors need not be regenerated just to trim to an earlier position. A consumer restoring an anchor at Q > head starts replay at Q; it must not replay earlier retained records into that state.
-
-With no recovery requirements, ordinary retention can trim under the same lifecycle/revision/source-lease checks. Attaching a requirement after history disappeared requires a compatible accepted seed plus available suffix, or explicit failure. Never treat missing history as empty state.
-
-### Recovery requirement lag budgets
-
-An offline external producer or stalled server producer must not silently turn into instance-wide disk exhaustion. Each recovery requirement on a stream with bounded retention declares a **coverage lag budget**: the maximum records, logical bytes and/or age between its newest accepted anchor and tail. The default budget is twice the stream's retention bounds; numeric defaults are confirmed at G-LIMITS.
-
-- Past half the budget, health and stream status report the lagging requirement and its producer.
-- Past the full budget, the requirement's configured action applies:
-  - `block_writes` (default): the stream rejects new appends with a typed `recovery_coverage_exceeded` problem until coverage catches up. This confines the failure to one stream instead of letting it exhaust shared disk.
-  - `suspend_requirement`: a pre-authorized, explicit loss of the guarantee. The requirement is marked suspended, stops constraining trim, and records the approving config revision; restore through it reports `recovery_guarantee_suspended` until a newly accepted anchor restores coverage and the requirement is re-enabled.
-- Choosing `suspend_requirement` needs the same config-write authority and acknowledgement as removing the requirement. Instance-wide disk pressure still rejects writes regardless of any budget.
-
-Streams with infinite retention never trim, so lag budgets there only drive reporting.
-
-## Snapshot compatibility and lifetime
-
-Snapshots are immutable; multiple types, boundaries and provenances coexist. Format version and semantic-config compatibility are separate from producer implementation version. Type equality alone is insufficient. Descriptors carry client or adapter provenance without pretending a client ran a server adapter.
-
-Publishing a snapshot establishes a root; it does not accept recovery correctness. Acceptance uses a separate authorized policy decision. Server producers can publish/accept under their approved requirement. External opaque state is a trusted assertion, not a server-verified replay proof. Ad-hoc snapshots need not satisfy all requirements but use the same durability and protection rules.
-
-Protect at least one selected usable anchor for every current requirement. Reject deletion of a protected anchor or its dependencies. Default cleanup keeps the latest two managed snapshots per requirement and explicitly retained ad-hoc snapshots; quotas and expiry of nonprotected roots remain explicit. Removing a requirement needs config-write authority and acknowledgement of the lost guarantee. A policy/format change cannot silently invalidate the last anchor after history is gone.
-
-Typed object nodes declare direct required edges once. Snapshot roots traverse that graph; do not flatten and duplicate an entire directory closure per snapshot. Opaque payloads must explicitly declare dependencies hidden in their bytes, including previous incremental objects. The server checks declared closure and rejects malformed typed graphs; it cannot discover undeclared encrypted references. Retaining an old snapshot does not reconstruct an arbitrary later boundary without a contiguous suffix.
-
-## Block finalization and graph collection
-
-1. Stream bounded uploads through the canonical chunker into server-generated temporary paths on the block-store filesystem. Reserve quota; verify cryptographic hashes, sizes and typed structure.
-2. Synchronize each block, install atomically at its internal hash-derived location and synchronize directories as required by the platform.
-3. Register durable blocks/edges and upload/job protection before publishing a descriptor/root. Full required closure must be validated and protected. Interrupted work may leave conservative orphans, never a successful dangling root.
-4. Graph collection is an online, epoch-fenced mark/sweep (D17); writes, publication and ingestion continue:
-   - **Start:** in one short transaction advance the GC epoch to E and capture the root set: every durable root owner and unexpired lease.
-   - **Mark:** traverse validated edges from the captured roots in bounded batches. Edges are immutable, so each batch is a short read. Do not treat “no direct root” as “unreachable”: a child can be required through many shared parents.
-   - **Barrier:** from E onward, every transaction that registers a block/edge, reuses an existing block by deduplication, creates an edge to an existing node, or acquires a root/lease on an existing node stamps that node `touched_epoch = E`. If the node is not already marked in this cycle, the stamp covers its whole closure, or the operation fails with a retryable conflict until the cycle ends.
-   - **Sweep candidates:** blocks that are unmarked after mark completes and have `touched_epoch < E`.
-5. For each candidate, one transaction rechecks that it is still unmarked and untouched and marks it `deleting`. Then unlink and synchronize, then remove catalog entries. Deduplication that finds a `deleting` block writes a fresh copy instead of reusing it. Interrupted deletion is reconciled on restart.
-
-The G-GRAPH proof obligation: every block reachable from any root or lease at any instant of the cycle is marked or stamped before sweep. Establish it with model-based race tests (OBJ-18, B03, B04). Until then, physical collection stays disabled (storage may leak; nothing required is lost). An operator-invoked maintenance-mode collector that pauses graph mutations is an acceptable interim tool, not the default.
-
-Startup reconciles deleting entries, temporary files, conservative orphan grace periods and expired jobs/leases. A block is never removed merely because an in-memory cache is empty. A crash may leak storage until reconciliation; it may not lose an acknowledged root.
-
-Roots include references, retained record/metadata links, snapshots, app/function artifacts retained by active deployments or the bounded superseded-frontend window, checkpoints, pins and admitted work leases. App promotion reserves the previous frontend's protection before channel CAS; expiry removes that logical availability even if physical GC has not yet run. Zero-retention publication creates no permanent root. A consumer merely observing bytes does not retain them automatically. Optional commit history follows explicit history retention, distinct from required content edges.
-
-## Durable work and external effects
-
-Snapshot generation, rebuilds, object composition, derivative processing and function work use one durable job lifecycle: queued/running/retry-wait/succeeded/failed/cancelled, bounded attempts, lease generations, current authority checks and protected inputs/outputs. User-facing domain states such as recording/finalizing are application state, not a second scheduler.
-
-An outbox is the durable job kind for external delivery. Commit its intent with local state/checkpoint; dispatch afterward with stable effect identity. Send-before-ack crashes may duplicate delivery, so downstream idempotency remains necessary. Rebuild cannot enqueue effects. Cancellation fences future publication but cannot recall committed effects. Full sandbox egress details are in [Functions](functions-design.md).
+Keyspace and document storage follow the same transaction rules. Cache-mode keyspaces evict by least-recent access under a per-namespace byte cap, in bounded batches outside the request path. Documents append incremental chunks and compact into a new base in one transaction, never leaving a reader with a partial view. Both count logical bytes per tenant. Details are settled with each kind's design, not here.
 
 ## Deletion, migrations and backup
 
-Deletion tombstones identity, removes the live name, fences workers and closes subscriptions before bounded cleanup. Recreating a name produces a new ID, never inherited grants/cursors/receipts.
+Deletion tombstones identity, removes the live name, fences workers and closes subscriptions before bounded cleanup. Recreating a name produces a new ID, never inherited grants, cursors or receipts.
 
-Migrations run under exclusive startup coordination before readiness. Refuse foreign/newer schemas and silent downgrades. Back up before destructive upgrades; no automatic conversion of another deployment.
+Migrations run under exclusive startup coordination before readiness. Refuse foreign or newer schemas and silent downgrades. Until the first release, schema changes edit migration 0001 in place and development directories are recreated (D29).
 
-Backup is online (D17). It holds the backup lock, which excludes GC sweeps but not writes, and takes a consistent database copy with SQLite's online backup API or `VACUUM INTO`. It then copies the complete block closure of every root and lease recorded in that copy, plus config and necessary key material, into a checksummed manifest. Blocks are immutable and only the sweep deletes them, so the copy stays coherent while writes continue; blocks created after the database copy are simply not included. Before objects exist (streams release), backup is the database copy alone. Restore into a fresh directory; verify closure, positions, revisions, checkpoints and revocations before traffic. Never copy only the main DB file while an active WAL may hold commits. Secret backups require operator-controlled access. Backups complement, not replace, snapshot retention.
+Backup is online: SQLite's backup API produces a consistent standalone database, and a checksummed manifest binds instance identity, origin and counts. Restore goes into a fresh directory and verifies the manifest, identity, positions and revocations before traffic. Never copy only the main file while a WAL may hold commits. When the blob store exists, the manifest also covers the block closure while sweeps are excluded. Backups need operator-controlled storage because they contain credential material.

@@ -1,93 +1,73 @@
-# Requirements, defaults and validation gates
+# Requirements, decisions and gates
 
-## Product requirements
+Rewritten 2026-09-29 from [use cases](use-cases.md). The C-series is a new register. D-series numbers that survive keep their earlier meaning; retired ones are listed at the end.
 
-Stable IDs identify requirements, not their implementation status. See [roadmap](roadmap.md) for evidence and progress.
+## Requirements
 
 | ID | Requirement |
 | --- | --- |
-| C01 | Rust, single-node implementation |
-| C02 | Built-ins establish working behavior; approved user code uses a gated shared execution subsystem |
-| C03 | Filters can transform before append and can drop or reject |
-| C04 | Retained acknowledgement covers processing and commit, not asynchronous consumer completion |
-| C05 | Adapter write endpoints specify their additional consistency guarantees |
-| C06 | Typed snapshots carry exact positions; multiple types and positions coexist |
-| C07 | Snapshots and recovery requirements are per-stream, independent of consumers |
-| C08 | Server snapshot adapters advance compatible seeds over removed history; every configured recovery requirement must be satisfied before trim |
-| C09 | Configuration is server-owned, not Git-owned |
-| C10 | Scoped permissions (actions over exact or prefix resources) and offline attenuation to narrower authority |
-| C11 | Biscuit, as the token format for identity and attenuation, must pass an executable prototype before production adoption |
-| C12 | One authoritative SQLite database per instance and local content-addressed blocks |
-| C13 | The streams release includes built-in KV, hooks and CLI; the objects-and-recovery release adds the operational UI |
-| C14 | Compatibility is optional and cannot constrain the model |
-| C15 | Content-defined chunking supports economical storage of similar byte objects |
-| C16 | Efficient persistent ordered-map operations are public capabilities |
-| C17 | Directory formats and operations compose with the object/stream system |
-| C18 | Shared sandbox execution supports consumers, endpoints, webhooks and application-specific enforcement |
-| C19 | Clients can publish snapshots, including encrypted state; recovery acceptance is distinct from publication |
+| C01 | Rust, single node |
+| C02 | One authoritative SQLite database per instance; block files only for large immutable content |
+| C03 | Scoped permissions over exact or prefix resources, with offline attenuation |
+| C04 | Biscuit is the token format for identity and attenuation only; server policy is typed Rust |
+| C05 | Retained acknowledgement covers pipeline and durable commit |
+| C06 | Filters can transform, drop or reject before append |
+| C07 | Every kind is usable with plain `curl` and no SDK envelope |
+| C08 | A narrow, revocable credential can be carried in the URL for clients that cannot send headers |
+| C09 | Apps keep their own identity; Patchwork verifies scoped credentials |
+| C10 | Automerge documents sync through the Automerge Repo protocol |
+| C11 | Ephemeral streams (retention `none`) support long-poll subscribers at low idle cost |
+| C12 | Caches evict, and never write through a log |
 
-## Selected defaults
-
-These are the current plan. Changes require rationale, affected contract updates and tests, not a parallel hidden production mode.
+## Defaults
 
 | ID | Default | Rationale |
 | --- | --- | --- |
-| D01 | Half-open boundaries; snapshot P covers records `<P` | Replay starts at P |
-| D02 | Every configured recovery requirement blocks trim beyond its accepted coverage | No silent loss when a server adapter fails or external client is offline |
-| D03 | Inline SQLite records with logical segments; large data in a shared chunk/node store | One authoritative transaction domain |
-| D04 | Explicit creation, prefix opt-in create-on-append, no create-on-read | Reads cannot allocate durable resources |
-| D05 | Longest matching prefix selects a complete creation template | No dynamic inherited config |
-| D06 | Stable resource IDs; no stream rename or live/retained mode switch initially | Clear identity and cursor lifecycle |
-| D07 | A command appends zero or one record to one stream | No implicit batch/fanout transaction contract |
-| D08 | Built-in KV materializes inside the append transaction | CAS remains correct with generic append |
-| D09 | Consumers do not implicitly pin history | All-event processing requires infinite retention or explicit bounded source protection |
-| D10 | Immutable issuance ceiling intersected with current server policy | Neither stale grants nor unexpected widening |
-| D11 | Fresh unattenuated SSH session required for general server credential minting | Avoid attenuation laundering |
-| D12 | API tokens cannot mint general credentials; offline narrowing remains available | Scoped browser/share exchanges use explicit non-widening admission, not general minting |
-| D13 | Typed nodes declare direct required edges; opaque payloads declare otherwise hidden dependencies | One graph collector, no per-snapshot flattened typed closure |
-| D14 | Protect selected recovery anchors; retain latest two managed snapshots per requirement and explicitly retained ad-hoc snapshots | Bounded automatic history with explicit lifetime policy |
-| D15 | No generic query-string credentials | Dedicated hook/share redemption is separately controlled |
-| D16 | New authorization changes apply on admission/commit; active delivery refresh at most five seconds | Bounded revocation behavior |
-| D17 | Online backup (consistent DB copy + block closure, sweeps excluded) and online epoch-fenced mark/sweep GC; collection disabled until the barrier is proven | Immutable blocks make both safe without pausing writes; a leak is preferable to a write stall |
-| D18 | SSE JSON/base64 follow; raw GET for exact bytes | Simple inspectable transport |
-| D19 | Retained retry receipts last 24 hours by default; none for live publication | Explicit bounded idempotency |
-| D20 | Default-limit KV PUT values cap at 720 KiB and every canonical event must fit its stream's record limit | Base64/envelope cannot violate the 1 MiB record budget |
-| D21 | Superseded production frontend assets stay available for seven days, quota-charged, then versioned URLs expire | Old tabs get a bounded coherent asset window without indefinite roots |
-| D22 | Optional CRDT sidecars are rebuildable derived state; only the main SQLite database and accepted object roots carry authoritative recovery state | Keeps C12 while permitting pinned engine integrations without cross-file WAL atomicity claims |
-| D23 | Hierarchical named references remain SQLite-indexed mutable pointers to one typed immutable object root; redirect serving is a separate approved binding to a typed descriptor ([later integrations](later-integrations.md)) | Reuses the existing reference/GC/authorization model without a second mutable KV engine or URL-as-graph-edge semantics |
-| D24 | Idempotency receipts are scoped to principal (or delegated grant), not credential lineage | Scripts can re-authenticate and still retry safely; receipts reveal only a position and current authorization is rechecked |
-| D25 | Server authorization is a typed allow-only grant model in Rust; Biscuit carries identity and attenuation checks only | Removes user-authored policy rules and fact-pruning proofs from v1 while keeping offline attenuation |
-| D26 | Each recovery requirement on a bounded stream has a coverage lag budget; default action blocks writes to that stream | An offline producer fails one stream visibly instead of exhausting shared disk |
-| D27 | Asynchronous consumers can be advanced past a poison record only by an audited, position-CAS skip | Never silent, but never a permanent outage |
-| D28 | First byte profile uses fixed-size chunks; CDC and ordered-map profiles are added later | Unblocks durable blobs and KV snapshots without waiting on G-CDC/G-PROLLY |
-| D29 | Until the first release, schema changes edit migration 0001 in place and keep schema version 1; development data directories are disposable and must be recreated after a schema change | No deployments exist; avoids carrying upgrade code for throwaway schemas. Numbered migrations and upgrade paths start with the first release |
+| D01 | Half-open positions; readers resume at a tail | Simple replay |
+| D04 | Explicit creation; opt-in create-on-append by prefix; no create-on-read | Reads cannot allocate |
+| D05 | Longest matching prefix selects a complete creation template | No inherited dynamic config |
+| D07 | A command appends zero or one record to one stream | No implicit fan-out transaction |
+| D08 | Built-in stream KV materializes inside the append transaction (until superseded by D35) | Conditional writes stay correct |
+| D10 | Issuance ceiling intersected with current server policy | Neither stale grants nor surprise widening |
+| D11 | A fresh unattenuated SSH session is required for general credential minting | No attenuation laundering |
+| D12 | API tokens cannot mint general credentials; offline narrowing remains available | Same |
+| D15 | A query-string credential is accepted only if minted with `url_transport`, which requires explicit non-administrative scope; the server never logs such query strings | Plain-GET clients and WebSockets work; a session token in a URL is refused |
+| D16 | Authorization changes apply on admission and commit; active delivery rechecks at most every five seconds | Bounded revocation |
+| D17 | Backup is online: consistent database copy with a checksummed manifest; restore into a fresh directory | No write pause |
+| D18 | SSE with JSON and base64 for follow; raw GET for exact bytes | Inspectable transport |
+| D19 | Retry receipts last 24 hours by default | Explicit bounded idempotency |
+| D20 | Default-limit stream KV values cap at 720 KiB so the canonical event fits the 1 MiB record | Envelope cannot exceed the record budget |
+| D24 | Receipts are scoped to principal or delegated grant, not credential lineage | Scripts can re-authenticate and retry |
+| D25 | Server authorization is a typed allow-only grant model | No user-authored policy language |
+| D29 | Until the first release, schema changes edit migration 0001 and development data is recreated | No deployments to migrate |
+| D30 | Kinds have separate storage and semantics; the control plane is the only shared layer | Use cases need different guarantees |
+| D31 | Encrypted state is a client concern on streams; documents are server-readable | Server-side merge needs plaintext |
+| D32 | App-issued attenuated tokens are the delegation model; per-user revocation belongs to the app | Avoids owning accounts |
+| D33 | Blob storage uses content-defined chunking from its first profile and indexes raw SHA-256 | Git LFS and deduplication requirements |
+| D34 | Idle long-poll timeouts never return 2xx | Vulcan treats every 2xx as a wake-up |
+| D35 | The stream-derived KV is superseded by keyspaces once they exist; it may then be removed under D29 | Avoids two overlapping mutable stores |
+| D36 | An ephemeral channel is a stream with retention `none`, not a separate kind; URL-transport credentials use the ordinary stream routes, with no link table or route prefix | Reuses the stream pipeline, grants and delivery |
 
-## Validation gates
+## Gates
 
-| Gate | Evidence required | Blocks |
+A gate is closed only by executed evidence. Failure blocks its dependent capability, not unrelated work.
+
+| Gate | Evidence | Blocks |
 | --- | --- | --- |
-| G-REPO | Repository, schema and data-format safety | Changes to deployment/data assumptions |
-| G-AUTH | Trusted origins, issuance ceilings, adversarial delegation, budgets and benchmarks | Production policy integration |
-| G-SSH | SSHSIG and ssh-agent Ed25519 interoperability | SSH login |
+| G-AUTH | Adversarial delegation, budgets and benchmarks, fuzz campaign | Production credential policy |
+| G-SSH | SSHSIG and ssh-agent interoperability | SSH login |
 | G-PROVIDER | Official provider contract and original-byte signature fixtures | Provider compatibility claims |
-| G-DURABILITY | Commit/finalization/trim/restart fault injection and target filesystem assumptions | Durable release claims |
-| G-LIMITS | Load, restore, slow-client and admission measurements | Capacity guidance |
-| G-FORMAT / G-CDC / G-PROLLY | Canonical fixtures, bounded chunking, real-library map/sequence tests | Persistent object format adoption |
-| G-GRAPH / G-OBJECT-AUTH | Reachability/lease races, link and root-scoped access tests | Collection and public objects |
-| G-APP / G-SHARE | Browser isolation/deployments, previous-release retention/GC and quota, safe redemption and atomic usage accounting | Hosted apps and sharing |
-| G-REDIRECT | See [later integrations](later-integrations.md) | Public redirect-serving bindings (frozen, later) |
-| G-FUNCTIONS / G-FUNCTION-TX / G-FUNCTION-AUTH / G-FUNCTION-RECOVERY | Isolation, host command contracts, authority and replay/effect tests | Untrusted execution and its profiles |
-| G-RTC / G-MEDIA / G-CRDT | Protocol interoperability, lifecycle/limits and recovery fixtures | P2P, recording and Automerge integrations |
-| G-CRSQL | See [later integrations](later-integrations.md) | cr-sqlite integration (deferred, F-05) |
+| G-DURABILITY | Commit, trim and restart fault injection on the target filesystem | Durable release claims |
+| G-LIMITS | Load, idle-connection, slow-client and restore measurements | Capacity guidance |
+| G-URLCRED | Mint-time scope restriction, query-string redaction, referrer and cache headers, revocation and rotation | URL-transport credentials |
+| G-AUTOMERGE | Interoperability with a pinned Automerge Repo client; size and work bounds | Document sync |
+| G-CRSQL | Extension compatibility, two-peer offline convergence, compaction and crash recovery | Database kind |
+| G-BLOB | Canonical chunking fixtures, durability, LFS client interoperability, GC race tests | Blob store and collection |
 
-Detailed evidence lives in [objects](unified-design.md), [authorization](authorization.md), [Functions](functions-design.md), [apps](reference-apps.md) and their conformance plans. A gate is closed only with executed evidence for its scope; a library feature list is insufficient.
+## Working rules
 
-## Choices reserved for prototypes
+Implement one narrow real behavior with its tests and protocol. No empty traits, speculative crates, fake-success routes or bypass authorizers; unavailable operations stay unavailable. Every alternate route uses the same authorized command path. Inspect a dependency's source, license and executable behavior when adopting it. Update the roadmap and status with exact commands and results. Deployment, data deletion and schema migration need their own reviewed step.
 
-- Freeze the descriptor scheme and fixed-chunk byte profile first (O-02); adopt CDC and ordered-map profiles only after the O-10 spike, with pinned versions and licenses.
-- Select one initial sandbox runtime/ABI and measured OS isolation profile. Do not ship multiple engines merely because multiple candidates were evaluated.
-- Choose TURN integration, media topology/container profiles and Automerge versions from executable interoperability fixtures.
-- Keep third-party Biscuit blocks, independently revocable offline child tokens and multi-service offline verification outside the initial authorization contract.
-- Improve packing, query concurrency and physical log layout only for measured needs.
+## Retired
 
-Failure of a gate blocks its dependent capability, not unrelated implementation. Replacing Biscuit or changing a product requirement requires an explicit decision. No fixed throughput, deduplication ratio or arbitrary power-loss guarantee is assumed.
+The earlier C-series (C06 to C19) and these defaults served designs that were removed: D02, D03, D06, D09, D13, D14, D21, D22, D23, D26, D27, D28. They cover snapshots, recovery requirements, consumer skip, the object graph, hosted apps and CRDT sidecars, and remain in git history.

@@ -3,7 +3,7 @@
   "info": {
     "title": "Patchwork authenticated streams",
     "version": "0.1.0",
-    "description": "Authenticated stream core with SSHSIG login, Biscuit attenuation, revisioned administration, pipelines, durable idempotency, bounded retention and SSE. Data routes require --data-api and local bootstrap. The server binds loopback; HTTPS clients can use a TLS frontend. Objects, snapshots, KV and webhooks are not implemented. Compatibility aliases without /v1 remain available."
+    "description": "Authenticated stream core with SSHSIG login, Biscuit attenuation, revisioned administration, pipelines, durable idempotency, bounded retention and SSE. Data routes require --data-api and local bootstrap. The server binds loopback; HTTPS clients can use a TLS frontend. Objects and snapshots are not implemented. KV, attachment and webhook routes are implemented but not yet described in this contract. Compatibility aliases without /v1 remain available."
   },
   "servers": [
     {
