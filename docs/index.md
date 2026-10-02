@@ -1,5 +1,7 @@
 # Patchwork design
 
+> **Archived 2026-10-02.** Start with the [retrospective](retrospective.md). Everything below describes a direction that was abandoned; [handoff prompts](handoff-prompts.md) hold the follow-up work.
+
 Revision 2026-09-29. Patchwork is a single-node backend for scripts and web apps: durable and ephemeral streams, keyed state, Automerge documents and content storage behind one identity and sharing layer. The design is driven by named use cases, not by a fixed set of primitives.
 
 This is the plan, not a claim that the service is complete. [Implementation status](implementation-status.md) records what runs; [development](development.md) has commands. Every acceptance criterion in the [roadmap](roadmap.md) is unmet until status records executed evidence.

@@ -151,12 +151,99 @@ pub fn router(service: DataService) -> Router {
         .route("/streams/{id}/records", get(read).post(append))
         .route("/streams/{id}/records/{position}", get(raw))
         .layer(DefaultBodyLimit::max(crate::store::MAX_RECORD_BYTES))
+        .layer(axum::middleware::from_fn(lift_url_token))
         .layer(axum::middleware::from_fn_with_state(
             service.clone(),
             admit_request,
         ))
         .layer(axum::middleware::map_response(normalize_response))
         .with_state(service)
+}
+/// Lifts a `?token=` query parameter into an `Authorization` header so every
+/// handler sees one credential path. The marker makes the credential layer
+/// accept it only for `api_url` credentials, which minting confines to narrow
+/// stream-data authority. The query string is rewritten without the token, so
+/// nothing downstream (handlers, tracing) can see it; a token in both places
+/// is refused; responses forbid referrers (and are already `no-store`).
+async fn lift_url_token(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let query = request.uri().query().map(str::to_owned);
+    if let Some(query) = query.as_deref() {
+        let mut kept = Vec::new();
+        let mut token = None;
+        for pair in query.split('&') {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            if key == "token" {
+                if token.replace(percent_decode(value)).is_some() {
+                    return ApiError(Error::Unauthorized).into_response();
+                }
+            } else {
+                kept.push(pair);
+            }
+        }
+        if let Some(decoded) = token {
+            let header_value = decoded
+                .filter(|t| !t.is_empty() && t.len() <= crate::auth::token::MAX_TOKEN_BYTES)
+                .and_then(|t| {
+                    header::HeaderValue::from_str(&format!(
+                        "Bearer {}{t}",
+                        crate::auth::token::URL_MARKER
+                    ))
+                    .ok()
+                });
+            let Some(mut header_value) = header_value else {
+                return ApiError(Error::Unauthorized).into_response();
+            };
+            if request.headers().contains_key(header::AUTHORIZATION) {
+                return ApiError(Error::Unauthorized).into_response();
+            }
+            header_value.set_sensitive(true);
+            request
+                .headers_mut()
+                .insert(header::AUTHORIZATION, header_value);
+            let path = request.uri().path().to_owned();
+            let rebuilt = if kept.is_empty() {
+                path
+            } else {
+                format!("{path}?{}", kept.join("&"))
+            };
+            let mut parts = request.uri().clone().into_parts();
+            let Ok(path_and_query) = rebuilt.parse() else {
+                return ApiError(Error::Unauthorized).into_response();
+            };
+            parts.path_and_query = Some(path_and_query);
+            let Ok(uri) = axum::http::Uri::from_parts(parts) else {
+                return ApiError(Error::Unauthorized).into_response();
+            };
+            *request.uri_mut() = uri;
+        }
+    }
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::REFERRER_POLICY,
+        header::HeaderValue::from_static("no-referrer"),
+    );
+    response
+}
+/// Decodes `%XX` escapes; any malformed escape or non-UTF-8 result is `None`.
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = value.get(i + 1..i + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 // Admit before body extraction so slow uploads cannot allocate unbounded
 // buffers. The deadline covers upload and handler work, not SSE lifetimes.
@@ -300,6 +387,8 @@ async fn exchange(
 struct MintInput {
     grants: Vec<Grant>,
     lifetime_seconds: i64,
+    #[serde(default)]
+    url_transport: bool,
 }
 async fn mint(
     State(s): State<DataService>,
@@ -310,8 +399,15 @@ async fn mint(
     Ok((
         StatusCode::CREATED,
         Json(
-            s.run(move |s| s.mint(&token, &input.grants, input.lifetime_seconds))
-                .await?,
+            s.run(move |s| {
+                s.mint_with(
+                    &token,
+                    &input.grants,
+                    input.lifetime_seconds,
+                    input.url_transport,
+                )
+            })
+            .await?,
         ),
     ))
 }

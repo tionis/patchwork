@@ -587,6 +587,7 @@ pub async fn run(command: Command) -> Result<()> {
             TokenCommand::Mint {
                 scope_file,
                 lifetime_seconds,
+                url_transport,
                 output,
             } => {
                 if output.exists() {
@@ -599,7 +600,7 @@ pub async fn run(command: Command) -> Result<()> {
                     &connection,
                     reqwest::Method::POST,
                     "credentials",
-                    Some(json!({"grants":grants,"lifetime_seconds":lifetime_seconds})),
+                    Some(json!({"grants":grants,"lifetime_seconds":lifetime_seconds,"url_transport":url_transport})),
                 )
                 .await?
                 .json()

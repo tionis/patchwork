@@ -18,12 +18,25 @@ Use case U1. Exit: Vulcan's daemon runs against a public Patchwork instance for 
 
 | ID | Status | Deliverable | Acceptance |
 | --- | --- | --- | --- |
-| V-01 | todo | URL-transport credentials: `url_transport` mint flag with scope restrictions, `?token=` acceptance, query-string redaction, `Referrer-Policy` and `Cache-Control` headers, list, revoke and rotate through API and CLI (G-URLCRED) | A session token or administrative credential in a URL is refused; a valid narrow credential works; a revoked or wrong token gives the same 401; query strings never appear in logs; a token in both places is rejected |
+| V-01 | partial | URL-transport credentials: `url_transport` mint flag with scope restrictions, `?token=` acceptance, the query string removed before handlers run, `Referrer-Policy`, and list and revoke through the existing credential API and CLI; rotation is mint then revoke (G-URLCRED). **Built** with `tests/url_transport.rs`; **missing evidence:** a real-process fixture and a log-capture check | A session token or administrative credential in a URL is refused; a valid narrow credential works; a revoked or wrong token gives the same 401; query strings never appear in logs; a token in both places is rejected |
 | V-02 | todo | Publish and subscribe on the ordinary stream routes with URL-transport credentials; long-poll delivery `GET /v1/streams/{id}/wait` | A publish reaches every connected subscriber once; an idle timeout returns 408, never 2xx (D34); a publish credential cannot read and a subscribe credential cannot publish |
-| V-03 | todo | Provider verifiers attach to publish credentials; existing hooks migrate onto them | Signed and unsigned senders reach the same stream; original-byte HMAC still enforced where configured |
+| V-03 | todo | Webhook pipeline with CEL `accept`, `validate` and `transform`, sender authentication (secret, `Authorization`, Forgejo and GitHub HMAC), dry-run endpoint, counters and the evaluation sandbox (G-PIPELINE); existing hooks migrate onto it | The Vulcan example passes; a Forgejo test delivery works; an erroring or runaway expression never forwards the original and is killed at its deadline; counters need no stored payloads |
 | V-04 | todo | Idle-connection cost: per-stream subscriber cap, no thread per subscriber, measured at 1,000 and 10,000 idle long-polls | Memory and CPU per idle subscriber reported on named hardware; cap enforced; slow subscribers never grow memory |
 | V-05 | todo | Deployment: container and reverse-proxy runbook with HTTP/2, scheduled backup and a restore drill, readiness and basic metrics, redacted logs, CI passing remotely | A fresh host follows the runbook; backup restores; no secret in logs |
 | V-06 | todo | Vulcan integration: run the Vulcan daemon against the instance; use plain stream URLs with `?token=` (no compatibility route; update the example URLs in the Vulcan spec) | Forge webhook triggers a sync in Vulcan end to end; rotation via a new advertisement works; reconnect gap is covered by Vulcan's reconciliation |
+
+## M2a. Owned resources
+
+Design: [identity, ownership and grants](design.md#identity-ownership-and-grants). Nothing here blocks M1; it reshapes the schema before more kinds arrive.
+
+| ID | Status | Deliverable | Acceptance |
+| --- | --- | --- | --- |
+| W-01 | todo | Resource record (ID, kind, owner, `type`, tags) replacing stream names as identity; streams reached by ID, creation and append-by-name removed or replaced by owner-scoped lookup | Existing stream behavior keeps its tests under IDs; type and tag limits enforced |
+| W-02 | todo | Grants as relational rows with subject (principal, deployment, public) and selector (resource ID or owner scope); per-kind capability sets; group expansion left out | "Who can access this resource" and "what can I access" both answered from one index; revoking a grant applies at once |
+| W-03 | todo | Deployments as owners, binding minting (`patchwork deploy bind`) that issues narrow credentials as environment variables | An app container runs with only its bindings and cannot touch another deployment |
+| W-04 | todo | Query and listing by owner, kind, `type` and tags, filtered by access | A caller never sees a resource it cannot access; cursors stay stable |
+| W-05 | todo | Per-owner usage counters and quotas for streams, enforced at admission | A limit rejects writes; counters survive restart |
+| W-06 | todo | Deletion with grace period and administrator recovery | A deleted resource has no grants or pins; recovery restores it without resurrecting old grants |
 
 ## M2. Script toolkit
 
@@ -37,7 +50,7 @@ Use case U3, plus housekeeping owed from M0.
 | S-04 | todo | Absence detection: expected-interval rule that appends to an alert stream | A missing backup report fires once and recovers on the next record |
 | S-05 | todo | Named server-side cursors | Stateless script resumes at its saved position; deletion and recreation do not inherit it |
 | S-06 | todo | CLI ergonomics for pipes (`append` from stdin, `follow` to stdout, exit codes) | Documented shell examples run in a test |
-| S-07 | todo | Per-tenant usage counters and quotas, readable by the operator | Counters survive restart and are enforced at admission |
+| S-07 | merged | Usage counters and quotas are W-05 | - |
 
 ## M3. Keyspaces
 
@@ -74,7 +87,7 @@ Use case U5. Gate G-CRSQL decides whether this ships.
 | D-02 | todo | If go: change-set relay and archive, site registration, schema handling | Peers converge through the server; a stale peer catches up |
 | D-03 | todo | If no-go: keyed last-writer-wins map with hybrid logical clocks as a keyspace mode | Two offline writers converge deterministically |
 
-## M6. Blob store
+## M6. Object store
 
 Use cases U6, U7, U13. Design detail is written when M4 is under way.
 
@@ -85,4 +98,10 @@ Use cases U6, U7, U13. Design detail is written when M4 is under way.
 | O-03 | todo | Share links with expiry and byte limits (URL-transport credentials) | Concurrent final use never oversubscribes |
 | O-04 | todo | Git LFS adapter: batch, verify, locks | Stock `git lfs` push and pull against the server |
 | O-05 | todo | Garbage collection with race tests | No reachable block removed under concurrent publication |
+| O-07 | todo | Pins as retention roots with deduplicated quota charging; efficiency measured on a real pin set | Charging matches the deduplicated chunk set; recomputation cost reported |
+| O-08 | todo | Client libraries (Rust and TypeScript): chunking, hashing, prolly trees and sync, with shared golden fixtures | Both languages produce identical roots |
 | O-06 | later | Trees (prolly maps, directories), diff, client-assisted transfer | Decided after O-05 |
+
+## M7. Hosting layer
+
+Out of the core (D37); starts only when deploys are a real pain. Order: binding injection for containers (W-03), then an evaluation of wrapping an existing runtime for scale-to-zero and routing (JS runtime or WebAssembly), then only if others must deploy code, isolation.

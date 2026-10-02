@@ -35,9 +35,18 @@ pub struct VerifiedToken {
     pub principal: String,
     pub credential: String,
     pub instance: String,
+    /// Presented in a query string. Only `api_url` credentials may travel that way.
+    pub via_url: bool,
 }
+/// Marks a token the HTTP layer lifted out of a query string. A client can
+/// also send it in a header; that only makes the credential check stricter.
+pub const URL_MARKER: &str = "via-url:";
 impl VerifiedToken {
     pub fn parse(encoded: &str, public: PublicKey) -> Result<Self> {
+        let (encoded, via_url) = match encoded.strip_prefix(URL_MARKER) {
+            Some(rest) => (rest, true),
+            None => (encoded, false),
+        };
         if encoded.len() > MAX_TOKEN_BYTES {
             return Err(Error::Unauthorized);
         }
@@ -69,6 +78,7 @@ impl VerifiedToken {
             principal,
             credential,
             instance,
+            via_url,
         })
     }
     pub fn is_unattenuated(&self) -> bool {

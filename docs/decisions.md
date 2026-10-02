@@ -15,6 +15,8 @@ Rewritten 2026-09-29 from [use cases](use-cases.md). The C-series is a new regis
 | C07 | Every kind is usable with plain `curl` and no SDK envelope |
 | C08 | A narrow, revocable credential can be carried in the URL for clients that cannot send headers |
 | C09 | Apps keep their own identity; Patchwork verifies scoped credentials |
+| C13 | Bindings are scoped credentials over plain HTTPS, so an app can run anywhere |
+| C14 | Every resource has an owner and is reached only through grants and credentials |
 | C10 | Automerge documents sync through the Automerge Repo protocol |
 | C11 | Ephemeral streams (retention `none`) support long-poll subscribers at low idle cost |
 | C12 | Caches evict, and never write through a log |
@@ -42,11 +44,21 @@ Rewritten 2026-09-29 from [use cases](use-cases.md). The C-series is a new regis
 | D29 | Until the first release, schema changes edit migration 0001 and development data is recreated | No deployments to migrate |
 | D30 | Kinds have separate storage and semantics; the control plane is the only shared layer | Use cases need different guarantees |
 | D31 | Encrypted state is a client concern on streams; documents are server-readable | Server-side merge needs plaintext |
-| D32 | App-issued attenuated tokens are the delegation model; per-user revocation belongs to the app | Avoids owning accounts |
+| D32 | App-issued attenuated tokens are the delegation model; per-user revocation belongs to the app. Reaffirmed 2026-09-30 after weighing an account platform (users, groups, OIDC, SCIM in the core) | Avoids owning accounts for a single real tenant |
 | D33 | Blob storage uses content-defined chunking from its first profile and indexes raw SHA-256 | Git LFS and deduplication requirements |
 | D34 | Idle long-poll timeouts never return 2xx | Vulcan treats every 2xx as a wake-up |
 | D35 | The stream-derived KV is superseded by keyspaces once they exist; it may then be removed under D29 | Avoids two overlapping mutable stores |
 | D36 | An ephemeral channel is a stream with retention `none`, not a separate kind; URL-transport credentials use the ordinary stream routes, with no link table or route prefix | Reuses the stream pipeline, grants and delivery |
+| D37 | Hosting is outside the core; the contract with an app is a base URL plus narrow credentials, never an SDK-only feature | Self-hosting is for independence; apps stay portable to any host |
+| D38 | No global namespace. An optional owner-scoped reference tree maps names to a resource, object root or external URL and carries no authority | Names never widen access |
+| D39 | Grants are `(subject, capabilities, selector)`, allow-only, with selector a resource ID or owner scope; capabilities are per kind and roles are named bundles | Composability without a policy language |
+| D40 | Groups of end users, OIDC and SCIM are application or library concerns; groups of Patchwork principals may come later | One real tenant today |
+| D41 | A resource `type` is a free-form DNS-style name; tags are free-form; the backend may normalize | Namespacing without a registry |
+| D42 | Quota is charged to the owner in logical bytes; a pin charges the deduplicated chunk set across that owner's pins | Dedup helps the operator, not the accounting |
+| D43 | A raw content digest is never a capability by default; digest-as-capability is an explicit opt-in per object | Git LFS pointer files expose digests |
+| D44 | Deleting a resource removes its grants and pins and frees its storage after an internal grace period with administrator recovery | Safe undo without lingering access |
+| D45 | Webhook bodies are changed at ingress with CEL expressions (`accept`, `validate`, `transform`); no per-subscriber transforms | Generic, sandboxed, easy for agents to write |
+| D46 | Pipeline failures fail closed and expressions run under an enforceable deadline and memory limit | The CEL crate has no cost limit and some expressions are superlinear |
 
 ## Gates
 
@@ -58,6 +70,7 @@ A gate is closed only by executed evidence. Failure blocks its dependent capabil
 | G-SSH | SSHSIG and ssh-agent interoperability | SSH login |
 | G-PROVIDER | Official provider contract and original-byte signature fixtures | Provider compatibility claims |
 | G-DURABILITY | Commit, trim and restart fault injection on the target filesystem | Durable release claims |
+| G-PIPELINE | Forgejo and GitHub signature fixtures, fail-closed behavior, killed-on-timeout evaluation, body and output caps | Webhook pipeline |
 | G-LIMITS | Load, idle-connection, slow-client and restore measurements | Capacity guidance |
 | G-URLCRED | Mint-time scope restriction, query-string redaction, referrer and cache headers, revocation and rotation | URL-transport credentials |
 | G-AUTOMERGE | Interoperability with a pinned Automerge Repo client; size and work bounds | Document sync |

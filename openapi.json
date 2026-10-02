@@ -2898,7 +2898,13 @@
                   "lifetime_seconds": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 86400
+                    "maximum": 315360000,
+                    "description": "At most max_api_lifetime_seconds (86400), or max_url_lifetime_seconds when url_transport is true."
+                  },
+                  "url_transport": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Mint a narrow, single-purpose credential that may also be presented as the `token` query parameter. Requires record.append, or record.read/record.subscribe (not both), on explicit streams or a non-empty prefix. Lifetime is capped by max_url_lifetime_seconds."
                   }
                 },
                 "required": [
@@ -5322,6 +5328,12 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "Biscuit"
+      },
+      "urlToken": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "token",
+        "description": "Accepted only for credentials minted with url_transport (kind api_url). A request must not also carry an Authorization header. Never logged; responses set Referrer-Policy: no-referrer."
       }
     },
     "schemas": {
@@ -5926,6 +5938,12 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 86400
+          },
+          "max_url_lifetime_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 315360000,
+            "default": 31536000
           }
         },
         "required": [

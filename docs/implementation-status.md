@@ -78,6 +78,10 @@ Three commits after the core milestone add the remaining stage-1 services. Each 
 
 The full suite now has **58 passing tests** (`cargo test --locked --offline --all-targets`), including new `kv`, `kv_api`, `hooks` and `backup` targets and extended real-process fixtures. Known gaps: `openapi.json` does not yet describe the KV, attachment or hook routes; KV snapshots and provider-contract (G-PROVIDER) evidence remain pending; backup has no fault-injection or large-data evidence.
 
+## URL-transport credentials (V-01) — 2026-09-29
+
+`token mint --url-transport` (API field `url_transport`) issues an `api_url` credential. Minting requires an unattenuated SSH session and refuses anything but one purpose: `record.append`, or `record.read`/`record.subscribe`, on explicit streams or a non-empty prefix, at most 16 grants. These credentials get their own lifetime cap, `max_url_lifetime_seconds` (default one year, part of the auth policy), and cannot mint. A router middleware lifts `?token=` into the authorization path, removes it from the query string before any handler runs, refuses tokens supplied both ways, twice, empty or malformed, and adds `Referrer-Policy: no-referrer` (data responses were already `no-store`). Only `api_url` credentials are accepted this way; ordinary and session tokens in a query string get 401. Revocation works unchanged. Verified by `tests/url_transport.rs` (2 tests); the suite is now **60 passing tests**, Clippy and rustfmt clean. Not yet done: a real-process fixture, a check that captured server logs contain no token, and the `/wait` long-poll route (V-02).
+
 ## Documentation verification
 
 Run `vulcan --vault docs --output json doctor --fail-on-issues` from the repository root. It passed with zero unresolved/ambiguous links, broken embeds, parse/type issues, stale or missing index rows, and orphan notes/assets. Vulcan doctor does not validate roadmap task-ID uniqueness or dependency cycles; those remain review obligations until an equivalent wiki collection check exists. `git diff --check` checks tracked-file whitespace. None of these checks proves architectural correctness or runtime conformance.

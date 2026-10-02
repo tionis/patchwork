@@ -176,6 +176,34 @@ pub fn validate_grants(grants: &[Grant]) -> Result<()> {
     Ok(())
 }
 
+/// Credentials that may travel in a URL must not be able to do damage if the
+/// URL leaks: one purpose (publish, or read/subscribe), only stream-data
+/// actions, and explicit streams or a non-empty prefix, never the instance.
+pub fn validate_url_grants(grants: &[Grant]) -> Result<()> {
+    if grants.is_empty() || grants.len() > 16 {
+        return Err(Error::Invalid("url credential grants"));
+    }
+    let (mut append, mut read) = (false, false);
+    for grant in grants {
+        for action in &grant.actions {
+            match action {
+                Action::RecordAppend => append = true,
+                Action::RecordRead | Action::RecordSubscribe => read = true,
+                _ => return Err(Error::Invalid("url credential action")),
+            }
+        }
+        match &grant.selector {
+            Selector::Stream(_) => {}
+            Selector::Prefix(prefix) if !prefix.is_empty() => {}
+            _ => return Err(Error::Invalid("url credential selector")),
+        }
+    }
+    if append && read {
+        return Err(Error::Invalid("url credential purpose"));
+    }
+    Ok(())
+}
+
 pub fn permits(
     current: &[Grant],
     ceiling: &[Grant],

@@ -55,7 +55,7 @@ CREATE TABLE credentials (
     id TEXT PRIMARY KEY,
     principal_id TEXT NOT NULL REFERENCES principals(id),
     ceiling TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK(kind IN ('ssh_session','api')),
+    kind TEXT NOT NULL CHECK(kind IN ('ssh_session','api','api_url')),
     expires_at INTEGER NOT NULL,
     revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1))
 ) STRICT;
@@ -70,7 +70,8 @@ CREATE TABLE challenges (
 CREATE TABLE auth_policy (
     singleton INTEGER PRIMARY KEY CHECK(singleton=1),
     revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
-    max_api_lifetime_seconds INTEGER NOT NULL CHECK(max_api_lifetime_seconds BETWEEN 1 AND 86400)
+    max_api_lifetime_seconds INTEGER NOT NULL CHECK(max_api_lifetime_seconds BETWEEN 1 AND 86400),
+    max_url_lifetime_seconds INTEGER NOT NULL DEFAULT 31536000 CHECK(max_url_lifetime_seconds BETWEEN 1 AND 315360000)
 ) STRICT;
 INSERT INTO auth_policy(singleton,max_api_lifetime_seconds) VALUES (1,86400);
 CREATE TABLE auth_audit (

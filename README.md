@@ -1,4 +1,6 @@
-# Patchwork
+# Patchwork (archived Rust redesign)
+
+> **Archived 2026-10-02.** This branch holds the Rust redesign of Patchwork and is not maintained. The deployed service is the Go relay on the [`main`](https://github.com/tionis/patchwork/tree/main) branch. The [retrospective](docs/retrospective.md) explains why this branch stopped, what it built, what was learned (including runtime benchmarks), and where the work went: a `hooks-server` and an `s2-token-proxy` project, plus [prompts for the infrastructure repository](docs/handoff-prompts.md).
 
 Patchwork is a Rust, single-node backend for ordered streams, immutable objects, and revisioned references. The **authentication and stream core is runnable**: SSH login, scoped/offline-attenuated credentials, principal administration and recovery, retained/live streams, processed idempotent appends, retention, config/metadata CAS, follow/live/watch subscriptions, transactional KV attachments, signed GitHub webhook ingress and online SQLite backup with verified restore. Objects and the broader platform remain planned.
 

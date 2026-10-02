@@ -29,6 +29,11 @@ pub struct PrincipalDescriptor {
 #[serde(deny_unknown_fields)]
 pub struct AuthPolicy {
     pub max_api_lifetime_seconds: i64,
+    #[serde(default = "default_url_lifetime")]
+    pub max_url_lifetime_seconds: i64,
+}
+fn default_url_lifetime() -> i64 {
+    31_536_000
 }
 impl Store {
     pub(crate) fn instance_command<T>(
@@ -147,15 +152,16 @@ impl Store {
     }
     pub fn policy(&mut self, bearer: &str) -> Result<(Revision, AuthPolicy)> {
         self.instance_command(bearer, Action::AdminRead, |s, _| {
-            let (revision, max): (i64, i64) = s.connection.query_row(
-                "SELECT revision,max_api_lifetime_seconds FROM auth_policy",
+            let (revision, max, max_url): (i64, i64, i64) = s.connection.query_row(
+                "SELECT revision,max_api_lifetime_seconds,max_url_lifetime_seconds FROM auth_policy",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )?;
             Ok((
                 Revision::new(revision)?,
                 AuthPolicy {
                     max_api_lifetime_seconds: max,
+                    max_url_lifetime_seconds: max_url,
                 },
             ))
         })
@@ -166,14 +172,16 @@ impl Store {
         expected: Revision,
         policy: &AuthPolicy,
     ) -> Result<Revision> {
-        if !(1..=86400).contains(&policy.max_api_lifetime_seconds) {
+        if !(1..=86400).contains(&policy.max_api_lifetime_seconds)
+            || !(1..=315_360_000).contains(&policy.max_url_lifetime_seconds)
+        {
             return Err(Error::Invalid("credential lifetime"));
         }
         self.instance_command(bearer, Action::AdminWrite, |s, _| {
             let next = expected.next()?;
             if s.connection.execute(
-                "UPDATE auth_policy SET revision=?1,max_api_lifetime_seconds=?2 WHERE revision=?3",
-                params![next.get(), policy.max_api_lifetime_seconds, expected.get()],
+                "UPDATE auth_policy SET revision=?1,max_api_lifetime_seconds=?2,max_url_lifetime_seconds=?3 WHERE revision=?4",
+                params![next.get(), policy.max_api_lifetime_seconds, policy.max_url_lifetime_seconds, expected.get()],
             )? != 1
             {
                 return Err(Error::RevisionMismatch);

@@ -258,7 +258,7 @@ impl Store {
         let (current,ceiling,kind,expires,mint): (String,String,String,i64,bool) = self.connection.query_row(
             "SELECT p.grants,c.ceiling,c.kind,c.expires_at,p.can_mint FROM credentials c JOIN principals p ON p.id=c.principal_id WHERE c.id=?1 AND p.id=?2 AND p.enabled=1 AND c.revoked=0",
             params![verified.credential, verified.principal], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?.ok_or(Error::Unauthorized)?;
-        if expires <= now()? {
+        if expires <= now()? || (verified.via_url && kind != "api_url") {
             return Err(Error::Unauthorized);
         }
         Ok(Rights {
@@ -339,8 +339,23 @@ impl Store {
         grants: &[Grant],
         lifetime_seconds: i64,
     ) -> Result<CredentialReceipt> {
+        self.mint_with(bearer, grants, lifetime_seconds, false)
+    }
+    /// `url_transport` credentials may be presented as `?token=` and therefore
+    /// must be narrow, single-purpose and non-administrative (see
+    /// [`auth::validate_url_grants`]); they get the longer URL lifetime cap.
+    pub fn mint_with(
+        &mut self,
+        bearer: &str,
+        grants: &[Grant],
+        lifetime_seconds: i64,
+        url_transport: bool,
+    ) -> Result<CredentialReceipt> {
         auth::validate_grants(grants)?;
-        if !(1..=86400).contains(&lifetime_seconds) {
+        if url_transport {
+            auth::validate_url_grants(grants)?;
+        }
+        if !(1..=if url_transport { 315_360_000 } else { 86400 }).contains(&lifetime_seconds) {
             return Err(Error::Invalid("credential lifetime"));
         }
         let identity = self.identity()?;
@@ -376,7 +391,11 @@ impl Store {
                 return Err(Error::Forbidden);
             }
             let max_lifetime: i64 = store.connection.query_row(
-                "SELECT max_api_lifetime_seconds FROM auth_policy WHERE singleton=1",
+                if url_transport {
+                    "SELECT max_url_lifetime_seconds FROM auth_policy WHERE singleton=1"
+                } else {
+                    "SELECT max_api_lifetime_seconds FROM auth_policy WHERE singleton=1"
+                },
                 [],
                 |r| r.get(0),
             )?;
@@ -387,7 +406,7 @@ impl Store {
                 &identity,
                 &verified.principal,
                 &json(&grants)?,
-                "api",
+                if url_transport { "api_url" } else { "api" },
                 now()? + lifetime_seconds,
             )
         })

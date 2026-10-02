@@ -290,6 +290,9 @@ pub enum TokenCommand {
         scope_file: std::path::PathBuf,
         #[arg(long, default_value_t = 3600)]
         lifetime_seconds: i64,
+        /// Mint a narrow, single-purpose credential that may be presented as `?token=`.
+        #[arg(long)]
+        url_transport: bool,
         #[arg(long)]
         output: std::path::PathBuf,
     },

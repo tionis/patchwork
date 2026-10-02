@@ -1,0 +1,32 @@
+[package]
+name = "script-bench"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde_json = "1"
+rquickjs = { version = "0.14", optional = true }
+boa_engine = { version = "0.22", optional = true }
+mlua = { version = "0.12", optional = true, features = ["lua54", "vendored", "serialize"] }
+cel = { version = "0.14", optional = true }
+rune = { version = "0.14", optional = true }
+rune-modules = { version = "0.14", optional = true, features = ["json"] }
+starlark = { version = "0.14", optional = true }
+steel-core = { version = "0.8", optional = true }
+ruwren = { version = "0.4", optional = true }
+rhai = { version = "1.26", optional = true, features = ["serde"] }
+
+[features]
+qjs = ["dep:rquickjs"]
+boa = ["dep:boa_engine"]
+lua = ["dep:mlua"]
+cel = ["dep:cel"]
+rune = ["dep:rune", "dep:rune-modules"]
+star = ["dep:starlark"]
+steel = ["dep:steel-core"]
+wren = ["dep:ruwren"]
+rhai = ["dep:rhai"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"

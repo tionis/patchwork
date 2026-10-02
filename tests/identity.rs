@@ -282,6 +282,7 @@ fn administration_cas_and_old_issuance_ceilings_fence_policy_expansion() {
             revision,
             &patchwork::store::AuthPolicy {
                 max_api_lifetime_seconds: 60,
+                max_url_lifetime_seconds: 3600,
             },
         )
         .unwrap();
