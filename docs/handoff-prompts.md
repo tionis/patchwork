@@ -5,7 +5,7 @@ Prompts for the agent that works in the Ansible repository (Gandalf), written 20
 ## 1. Patchwork image channel after the branch rename
 
 ```text
-The Patchwork repository (github.com/tionis/patchwork) renamed its `legacy` branch to `main` and made it the default branch. The Go relay that Citadel runs is unchanged; only the branch name changed. CI publishes an image tag named after the branch, so `ghcr.io/tionis/patchwork:legacy` no longer receives updates. New builds are published as `:main` and `:sha-<short>`.
+The Patchwork repository (github.com/tionis/patchwork) renamed its `legacy` branch to `main` and made it the default branch. The Go relay that Citadel runs is unchanged; only the branch name changed. CI publishes an image tag named after the branch, so `ghcr.io/tionis/patchwork:legacy` no longer receives updates. New builds are published as `:main` and `:sha-<short>`. The rename itself pushed nothing, so `:main` appears with the next push to `main` (or a manual CI run); until then `:legacy` is still the newest image.
 
 1. Check which image digest Citadel's `patchwork` Quadlet is running and which commit it was built from (`podman inspect`, image labels). Compare it with the head of `main`. Since b182622 the relay uses a local SQLite identity store and an admin API instead of the Forgejo repo-file token lookup, and 233c41e persists that auth state. The role README still describes a stateless service with a Forgejo token. Find out whether the running container predates that change or whether the role has drifted.
 2. Switch `patchwork_version` from `legacy` to `main` (or to a semver tag if one exists by then), and update the role README's "Updates and autonomy" row.
@@ -33,7 +33,7 @@ Start with a short written proposal (choice, layout, backup, exposure) for Eric 
 ## 3. S2 streams through s2-lite and s2-token-proxy
 
 ```text
-Prerequisite: the `s2-token-proxy` project (github.com/tionis/s2-token-proxy, if published under that name) has a tagged image. Ask Eric if it does not.
+Prerequisite: the `s2-token-proxy` project (local repository `s2-token-proxy`, not yet published) has a tagged image. Ask Eric if it does not.
 
 Deploy s2-lite (github.com/s2-streamstore/s2) with local disk storage on Citadel, reachable only on a private Podman network. Put s2-token-proxy in front of it as the only public entry point. s2-lite has no access control, so it must never be exposed directly.
 
