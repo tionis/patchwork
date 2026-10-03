@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 golang:1.26.2 AS build
+FROM --platform=linux/amd64 golang:1.27.0 AS build
 
 ARG VERSION=dev
 ARG COMMIT=unknown
